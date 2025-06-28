@@ -25,22 +25,25 @@
         };
       in {
         packages = {
-          dummy = pkgs.rustPlatform.buildRustPackage {
+          dummy = pkgs.stdenv.mkDerivation {
             pname = "dummy";
             version = "0.1.0";
 
             src = ./dummy;
 
-            cargoLock = {
-              lockFile = ./dummy/Cargo.lock;
-            };
+            buildInputs = [ pkgs.gcc ];
 
-            nativeBuildInputs = [
-              rust-bin-custom
-            ];
+            buildPhase = ''
+              gcc -o dummy main.c
+            '';
+
+            installPhase = ''
+              mkdir -p $out/bin
+              cp dummy $out/bin/
+            '';
 
             meta = with pkgs.lib; {
-              description = "A dummy executable for testing";
+              description = "A dummy C executable for testing";
               license = licenses.mit;
             };
           };
@@ -54,6 +57,7 @@
             buildInputs = [
               pkg-config
               rust-bin-custom
+              capnproto
             ];
           };
       }

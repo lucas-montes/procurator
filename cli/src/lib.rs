@@ -1,4 +1,4 @@
+mod client;
 mod commands;
-mod server;
 
 pub use commands::Cli;

@@ -6,21 +6,19 @@ use cgroups_rs::{
 
 use super::application::{Runtime, RuntimeConfig, RuntimeError, RuntimeStats};
 
-struct Executable {
+pub struct Executable {
     control_group: cgroups_rs::Cgroup,
     start: std::time::Instant,
-    config: <Executable as Runtime>::Config,
+    config: RuntimeConfig,
     child: std::process::Child,
 }
 
-impl Runtime for Executable {
-    type Config = RuntimeConfig;
-
+impl Executable {
     /// Create a new instance of the Executable runtime, create the cgroup and spawn the child process.
     /// This function will panic if the cgroup creation or child process spawning fails.
     /// The `config` parameter is expected to contain the necessary information to create the cgroup and spawn the child process.
     /// Check more cgroup params at: https://docs.rs/cgroups-rs/0.3.4/cgroups_rs/cgroup_builder/index.html
-    fn new(config: Self::Config) -> Self {
+    fn new(config: RuntimeConfig) -> Self {
         // Acquire a handle for the cgroup hierarchy.
         let hier = cgroups_rs::hierarchies::auto();
 
@@ -55,6 +53,12 @@ impl Runtime for Executable {
             start: std::time::Instant::now(),
             child,
         }
+    }
+}
+
+impl Runtime for Executable {
+    fn id(&self) -> &str {
+        self.config.name()
     }
 
     fn start(&mut self) -> Result<(), RuntimeError> {

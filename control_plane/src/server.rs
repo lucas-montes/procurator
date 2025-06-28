@@ -1,9 +1,50 @@
 //! Central point of communication. Talks to workers and receives requests from the cli.
-use worker::server::{create as create_w, delete as delete_w};
+use std::net::SocketAddr;
 
-pub fn create(name: String) {
-    create_w(name);
+use capnp_rpc::{RpcSystem, rpc_twoparty_capnp, twoparty};
+use commands::control_plane;
+use futures::AsyncReadExt;
+use tokio::sync::mpsc::Sender;
+
+use crate::dto::NodeMessage;
+
+pub struct Server {
+    node_channel: Sender<NodeMessage>,
 }
-pub fn delete(name: String) {
-    delete_w(name);
+
+impl Server {
+    pub fn new(node_channel: Sender<NodeMessage>,) -> Self {
+        Server { node_channel }
+    }
+
+    pub async fn serve(self, addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+        let listener = tokio::net::TcpListener::bind(&addr).await?;
+        let client: control_plane::Client = capnp_rpc::new_client(self);
+        loop {
+            let (stream, _) = listener.accept().await?;
+            stream.set_nodelay(true)?;
+            let (reader, writer) =
+                tokio_util::compat::TokioAsyncReadCompatExt::compat(stream).split();
+            let network = twoparty::VatNetwork::new(
+                futures::io::BufReader::new(reader),
+                futures::io::BufWriter::new(writer),
+                rpc_twoparty_capnp::Side::Server,
+                Default::default(),
+            );
+
+            let rpc_system = RpcSystem::new(Box::new(network), Some(client.clone().client));
+
+            tokio::task::spawn_local(rpc_system);
+        }
+    }
+}
+
+impl control_plane::Server for Server {
+    fn apply(
+        &mut self,
+        params: control_plane::ApplyParams,
+        mut results: control_plane::ApplyResults,
+    ) -> capnp::capability::Promise<(), capnp::Error> {
+        capnp::capability::Promise::ok(())
+    }
 }

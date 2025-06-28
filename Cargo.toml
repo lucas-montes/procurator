@@ -4,18 +4,28 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
-serde = { version = "1.0.219", features = ["derive"] }
+capnp = "0.20.3"
+capnp-rpc = "0.20.3"
+tokio = { version = "1.4.0", features = ["net", "rt", "macros", "rt-multi-thread"]}
+tokio-util = { version = "0.7.4", features = ["compat"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
+uuid = { version = "1.17.0", features = ["v7"] }
+commands = { path = "commands" }
+futures = "0.3.0"
 
 [dependencies]
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
-serde.workspace = true
-cli = { path = "cli" }
+capnp.workspace = true
+capnp-rpc.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+uuid.workspace = true
+control_plane = { path = "control_plane" }
 
 
 [workspace]
-members = ["cli", "control_plane", "dummy", "worker"]
+members = ["cli", "commands", "control_plane", "worker"]

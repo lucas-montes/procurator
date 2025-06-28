@@ -1,8 +1,18 @@
-use cli::Cli;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-fn main() {
-    Cli::handle().unwrap_or_else(|err| {
-        eprintln!("Error: {:?}", err);
-        std::process::exit(1);
-    });
+#[tokio::main]
+async fn main() {
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .json()
+                // .with_writer(non_blocking)
+                .log_internal_errors(true)
+                .with_target(false)
+                .flatten_event(true)
+                .with_span_list(false),
+        )
+        .init();
+
+    control_plane::main().await;
 }

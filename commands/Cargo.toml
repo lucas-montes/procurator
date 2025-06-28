@@ -1,0 +1,11 @@
+[package]
+name = "commands"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+capnp.workspace = true
+tokio.workspace = true
+
+[build-dependencies]
+capnpc = "0.20.1"

@@ -78,16 +78,10 @@ impl RuntimeConfig {
 }
 
 pub trait Runtime {
-    type Config;
-    fn new(config: Self::Config) -> Self;
+    fn id(&self) -> &str;
     fn start(&mut self) -> Result<(), RuntimeError>;
     fn stop(&mut self) -> Result<(), RuntimeError>;
     fn stats(&self) -> Result<RuntimeStats, RuntimeError>;
     fn kill(&mut self) -> Result<(), RuntimeError>;
     fn is_running(&self) -> bool;
-}
-
-pub enum Runtimes {
-    Executable,
-    Image,
 }
