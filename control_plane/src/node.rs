@@ -1,7 +1,7 @@
 use commands::ControlPlaneMessage;
 use tokio::sync::mpsc::{Receiver, Sender};
 
-use crate::dto::NodeMessage;
+use crate::dto::{NodeMessage, NodeEvent};
 
 ///! Node that handles communications between the server and the logic handled by the control plane.
 
@@ -17,14 +17,14 @@ impl Node {
         Node { node_channel, worker_channel }
     }
 
+    /// Main loop that processes messages from the server and sends command to the workers and orchestrates tasks
     pub async fn run(mut self) {
         while let Some(message) = self.node_channel.recv().await {
-            // match message.event {
-            //     commands::ControlPlaneEvent::Create => {
-            //         // Handle create event
-            //         let _ = self.worker_channel.send(ControlPlaneMessage::Create).await;
-            //     }
-            // }
+            match message.event() {
+                NodeEvent::Apply(file) => {
+                        // let _ = self.worker_channel.send(ControlPlaneMessage::Create).await;
+                }
+            }
         }
     }
 }

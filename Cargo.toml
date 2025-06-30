@@ -25,6 +25,8 @@ tokio.workspace = true
 tokio-util.workspace = true
 uuid.workspace = true
 control_plane = { path = "control_plane" }
+ratatui = { version = "0.29.0", features = ["all-widgets", "crossterm"] }
+
 
 
 [workspace]

@@ -18,6 +18,7 @@ pub async fn main() {
 
     task::spawn(node.run()).await.unwrap();
     task::spawn(worker.run()).await.unwrap();
+
     task::LocalSet::new()
         .run_until(async move {
             let resutl = task::spawn_local(

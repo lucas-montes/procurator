@@ -24,6 +24,7 @@
           extensions = ["rust-src"];
         };
       in {
+        checks.${system}.default = self.packages.${system}.default;
         packages = {
           dummy = pkgs.stdenv.mkDerivation {
             pname = "dummy";
@@ -31,7 +32,7 @@
 
             src = ./dummy;
 
-            buildInputs = [ pkgs.gcc ];
+            buildInputs = [pkgs.gcc];
 
             buildPhase = ''
               gcc -o dummy main.c
@@ -58,6 +59,7 @@
               pkg-config
               rust-bin-custom
               capnproto
+              jq
             ];
           };
       }

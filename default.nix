@@ -9,6 +9,11 @@ in
     buildPhase = ''
       gcc -o dummy main.c
     '';
+    doCheck = true;
+    checkPhase = ''
+          # Run the tests
+          ./test_dummy.sh
+        '';
     installPhase = ''
       mkdir -p $out/bin
       cp dummy $out/bin/

@@ -1,20 +1,21 @@
 //! Central point of communication. Talks to workers and receives requests from the cli.
 use std::net::SocketAddr;
 
-use capnp_rpc::{RpcSystem, rpc_twoparty_capnp, twoparty};
+use capnp_rpc::{RpcSystem, pry, rpc_twoparty_capnp, twoparty};
 use commands::control_plane;
 use futures::AsyncReadExt;
-use tokio::sync::mpsc::Sender;
 
-use crate::dto::NodeMessage;
+use crate::dto::{NodeMessage, NodeMessenger};
 
 pub struct Server {
-    node_channel: Sender<NodeMessage>,
+    node_channel: NodeMessenger,
 }
 
 impl Server {
-    pub fn new(node_channel: Sender<NodeMessage>,) -> Self {
-        Server { node_channel }
+    pub fn new(node_channel: impl Into<NodeMessenger>) -> Self {
+        Server {
+            node_channel: node_channel.into(),
+        }
     }
 
     pub async fn serve(self, addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
@@ -40,10 +41,39 @@ impl Server {
 }
 
 impl control_plane::Server for Server {
+    /// Handles the `apply` command, which applies changes to a file
     fn apply(
         &mut self,
         params: control_plane::ApplyParams,
         mut results: control_plane::ApplyResults,
+    ) -> capnp::capability::Promise<(), capnp::Error> {
+        let file = pry!(pry!(pry!(params.get()).get_file()).to_string());
+        let channel = self.node_channel.clone();
+        capnp::capability::Promise::from_future(async move {
+            let mut tx = channel.apply(file).await;
+            match tx.try_recv() {
+                Ok(msg) => {
+                    let mut resp = results.get().init_response();
+                    match msg {
+                        Ok(_) => {
+                            resp.set_ok(());
+                        }
+                        Err(err) => {
+                            resp.set_err(err);
+                        }
+                    }
+                    Ok(())
+                }
+                Err(err) => Err(capnp::Error::failed("wrong".into())),
+            }
+        })
+    }
+
+    //TODO: I should look into the stream feature
+    fn monitor(
+        &mut self,
+        params: control_plane::MonitorParams,
+        mut results: control_plane::MonitorResults,
     ) -> capnp::capability::Promise<(), capnp::Error> {
         capnp::capability::Promise::ok(())
     }
