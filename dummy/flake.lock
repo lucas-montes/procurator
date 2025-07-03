@@ -1,5 +1,19 @@
 {
   "nodes": {
+    "dummy-master": {
+      "flake": false,
+      "locked": {
+        "path": "git+file://./",
+        "rev": "master",
+        "type": "path"
+      },
+      "original": {
+        "path": "git+file://./",
+        "rev": "master",
+        "type": "path"
+      },
+      "parent": []
+    },
     "flake-utils": {
       "inputs": {
         "systems": "systems"
@@ -48,6 +62,7 @@
     },
     "root": {
       "inputs": {
+        "dummy-master": "dummy-master",
         "flake-utils": "flake-utils",
         "infrastructure": "infrastructure",
         "nixpkgs": "nixpkgs"
