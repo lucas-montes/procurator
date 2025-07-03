@@ -1,7 +1,7 @@
 @0x9663f4dd604afa36;
 
 interface ControlPlane {
-  apply @0 (file: Text) -> (response: ApplyResponse);
+  apply @0 (file: Text, name: Text) -> (response: ApplyResponse);
   monitor @1 () -> (response: List(AppData));
 }
 

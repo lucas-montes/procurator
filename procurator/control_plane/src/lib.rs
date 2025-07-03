@@ -6,6 +6,7 @@ mod scheduler;
 mod server;
 mod dto;
 mod node;
+mod state;
 
 
 pub async fn main() {

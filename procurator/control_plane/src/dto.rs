@@ -6,7 +6,10 @@ use tokio::sync::{
 };
 
 pub enum NodeEvent {
-    Apply(String),
+    Apply {
+        file: String,
+        name: String,
+    },
 }
 
 pub type NodeResult = Result<(), String>;
@@ -47,8 +50,8 @@ impl DerefMut for NodeReceiver {
 pub struct NodeMessenger(Sender<NodeMessage>);
 
 impl NodeMessenger {
-    pub async fn apply(self, file: String) -> NodeReceiver {
-        let (rx, msg) = NodeMessage::new(NodeEvent::Apply(file));
+    pub async fn apply(self, file: String, name: String) -> NodeReceiver {
+        let (rx, msg) = NodeMessage::new(NodeEvent::Apply{file, name});
         self.0.send(msg).await.expect("message failed"); //TODO: handle better
         rx
     }

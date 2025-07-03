@@ -28,9 +28,10 @@ impl Client {
         Self(client)
     }
 
-    pub async fn apply(&self, config_file: &str) -> Result<(), CliError> {
+    pub async fn apply(&self, config_file: &str, name: &str) -> Result<(), CliError> {
         let mut req = self.0.apply_request();
         req.get().set_file(config_file);
+        req.get().set_name(name);
         let response = req
             .send()
             .promise

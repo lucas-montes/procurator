@@ -48,9 +48,10 @@ impl control_plane::Server for Server {
         mut results: control_plane::ApplyResults,
     ) -> capnp::capability::Promise<(), capnp::Error> {
         let file = pry!(pry!(pry!(params.get()).get_file()).to_string());
+        let name = pry!(pry!(pry!(params.get()).get_name()).to_string());
         let channel = self.node_channel.clone();
         capnp::capability::Promise::from_future(async move {
-            let mut tx = channel.apply(file).await;
+            let mut tx = channel.apply(file, name).await;
             match tx.try_recv() {
                 Ok(msg) => {
                     let mut resp = results.get().init_response();

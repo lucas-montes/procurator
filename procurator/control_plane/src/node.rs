@@ -21,7 +21,7 @@ impl Node {
     pub async fn run(mut self) {
         while let Some(message) = self.node_channel.recv().await {
             match message.event() {
-                NodeEvent::Apply(file) => {
+                NodeEvent::Apply{file, name} => {
                         // let _ = self.worker_channel.send(ControlPlaneMessage::Create).await;
                 }
             }

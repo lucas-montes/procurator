@@ -298,6 +298,8 @@ dependencies = [
  "capnp-rpc",
  "commands",
  "futures",
+ "serde",
+ "serde_json",
  "tokio",
  "tokio-util",
  "tracing",
@@ -772,6 +774,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nixcli"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -895,7 +906,6 @@ dependencies = [
  "capnp",
  "capnp-rpc",
  "control_plane",
- "ratatui",
  "tokio",
  "tokio-util",
  "tracing",
@@ -1280,9 +1290,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75ef51a33ef1da925cea3e4eb122833cb377c61439ca401b770f54902b806779"
 dependencies = [
  "backtrace",
+ "bytes",
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.52.0",

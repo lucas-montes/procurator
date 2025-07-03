@@ -1,31 +1,7 @@
 
 {
-  services = {
-      # Define new services that point to a custom package
-      dummy = {
-        production = {
-          cpu = 1.5;
-          memory = {
-            amount = 1;
-            unit = "GB";
-          };
-          packages = self.packages.${system}.default;
-        };
-        staging = [
-          {
-            cpu = 1.1;
-            memory = {
-              amount = 1;
-              unit = "GB";
-            };
-            packages = self.packages.${system}.default;
-          }
-        ];
-      };
-    };
   # Define the services to run in the cluster
 # Define the infrastructure for the cluster, machines and their roles
-  infrastructure = {
   continous-delivery = {
     tests = true;
     build = true;
@@ -84,5 +60,4 @@
       };
     };
   };
-};
 }

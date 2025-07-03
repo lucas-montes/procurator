@@ -59,6 +59,9 @@ struct Apply {
     /// The file to use as configuration for the cluster
     #[arg(short, long)]
     config_file: PathBuf,
+
+    #[arg(short, long)]
+    name: String,
 }
 
 impl CommandExt for Apply {
@@ -69,7 +72,8 @@ impl CommandExt for Apply {
             .as_path()
             .to_str()
             .ok_or(CliError::FileMissing)?;
-        client.apply(config_file).await
+        // Should pass self
+        client.apply(config_file, &self.name).await
     }
 }
 
