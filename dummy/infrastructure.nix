@@ -9,26 +9,24 @@
     staging = true;
   };
   # Define the machines, their names, specs and roles so tasks are assinged correctly to them
-  machines = [
-    {
-      name = "victoria";
+  machines = {
+    victoria = {
       cpu = 1;
       memory = {
         amount = 1;
         unit = "GB";
       };
       roles = ["tests" "build" "monitoring"];
-    }
-    {
-      name = "tauri";
+    };
+    tauri = {
       cpu = 3;
       memory = {
         amount = 3;
         unit = "GB";
       };
       roles = ["production" "DST" "staging"];
-    }
-  ];
+    };
+  };
 
   # The rollback strategy is defined by the threshold values, if the values are not met when running the DST, the rollback is initiated
   # The notification is sent to the different channels

@@ -1,5 +1,5 @@
 {
-  description = "A devShell example";
+  description = "This flake will simulate a simple monorepo where infra and code are in the same repo";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
@@ -47,42 +47,50 @@
             ];
           };
         };
+
+        dummy = pkgs.stdenv.mkDerivation {
+          pname = "dummy";
+          version = "0.1.0";
+          src = ./.;
+
+          buildInputs = [pkgs.gcc];
+
+          doCheck = true;
+          checkPhase = ''
+            # Run the tests
+            ./test_dummy.sh
+          '';
+
+          buildPhase = ''
+            gcc -o dummy main.c
+          '';
+
+          installPhase = ''
+            mkdir -p $out/bin
+            cp dummy $out/bin/
+          '';
+
+          meta = with pkgs.lib; {
+            description = "A dummy C executable for testing";
+            license = licenses.mit;
+          };
+        };
       in {
-        checks.${system}.default = self.packages.${system}.default;
+        checks = {
+          inherit (self.packages.${system}) production staging;
+        };
         packages = {
-          # This package allow us to run build and have the state generated
+          # This package allow us to run build and have the state generated. Probably shouldn't be here?
           state = pkgs.writeTextFile {
             name = "state-lock";
             text = builtins.toJSON {
-              infrastructure = infrastructure;
-              services = services;
+              inherit infrastructure services;
             };
             destination = "/state.json";
           };
 
-          dummy = pkgs.stdenv.mkDerivation {
-            pname = "dummy";
-            version = "0.1.0";
-
-            buildInputs = [pkgs.gcc];
-
-            buildPhase = ''
-              gcc -o dummy main.c
-            '';
-
-            installPhase = ''
-              mkdir -p $out/bin
-              cp dummy $out/bin/
-            '';
-
-            meta = with pkgs.lib; {
-              description = "A dummy C executable for testing";
-              license = licenses.mit;
-            };
-          };
-
-          # Make dummy the default package
-          default = self.packages.${system}.dummy;
+          production = dummy;
+          staging = dummy;
         };
 
         devShells.default = with pkgs;

@@ -5,6 +5,7 @@ nix ressources [here](https://ryantm.github.io/nixpkgs/builders/testers/#chap-te
 [probably this could help to share the binary accross machines](https://nix.dev/manual/nix/2.28/command-ref/nix-copy-closure.html)
 
 [flakes docs](https://nixos.wiki/wiki/flakes#Basic_Usage_of_Flake)
+[vm options](https://mynixos.com/options/virtualisation)
 
 Does not evaluates the file it only serialize the derivation
 ```bash
