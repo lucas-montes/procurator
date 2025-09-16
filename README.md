@@ -1,4 +1,5 @@
 look at [this microvm](https://github.com/astro/microvm.nix)
+docs for [micr](https://astro.github.io/microvm.nix/cpu-emulation.html)
 and also the native [way](https://discourse.nixos.org/t/is-there-a-way-to-share-a-nix-store-across-multiple-machines/18186/2)
 
 nix ressources [here](https://ryantm.github.io/nixpkgs/builders/testers/#chap-testers)
@@ -6,6 +7,11 @@ nix ressources [here](https://ryantm.github.io/nixpkgs/builders/testers/#chap-te
 
 [flakes docs](https://nixos.wiki/wiki/flakes#Basic_Usage_of_Flake)
 [vm options](https://mynixos.com/options/virtualisation)
+
+check how to use nixos [vms](https://github.com/ghostty-org/ghostty/tree/main/nix)
+
+how to use [jepsen](https://github.com/aphyr/distsys-class)
+learn about [distributed](https://github.com/jepsen-io/maelstrom)
 
 Does not evaluates the file it only serialize the derivation
 ```bash

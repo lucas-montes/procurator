@@ -98,7 +98,7 @@ void print_cgroup_info() {
 
 int main(int argc, char *argv[])
 {
-    printf("Dummy C executable started (PID: %d)\n", getpid());
+    printf("Dummy C executable (non master) started (PID: %d)\n", getpid());
 
     // Default behavior: sleep for 20 seconds
     int sleep_time = 20;
