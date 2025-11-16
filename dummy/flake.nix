@@ -75,6 +75,9 @@
           '';
         };
 
+        # Import CI-specific configuration
+        ciConfig = import ./ci.nix { inherit pkgs; };
+
       in {
         packages = {
           # This package allow us to run build and have the state generated. Probably shouldn't be here?
@@ -90,6 +93,7 @@
         };
 
         checks = {
+          # Existing basic test
           dummy-test =
             pkgs.runCommand "dummy-test" {
               buildInputs = [buildDummy pkgs.bash];
@@ -101,7 +105,7 @@
                 true > $out
               fi
             '';
-        };
+        } // ciConfig.checks; # Merge CI-specific checks
 
         apps = {
           default = {

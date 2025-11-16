@@ -1,9 +1,84 @@
 use std::str::FromStr;
 
-use sqlx::{FromRow, SqlitePool, sqlite::SqliteConnectOptions};
+use serde::{Deserialize, Serialize};
+use sqlx::{sqlite::SqliteConnectOptions, FromRow, SqlitePool};
 use tracing::info;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+#[derive(Debug)]
+pub enum QueueError {
+    Database(sqlx::Error),
+    InvalidStatus(String),
+    NotFound(i64),
+    ConnectionFailed(String),
+}
+
+impl std::fmt::Display for QueueError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            QueueError::Database(err) => write!(f, "Database error: {}", err),
+            QueueError::InvalidStatus(status) => write!(f, "Invalid build status: {}", status),
+            QueueError::NotFound(id) => write!(f, "Build not found: {}", id),
+            QueueError::ConnectionFailed(msg) => write!(f, "Connection failed: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for QueueError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            QueueError::Database(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+impl From<sqlx::Error> for QueueError {
+    fn from(err: sqlx::Error) -> Self {
+        QueueError::Database(err)
+    }
+}
+
+type Result<T> = std::result::Result<T, QueueError>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BuildStatus {
+    Queued,
+    Running,
+    Success,
+    Failed,
+}
+
+impl BuildStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            BuildStatus::Queued => "queued",
+            BuildStatus::Running => "running",
+            BuildStatus::Success => "success",
+            BuildStatus::Failed => "failed",
+        }
+    }
+}
+
+impl FromStr for BuildStatus {
+    type Err = QueueError;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "queued" => Ok(BuildStatus::Queued),
+            "running" => Ok(BuildStatus::Running),
+            "success" => Ok(BuildStatus::Success),
+            "failed" => Ok(BuildStatus::Failed),
+            _ => Err(QueueError::InvalidStatus(s.to_string())),
+        }
+    }
+}
+
+impl std::fmt::Display for BuildStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
 
 #[derive(Debug, Clone, FromRow)]
 pub struct Build {
@@ -11,10 +86,22 @@ pub struct Build {
     pub repo: String,
     pub commit_hash: String,
     pub branch: String,
-    pub status: String,
+    #[sqlx(try_from = "String")]
+    pub status: BuildStatus,
+    pub retry_count: i64,
+    pub max_retries: i64,
     pub created_at: String,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
+}
+
+// Implement conversion from String for sqlx
+impl TryFrom<String> for BuildStatus {
+    type Error = QueueError;
+
+    fn try_from(value: String) -> std::result::Result<Self, Self::Error> {
+        value.parse()
+    }
 }
 
 pub struct BuildQueue {
@@ -38,6 +125,8 @@ impl BuildQueue {
                 commit_hash TEXT NOT NULL,
                 branch TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'queued',
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                max_retries INTEGER NOT NULL DEFAULT 3,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 started_at TEXT,
                 finished_at TEXT
@@ -52,43 +141,42 @@ impl BuildQueue {
     }
 
     pub async fn enqueue(&self, repo: &str, commit: &str, branch: &str) -> Result<i64> {
-        let result = sqlx::query(
-            "INSERT INTO builds (repo, commit_hash, branch) VALUES (?, ?, ?)"
-        )
-        .bind(repo)
-        .bind(commit)
-        .bind(branch)
-        .execute(&self.pool)
-        .await?;
+        let result = sqlx::query("INSERT INTO builds (repo, commit_hash, branch) VALUES (?, ?, ?)")
+            .bind(repo)
+            .bind(commit)
+            .bind(branch)
+            .execute(&self.pool)
+            .await?;
 
         Ok(result.last_insert_rowid())
     }
 
     pub async fn get_pending(&self) -> Result<Option<Build>> {
         let build = sqlx::query_as::<_, Build>(
-            "SELECT * FROM builds WHERE status = 'queued' ORDER BY created_at LIMIT 1"
+            "SELECT * FROM builds WHERE status = ? ORDER BY created_at LIMIT 1",
         )
+        .bind(BuildStatus::Queued.as_str())
         .fetch_optional(&self.pool)
         .await?;
 
         Ok(build)
     }
 
-    pub async fn update_status(&self, id: i64, status: &str) -> Result<()> {
+    pub async fn update_status(&self, id: i64, status: BuildStatus) -> Result<()> {
         let now = chrono::Utc::now().to_rfc3339();
 
         match status {
-            "running" => {
+            BuildStatus::Running => {
                 sqlx::query("UPDATE builds SET status = ?, started_at = ? WHERE id = ?")
-                    .bind(status)
+                    .bind(status.as_str())
                     .bind(&now)
                     .bind(id)
                     .execute(&self.pool)
                     .await?;
             }
-            "success" | "failed" => {
+            BuildStatus::Success | BuildStatus::Failed => {
                 sqlx::query("UPDATE builds SET status = ?, finished_at = ? WHERE id = ?")
-                    .bind(status)
+                    .bind(status.as_str())
                     .bind(&now)
                     .bind(id)
                     .execute(&self.pool)
@@ -96,7 +184,7 @@ impl BuildQueue {
             }
             _ => {
                 sqlx::query("UPDATE builds SET status = ? WHERE id = ?")
-                    .bind(status)
+                    .bind(status.as_str())
                     .bind(id)
                     .execute(&self.pool)
                     .await?;
@@ -104,5 +192,19 @@ impl BuildQueue {
         }
 
         Ok(())
+    }
+
+    pub async fn increment_retry(&self, id: i64) -> Result<()> {
+        sqlx::query("UPDATE builds SET retry_count = retry_count + 1, status = ? WHERE id = ?")
+            .bind(BuildStatus::Queued.as_str())
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn can_retry(&self, build: &Build) -> bool {
+        build.retry_count < build.max_retries
     }
 }

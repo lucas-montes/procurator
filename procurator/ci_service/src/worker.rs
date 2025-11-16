@@ -1,9 +1,9 @@
 use std::sync::Arc;
 use tokio::process::Command;
-use tracing::{info, error};
+use tracing::{error, info};
 
-use crate::queue::BuildQueue;
 use crate::error::WorkerError;
+use crate::queue::{Build, BuildQueue, BuildStatus};
 
 type Result<T> = std::result::Result<T, WorkerError>;
 
@@ -22,11 +22,31 @@ impl Worker {
         loop {
             match self.queue.get_pending().await {
                 Ok(Some(build)) => {
-                    info!("Processing build #{}: {}/{}", build.id, build.repo, build.branch);
-
                     if let Err(e) = self.process_build(&build).await {
                         error!("Build #{} failed: {}", build.id, e);
-                        self.queue.update_status(build.id, "failed").await?;
+
+                        // Check if we can retry
+                        if self.queue.can_retry(&build).await {
+                            info!(
+                                "Retrying build #{} (attempt {}/{})",
+                                build.id,
+                                build.retry_count + 2,
+                                build.max_retries + 1
+                            );
+                            self.queue
+                                .increment_retry(build.id)
+                                .await
+                                .map_err(|e| WorkerError::Database(e.to_string()))?;
+                        } else {
+                            info!(
+                                "Build #{} exhausted all retries, marking as failed",
+                                build.id
+                            );
+                            self.queue
+                                .update_status(build.id, BuildStatus::Failed)
+                                .await
+                                .map_err(|e| WorkerError::Database(e.to_string()))?;
+                        }
                     }
                 }
                 Ok(None) => {
@@ -40,21 +60,31 @@ impl Worker {
         }
     }
 
-    async fn process_build(&self, build: &crate::queue::Build) -> Result<()> {
+    async fn process_build(&self, build: &Build) -> Result<()> {
+        info!(
+            "Processing build #{}: {}/{} (attempt {}/{})",
+            build.id,
+            build.repo,
+            build.branch,
+            build.retry_count + 1,
+            build.max_retries + 1
+        );
+
         self.queue
-            .update_status(build.id, "running")
+            .update_status(build.id, BuildStatus::Running)
             .await
             .map_err(|e| WorkerError::Database(e.to_string()))?;
 
-        // Run nix flake check in the repo
-        let repo_path = format!("../{}", build.repo);
+        // Build git URL from bare repo path and commit hash
+        // This allows Nix to fetch directly from the bare repo without cloning
+        let git_url = format!("git+file://{}?rev={}", build.repo, build.commit_hash);
 
-        info!("Running: nix flake check in {}", repo_path);
+        info!("Running: nix flake check {}", git_url);
 
         let output = Command::new("nix")
             .arg("flake")
             .arg("check")
-            .arg(&repo_path)
+            .arg(&git_url)
             .arg("--print-build-logs")
             .output()
             .await?;
@@ -62,7 +92,7 @@ impl Worker {
         if output.status.success() {
             info!("Build #{} succeeded", build.id);
             self.queue
-                .update_status(build.id, "success")
+                .update_status(build.id, BuildStatus::Success)
                 .await
                 .map_err(|e| WorkerError::Database(e.to_string()))?;
         } else {
@@ -70,7 +100,7 @@ impl Worker {
             error!("Build #{} failed:\n{}", build.id, stderr);
 
             self.queue
-                .update_status(build.id, "failed")
+                .update_status(build.id, BuildStatus::Failed)
                 .await
                 .map_err(|e| WorkerError::Database(e.to_string()))?;
 

@@ -2,21 +2,30 @@ use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
+use crate::queue::BuildStatus;
 use crate::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct BuildRequest {
-    pub repo: String,
-    pub old_rev: String,
-    pub new_rev: String,
+    repo: String,
+    bare_repo_path: String,
+    old_rev: Option<String>,
+    new_rev: String,
     #[serde(rename = "ref")]
-    pub ref_name: String,
+    ref_name: String,
+    commit_author: Option<String>,
+    commit_email: Option<String>,
+    commit_message: Option<String>,
+    gpg_status: Option<String>,
+    gpg_key: Option<String>,
+    gpg_signer: Option<String>,
+    pusher: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct BuildResponse {
     id: i64,
-    status: String,
+    status: BuildStatus,
 }
 
 pub async fn create_build(
@@ -30,8 +39,12 @@ pub async fn create_build(
     };
 
     info!(
-        "Build request: repo={} ref={} commit={}",
-        req.repo, req.ref_name, commit_short
+        "Build request: repo={} ref={} commit={} author={} gpg={}",
+        req.repo,
+        req.ref_name,
+        commit_short,
+        req.commit_author.as_deref().unwrap_or("unknown"),
+        req.gpg_status.as_deref().unwrap_or("N")
     );
 
     // Extract branch name
@@ -40,15 +53,19 @@ pub async fn create_build(
         .strip_prefix("refs/heads/")
         .unwrap_or(&req.ref_name);
 
-    // Enqueue build
-    match state.queue.enqueue(&req.repo, &req.new_rev, branch).await {
+    // Enqueue build with bare repo path
+    match state
+        .queue
+        .enqueue(&req.bare_repo_path, &req.new_rev, branch)
+        .await
+    {
         Ok(id) => {
             info!("Build #{} queued for {}/{}", id, req.repo, branch);
             Ok((
                 StatusCode::ACCEPTED,
                 Json(BuildResponse {
                     id,
-                    status: "queued".to_string(),
+                    status: BuildStatus::Queued,
                 }),
             ))
         }
