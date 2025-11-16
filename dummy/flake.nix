@@ -75,102 +75,6 @@
           '';
         };
 
-        # VM configuration
-        mkVM = env:
-          nixpkgs.lib.nixosSystem {
-            inherit system;
-            modules = [
-              ({
-                config,
-                pkgs,
-                ...
-              }: {
-                system.stateVersion = 24.11;
-                virtualisation.vmVariant.virtualisation.diskSize = 2048;
-                # virtualisation = {
-                #   vmVariant.enable = true;
-                #   diskSize = 2048; # 2GB disk
-                #   memorySize = services.dummy.production.memory.amount * 1024;
-                #   cores = services.dummy.production.cpu;# TODO: why it doesnt work? they are in the docs
-                # };
-                # boot.loader.systemd-boot.enable = true;
-                # fileSystems."/" = {
-                #   device = "/dev/disk/by-label/nixos";
-                #   fsType = "ext4";
-                #   autoFormat = true;
-                # };
-                networking.hostName = "dummy-vm-${env}";
-                services.openssh = {
-                  enable = true;
-                  settings.PermitRootLogin = "prohibit-password";
-                };
-                # services.qemuGuest.enable = true;
-                networking.firewall.allowedTCPPorts = [22];
-                users.users.root.openssh.authorizedKeys.keys = [
-                  # Replace with your SSH public key
-                  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI..."
-                ];
-                environment.systemPackages = [services.dummy.${env}.packages];
-                systemd.services.dummy = {
-                  description = "Dummy App Service";
-                  wantedBy = ["multi-user.target"];
-                  serviceConfig = {
-                    ExecStart = "${self.packages.${system}.default}/bin/dummy";
-                    Restart = "always";
-                    CPUQuota = "${toString (services.dummy.production.cpu * 100)}%";
-                    MemoryMax = "${toString services.dummy.production.memory.amount}${services.dummy.production.memory.unit}";
-                  };
-                };
-              })
-            ];
-          };
-
-        # Container host configuration
-        containerHost = nixpkgs.lib.nixosSystem {
-          inherit system;
-          modules = [
-            ({
-              config,
-              pkgs,
-              ...
-            }: {
-              boot.enableContainers = true;
-              containers = {
-                dummy-production = {
-                  autoStart = true;
-                  privateNetwork = true;
-                  hostAddress = "192.168.100.10";
-                  localAddress = "192.168.100.11";
-                  config = {
-                    config,
-                    pkgs,
-                    ...
-                  }: {
-                    networking.hostName = "dummy-container-production";
-                    environment.systemPackages = [services.dummy.production.packages];
-                    systemd.services.dummy = {
-                      description = "Dummy App Service";
-                      wantedBy = ["multi-user.target"];
-                      serviceConfig = {
-                        ExecStart = "${self.packages.${system}.default}/bin/dummy";
-                        Restart = "always";
-                        CPUQuota = "${toString (services.dummy.production.cpu * 100)}%";
-                        MemoryMax = "${toString services.dummy.production.memory.amount}${services.dummy.production.memory.unit}";
-                      };
-                    };
-                  };
-                };
-              };
-            })
-          ];
-        };
-
-        test-vm = nixpkgs.lib.nixosSystem {
-          inherit system;
-          modules = [
-            ./configuration.nix
-          ];
-        };
       in {
         packages = {
           # This package allow us to run build and have the state generated. Probably shouldn't be here?
@@ -183,10 +87,6 @@
           };
 
           default = buildDummy;
-        };
-
-        hydraJobs = {
-          inherit (self) packages; # Builds all packages
         };
 
         checks = {
@@ -203,11 +103,6 @@
             '';
         };
 
-        nixosConfigurations = {
-          vm = mkVM "production";
-          container-host = containerHost;
-        };
-
         apps = {
           default = {
             type = "app";
@@ -217,22 +112,7 @@
               license = licenses.mit;
             };
           };
-          vm = {
-            type = "app";
-            program = "${self.nixosConfigurations.${system}.vm.config.system.build.vm}/bin/run-nixos-vm";
-          };
-          container = {
-            type = "app";
-            program = "${pkgs.writeShellScript "run-container" ''
-              echo "Run on a NixOS host:"
-              echo "1. Ensure containers are enabled in /etc/nixos/configuration.nix:"
-              echo "   { boot.enableContainers = true; }"
-              echo "2. Apply: sudo nixos-rebuild switch"
-              echo "3. Create/start container: sudo nixos-container create dummy --flake .#container"
-              echo "4. Start container: sudo nixos-container start dummy"
-              echo "5. Access: sudo nixos-container run dummy -- /bin/bash"
-            ''}";
-          };
+
         };
       }
     );
