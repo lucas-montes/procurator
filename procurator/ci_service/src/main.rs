@@ -1,4 +1,5 @@
 mod api;
+mod error;
 mod queue;
 mod worker;
 

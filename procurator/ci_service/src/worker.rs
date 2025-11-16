@@ -3,8 +3,9 @@ use tokio::process::Command;
 use tracing::{info, error};
 
 use crate::queue::BuildQueue;
+use crate::error::WorkerError;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+type Result<T> = std::result::Result<T, WorkerError>;
 
 pub struct Worker {
     queue: Arc<BuildQueue>,
@@ -40,9 +41,12 @@ impl Worker {
     }
 
     async fn process_build(&self, build: &crate::queue::Build) -> Result<()> {
-        self.queue.update_status(build.id, "running").await?;
+        self.queue
+            .update_status(build.id, "running")
+            .await
+            .map_err(|e| WorkerError::Database(e.to_string()))?;
 
-        // For now, just run nix flake check in the repo
+        // Run nix flake check in the repo
         let repo_path = format!("../{}", build.repo);
 
         info!("Running: nix flake check in {}", repo_path);
@@ -57,12 +61,20 @@ impl Worker {
 
         if output.status.success() {
             info!("Build #{} succeeded", build.id);
-            self.queue.update_status(build.id, "success").await?;
+            self.queue
+                .update_status(build.id, "success")
+                .await
+                .map_err(|e| WorkerError::Database(e.to_string()))?;
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
             error!("Build #{} failed:\n{}", build.id, stderr);
-            self.queue.update_status(build.id, "failed").await?;
-            return Err(format!("Nix build failed").into());
+
+            self.queue
+                .update_status(build.id, "failed")
+                .await
+                .map_err(|e| WorkerError::Database(e.to_string()))?;
+
+            return Err(WorkerError::Nix(stderr.to_string()));
         }
 
         Ok(())

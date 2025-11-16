@@ -15,8 +15,8 @@ pub struct BuildRequest {
 
 #[derive(Debug, Serialize)]
 pub struct BuildResponse {
-    pub id: i64,
-    pub status: String,
+    id: i64,
+    status: String,
 }
 
 pub async fn create_build(
