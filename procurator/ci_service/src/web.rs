@@ -246,6 +246,7 @@ pub struct RepoDetails {
     builds_count: i64,
     recent_builds: Vec<BuildInfo>,
     setup_instructions: SetupInstructions,
+    flake_metadata: Option<crate::nix_parser::FlakeMetadata>,
 }
 
 #[derive(Debug, Serialize)]
@@ -274,6 +275,15 @@ pub async fn get_repo(
 
     let repo_path = repo.1.to_string_lossy().to_string();
 
+    // Convert to absolute path if relative
+    let absolute_path = if std::path::Path::new(&repo_path).is_absolute() {
+        repo_path.clone()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(&repo_path).to_string_lossy().to_string())
+            .unwrap_or(repo_path.clone())
+    };
+
     // Get build stats
     let all_builds = state.queue.list_all_builds().await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -285,6 +295,18 @@ pub async fn get_repo(
         .collect();
 
     let builds_count = repo_builds.len() as i64;
+
+    // Try to parse flake metadata (if it's a Nix flake)
+    let flake_metadata = match crate::nix_parser::get_flake_metadata(&absolute_path).await {
+        Ok(metadata) => {
+            info!("Parsed flake metadata for repo: {}", name);
+            Some(metadata)
+        }
+        Err(e) => {
+            info!("Could not parse flake metadata for {}: {}", name, e);
+            None
+        }
+    };
 
     let details = RepoDetails {
         name: name.clone(),
@@ -308,6 +330,7 @@ pub async fn get_repo(
                 "git push -u origin main".to_string(),
             ],
         },
+        flake_metadata,
     };
 
     Ok(Json(details))
@@ -368,9 +391,17 @@ pub async fn get_build_logs(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    tracing::info!("Fetching logs for build #{}", id);
+
     match state.queue.get_build_logs(id).await {
-        Ok(Some(logs)) => Ok(Json(serde_json::json!({ "logs": logs }))),
-        Ok(None) => Ok(Json(serde_json::json!({ "logs": "No logs available yet" }))),
+        Ok(Some(logs)) => {
+            tracing::info!("Returning {} bytes of logs for build #{}", logs.len(), id);
+            Ok(Json(serde_json::json!({ "logs": logs })))
+        }
+        Ok(None) => {
+            tracing::warn!("No logs found for build #{}", id);
+            Ok(Json(serde_json::json!({ "logs": "No logs available yet" })))
+        }
         Err(e) => {
             tracing::error!("Failed to get logs for build {}: {}", id, e);
             Err((

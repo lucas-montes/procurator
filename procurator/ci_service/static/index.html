@@ -700,8 +700,10 @@
                         ` : ''}
                     </div>
 
+                    ${repo.builds_count === 0 ? `
                     <div class="card" style="margin-top: 15px;">
                         <h4 style="margin-bottom: 15px;">🚀 Quick Setup</h4>
+                        <p style="color: #8b949e; margin-bottom: 15px;">This repository is empty. Get started by pushing some code:</p>
 
                         <div style="margin-bottom: 20px;">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
@@ -719,6 +721,75 @@
                             <pre id="existing-repo-commands" style="background: #0d1117; padding: 15px; border-radius: 6px; overflow-x: auto; font-size: 13px; line-height: 1.8; font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;">${repo.setup_instructions.existing_repo.join('\n')}</pre>
                         </div>
                     </div>
+                    ` : ''}
+
+                    ${repo.flake_metadata ? `
+                    <div class="card" style="margin-top: 15px;">
+                        <h4 style="margin-bottom: 15px;">❄️ Nix Flake Information</h4>
+
+                        ${repo.flake_metadata.description ? `
+                        <div style="margin-bottom: 15px;">
+                            <div style="font-size: 14px; color: #8b949e; margin-bottom: 5px;">Description</div>
+                            <div style="color: #c9d1d9;">${repo.flake_metadata.description}</div>
+                        </div>
+                        ` : ''}
+
+                        ${repo.flake_metadata.packages.length > 0 ? `
+                        <div style="margin-bottom: 15px;">
+                            <div style="font-size: 14px; color: #8b949e; margin-bottom: 5px;">📦 Packages (${repo.flake_metadata.packages.length})</div>
+                            <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                                ${repo.flake_metadata.packages.map(pkg => `
+                                    <span style="background: #0d1117; padding: 4px 10px; border-radius: 4px; font-size: 12px; font-family: monospace;">${pkg}</span>
+                                `).join('')}
+                            </div>
+                        </div>
+                        ` : ''}
+
+                        ${repo.flake_metadata.checks.length > 0 ? `
+                        <div style="margin-bottom: 15px;">
+                            <div style="font-size: 14px; color: #8b949e; margin-bottom: 5px;">✓ Checks (${repo.flake_metadata.checks.length})</div>
+                            <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                                ${repo.flake_metadata.checks.map(check => `
+                                    <span style="background: #0d1117; padding: 4px 10px; border-radius: 4px; font-size: 12px; font-family: monospace;">${check}</span>
+                                `).join('')}
+                            </div>
+                        </div>
+                        ` : ''}
+
+                        ${repo.flake_metadata.apps.length > 0 ? `
+                        <div style="margin-bottom: 15px;">
+                            <div style="font-size: 14px; color: #8b949e; margin-bottom: 5px;">🚀 Apps (${repo.flake_metadata.apps.length})</div>
+                            <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                                ${repo.flake_metadata.apps.map(app => `
+                                    <span style="background: #0d1117; padding: 4px 10px; border-radius: 4px; font-size: 12px; font-family: monospace;">${app}</span>
+                                `).join('')}
+                            </div>
+                        </div>
+                        ` : ''}
+
+                        ${repo.flake_metadata.dev_shells.length > 0 ? `
+                        <div style="margin-bottom: 15px;">
+                            <div style="font-size: 14px; color: #8b949e; margin-bottom: 5px;">🐚 Development Shells</div>
+                            <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                                ${repo.flake_metadata.dev_shells.map(shell => `
+                                    <span style="background: #0d1117; padding: 4px 10px; border-radius: 4px; font-size: 12px; font-family: monospace;">${shell}</span>
+                                `).join('')}
+                            </div>
+                        </div>
+                        ` : ''}
+
+                        ${repo.flake_metadata.nixos_modules.length > 0 ? `
+                        <div>
+                            <div style="font-size: 14px; color: #8b949e; margin-bottom: 5px;">⚙️ NixOS Modules</div>
+                            <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                                ${repo.flake_metadata.nixos_modules.map(mod => `
+                                    <span style="background: #0d1117; padding: 4px 10px; border-radius: 4px; font-size: 12px; font-family: monospace;">${mod}</span>
+                                `).join('')}
+                            </div>
+                        </div>
+                        ` : ''}
+                    </div>
+                    ` : ''}
 
                     <div class="card" style="margin-top: 15px;">
                         <h4 style="margin-bottom: 15px;">🔗 Clone URLs</h4>

@@ -100,13 +100,35 @@ impl Worker {
         // Capture both stdout and stderr
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
+
+        info!(
+            "Build #{} stdout: {} bytes, stderr: {} bytes",
+            build.id,
+            stdout.len(),
+            stderr.len()
+        );
+
         let full_logs = format!("{}{}{}", command_log, stdout, stderr);
+
+        info!(
+            "Build #{} captured {} bytes of logs total",
+            build.id,
+            full_logs.len()
+        );
 
         // Store the full logs
         self.queue
             .set_logs(build.id, &full_logs)
             .await
             .map_err(|e| WorkerError::Database(e.to_string()))?;
+
+        // Show preview of stored logs
+        let preview = if full_logs.len() > 200 {
+            format!("{}...", &full_logs[..200])
+        } else {
+            full_logs.clone()
+        };
+        info!("Build #{} logs stored successfully. Preview: {}", build.id, preview);
 
         if output.status.success() {
             info!("Build #{} succeeded", build.id);

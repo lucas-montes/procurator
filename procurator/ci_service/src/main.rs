@@ -2,6 +2,7 @@ mod api;
 mod config;
 mod error;
 mod git_url;
+mod nix_parser;
 mod queue;
 mod repo_manager;
 mod web;
