@@ -5,6 +5,7 @@ pub enum WorkerError {
     Database(String),
     Process(String),
     Nix(String),
+    Git(String),
     Io(std::io::Error),
 }
 
@@ -14,6 +15,7 @@ impl fmt::Display for WorkerError {
             WorkerError::Database(msg) => write!(f, "Database error: {}", msg),
             WorkerError::Process(msg) => write!(f, "Process error: {}", msg),
             WorkerError::Nix(msg) => write!(f, "Nix build error: {}", msg),
+            WorkerError::Git(msg) => write!(f, "Git error: {}", msg),
             WorkerError::Io(err) => write!(f, "IO error: {}", err),
         }
     }

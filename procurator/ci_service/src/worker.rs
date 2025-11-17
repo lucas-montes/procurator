@@ -3,6 +3,7 @@ use tokio::process::Command;
 use tracing::{error, info};
 
 use crate::error::WorkerError;
+use crate::git_url;
 use crate::queue::{Build, BuildQueue, BuildStatus};
 
 type Result<T> = std::result::Result<T, WorkerError>;
@@ -64,7 +65,7 @@ impl Worker {
         info!(
             "Processing build #{}: {}/{} (attempt {}/{})",
             build.id,
-            build.repo,
+            build.repo_name,
             build.branch,
             build.retry_count + 1,
             build.max_retries + 1
@@ -75,9 +76,9 @@ impl Worker {
             .await
             .map_err(|e| WorkerError::Database(e.to_string()))?;
 
-        // Build git URL from bare repo path and commit hash
-        // This allows Nix to fetch directly from the bare repo without cloning
-        let git_url = format!("git+file://{}?rev={}", build.repo, build.commit_hash);
+        // Build git URL using our tested helper function
+        let git_url = git_url::build_nix_git_url(&build.repo_path, &build.commit_hash)
+            .map_err(|e| WorkerError::Git(format!("Invalid git URL: {}", e)))?;
 
         info!("Running: nix flake check {}", git_url);
 

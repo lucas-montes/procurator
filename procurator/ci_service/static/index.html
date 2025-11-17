@@ -386,6 +386,17 @@
         </div>
     </div>
 
+    <!-- Repo Details Modal -->
+    <div id="repo-details-modal" class="modal">
+        <div class="modal-content" style="max-width: 900px;">
+            <div class="modal-header">
+                <h3 class="modal-title">Repository Details</h3>
+                <button class="close-btn" onclick="closeRepoDetailsModal()">×</button>
+            </div>
+            <div id="repo-details-content"></div>
+        </div>
+    </div>
+
     <script>
         // State
         let currentTab = 'builds';
@@ -481,7 +492,7 @@
             }
 
             container.innerHTML = repos.map(repo => `
-                <div class="repo-card">
+                <div class="repo-card" onclick="showRepoDetails('${repo.name}')">
                     <div class="repo-name">${repo.name}</div>
                     <div class="repo-stats">
                         <span>📊 ${repo.builds_count} builds</span>
@@ -649,6 +660,149 @@
             document.getElementById('build-details-modal').classList.remove('active');
         }
 
+        async function showRepoDetails(repoName) {
+            const modal = document.getElementById('repo-details-modal');
+            const content = document.getElementById('repo-details-content');
+
+            // Show loading state
+            content.innerHTML = '<div class="loading">Loading repository details...</div>';
+            modal.classList.add('active');
+
+            try {
+                const response = await fetch(`/api/repos/${repoName}`);
+                const repo = await response.json();
+
+                content.innerHTML = `
+                    <div class="card">
+                        <h3 style="margin-bottom: 20px;">📦 ${repo.name}</h3>
+
+                        <div style="margin-bottom: 20px;">
+                            <strong>Statistics</strong>
+                            <div style="margin-top: 10px; color: #8b949e;">
+                                📊 ${repo.builds_count} total builds
+                            </div>
+                        </div>
+
+                        ${repo.recent_builds.length > 0 ? `
+                        <div style="margin-bottom: 20px;">
+                            <strong>Recent Builds</strong>
+                            <div style="margin-top: 10px;">
+                                ${repo.recent_builds.slice(0, 5).map(build => `
+                                    <div style="display: flex; align-items: center; gap: 10px; padding: 8px; background: #0d1117; border-radius: 4px; margin-bottom: 5px; cursor: pointer;" onclick="closeRepoDetailsModal(); showBuildDetails(${build.id})">
+                                        <span class="status-badge status-${build.status}">${build.status}</span>
+                                        <span style="flex: 1;">${build.branch}</span>
+                                        <span class="commit-hash">${build.commit_short}</span>
+                                        <span style="font-size: 12px; color: #8b949e;">${formatDate(build.created_at)}</span>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                        ` : ''}
+                    </div>
+
+                    <div class="card" style="margin-top: 15px;">
+                        <h4 style="margin-bottom: 15px;">🚀 Quick Setup</h4>
+
+                        <div style="margin-bottom: 20px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                                <strong>Create a new repository</strong>
+                                <button class="secondary" onclick="copyToClipboard('new-repo-commands')" style="padding: 5px 15px; font-size: 12px;">📋 Copy</button>
+                            </div>
+                            <pre id="new-repo-commands" style="background: #0d1117; padding: 15px; border-radius: 6px; overflow-x: auto; font-size: 13px; line-height: 1.8; font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;">${repo.setup_instructions.new_repo.join('\n')}</pre>
+                        </div>
+
+                        <div>
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                                <strong>Push an existing repository</strong>
+                                <button class="secondary" onclick="copyToClipboard('existing-repo-commands')" style="padding: 5px 15px; font-size: 12px;">📋 Copy</button>
+                            </div>
+                            <pre id="existing-repo-commands" style="background: #0d1117; padding: 15px; border-radius: 6px; overflow-x: auto; font-size: 13px; line-height: 1.8; font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;">${repo.setup_instructions.existing_repo.join('\n')}</pre>
+                        </div>
+                    </div>
+
+                    <div class="card" style="margin-top: 15px;">
+                        <h4 style="margin-bottom: 15px;">🔗 Clone URLs</h4>
+
+                        <div style="margin-bottom: 10px;">
+                            <div style="font-size: 14px; color: #8b949e; margin-bottom: 5px;">SSH</div>
+                            <div style="display: flex; gap: 10px; align-items: center;">
+                                <code style="flex: 1; background: #0d1117; padding: 10px; border-radius: 4px; font-size: 13px;">${repo.git_url}</code>
+                                <button class="secondary" onclick="copyText('${repo.git_url}')" style="padding: 8px 15px; font-size: 12px;">📋</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } catch (error) {
+                console.error('Failed to load repo details:', error);
+                content.innerHTML = '<div class="card" style="color: #f85149;">Failed to load repository details</div>';
+            }
+        }
+
+        function closeRepoDetailsModal() {
+            document.getElementById('repo-details-modal').classList.remove('active');
+        }
+
+        function copyToClipboard(elementId) {
+            const element = document.getElementById(elementId);
+            const textArea = document.createElement('textarea');
+            textArea.value = element.textContent;
+            document.body.appendChild(textArea);
+            textArea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textArea);
+
+            // Show success toast
+            const toast = document.createElement('div');
+            toast.style.cssText = `
+                position: fixed;
+                bottom: 20px;
+                right: 20px;
+                background: #238636;
+                color: white;
+                padding: 10px 20px;
+                border-radius: 6px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+                z-index: 2001;
+            `;
+            toast.textContent = '✓ Copied to clipboard!';
+            document.body.appendChild(toast);
+            setTimeout(() => {
+                toast.style.transition = 'opacity 0.3s';
+                toast.style.opacity = '0';
+                setTimeout(() => toast.remove(), 300);
+            }, 2000);
+        }
+
+        function copyText(text) {
+            const textArea = document.createElement('textarea');
+            textArea.value = text;
+            document.body.appendChild(textArea);
+            textArea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textArea);
+
+            // Show success toast
+            const toast = document.createElement('div');
+            toast.style.cssText = `
+                position: fixed;
+                bottom: 20px;
+                right: 20px;
+                background: #238636;
+                color: white;
+                padding: 10px 20px;
+                border-radius: 6px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+                z-index: 2001;
+            `;
+            toast.textContent = '✓ Copied to clipboard!';
+            document.body.appendChild(toast);
+            setTimeout(() => {
+                toast.style.transition = 'opacity 0.3s';
+                toast.style.opacity = '0';
+                setTimeout(() => toast.remove(), 300);
+            }, 2000);
+        }
+
         // Utility functions
         function formatDate(dateStr) {
             const date = new Date(dateStr);
@@ -709,6 +863,7 @@
             if (e.key === 'Escape') {
                 closeCreateRepoModal();
                 closeBuildDetailsModal();
+                closeRepoDetailsModal();
             }
         });
     </script>

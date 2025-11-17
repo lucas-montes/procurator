@@ -1,14 +1,13 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    response::{Html, IntoResponse, Response, Sse},
+    response::{Html, Sse},
     Json,
 };
 use futures::stream::{self, Stream};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::time::Duration;
-use tokio_stream::StreamExt as _;
 use tracing::info;
 
 use crate::queue::{Build, BuildStatus};
@@ -69,7 +68,7 @@ impl From<Build> for BuildInfo {
 
         BuildInfo {
             id: build.id,
-            repo: build.repo,
+            repo: build.repo_name,
             commit_hash: build.commit_hash,
             commit_short,
             branch: build.branch,
@@ -237,6 +236,83 @@ pub async fn create_repo(
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct RepoDetails {
+    name: String,
+    path: String,
+    git_url: String,
+    ssh_url: String,
+    clone_url: String,
+    builds_count: i64,
+    recent_builds: Vec<BuildInfo>,
+    setup_instructions: SetupInstructions,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SetupInstructions {
+    new_repo: Vec<String>,
+    existing_repo: Vec<String>,
+}
+
+/// Get details for a specific repository
+pub async fn get_repo(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<RepoDetails>, (StatusCode, String)> {
+    // Check if repo exists
+    let repos = state.repo_manager.list_repos().await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let repo = repos.iter().find(|(repo_name, _)| repo_name == &name)
+        .ok_or((StatusCode::NOT_FOUND, format!("Repository '{}' not found", name)))?;
+
+    // Get hostname for URLs
+    let hostname = hostname::get()
+        .ok()
+        .and_then(|h| h.into_string().ok())
+        .unwrap_or_else(|| "localhost".to_string());
+
+    let repo_path = repo.1.to_string_lossy().to_string();
+
+    // Get build stats
+    let all_builds = state.queue.list_all_builds().await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let repo_builds: Vec<BuildInfo> = all_builds.into_iter()
+        .filter(|b| b.repo_name == name)
+        .take(10)
+        .map(BuildInfo::from)
+        .collect();
+
+    let builds_count = repo_builds.len() as i64;
+
+    let details = RepoDetails {
+        name: name.clone(),
+        path: repo_path.clone(),
+        git_url: format!("git@{}:{}", hostname, repo_path),
+        ssh_url: format!("ssh://git@{}/{}.git", hostname, name),
+        clone_url: format!("git@{}:{}.git", hostname, name),
+        builds_count,
+        recent_builds: repo_builds,
+        setup_instructions: SetupInstructions {
+            new_repo: vec![
+                format!("echo \"# {}\" >> README.md", name),
+                "git init".to_string(),
+                "git add .".to_string(),
+                "git commit -m \"Initial commit\"".to_string(),
+                format!("git remote add origin git@{}:{}.git", hostname, name),
+                "git push -u origin main".to_string(),
+            ],
+            existing_repo: vec![
+                format!("git remote add origin git@{}:{}.git", hostname, name),
+                "git push -u origin main".to_string(),
+            ],
+        },
+    };
+
+    Ok(Json(details))
+}
+
 // ============================================================================
 // Server-Sent Events for Real-time Updates
 // ============================================================================
@@ -291,18 +367,15 @@ pub async fn build_events(
 pub async fn get_build_logs(
     State(state): State<AppState>,
     Path(id): Path<i64>,
-) -> Result<Response, (StatusCode, String)> {
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     match state.queue.get_build_logs(id).await {
-        Ok(Some(logs)) => Ok(logs.into_response()),
-        Ok(None) => Err((
-            StatusCode::NOT_FOUND,
-            "No logs available for this build".to_string(),
-        )),
+        Ok(Some(logs)) => Ok(Json(serde_json::json!({ "logs": logs }))),
+        Ok(None) => Ok(Json(serde_json::json!({ "logs": "No logs available yet" }))),
         Err(e) => {
             tracing::error!("Failed to get logs for build {}: {}", id, e);
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to get logs: {}", e),
+                Json(serde_json::json!({ "error": format!("Failed to get logs: {}", e) })),
             ))
         }
     }

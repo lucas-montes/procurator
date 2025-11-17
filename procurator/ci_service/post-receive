@@ -10,7 +10,8 @@ echo "=== Post-receive hook triggered ==="
 # - USER: SSH service account (usually "git"), NOT the developer
 
 # Get repo path and name
-REPO_PATH="${GIT_DIR:-.}"
+# Use absolute path to avoid issues with relative paths
+REPO_PATH="$(cd "${GIT_DIR:-.}" && pwd)"
 BARE_REPO_NAME=$(basename "$REPO_PATH" .git)
 
 # Derive working directory name by removing "Bare" suffix if present

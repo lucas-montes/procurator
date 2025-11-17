@@ -1,6 +1,7 @@
 mod api;
 mod config;
 mod error;
+mod git_url;
 mod queue;
 mod repo_manager;
 mod web;
@@ -86,6 +87,7 @@ async fn main() -> Result<()> {
         // API - Repos
         .route("/api/repos", axum::routing::get(web::list_repos))
         .route("/api/repos", post(web::create_repo))
+        .route("/api/repos/:name", axum::routing::get(web::get_repo))
         // Real-time events
         .route("/api/events", axum::routing::get(web::build_events))
         // Health check

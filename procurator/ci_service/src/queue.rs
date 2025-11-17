@@ -83,7 +83,9 @@ impl std::fmt::Display for BuildStatus {
 #[derive(Debug, Clone, FromRow)]
 pub struct Build {
     pub id: i64,
-    pub repo: String,
+    pub repo_id: i64,
+    pub repo_name: String,
+    pub repo_path: String,
     pub commit_hash: String,
     pub branch: String,
     #[sqlx(try_from = "String")]
@@ -93,7 +95,15 @@ pub struct Build {
     pub created_at: String,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
-    pub logs: Option<String>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub struct Repo {
+    pub id: i64,
+    pub name: String,
+    pub path: String,
+    pub description: Option<String>,
+    pub created_at: String,
 }
 
 // Implement conversion from String for sqlx
@@ -117,12 +127,27 @@ impl BuildQueue {
 
         let pool = SqlitePool::connect_lazy_with(database_config);
 
-        // Create table
+        // Create repos table
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS repos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                path TEXT NOT NULL UNIQUE,
+                description TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await?;
+
+        // Create builds table
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS builds (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                repo TEXT NOT NULL,
+                repo_id INTEGER NOT NULL,
                 commit_hash TEXT NOT NULL,
                 branch TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'queued',
@@ -131,31 +156,105 @@ impl BuildQueue {
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 started_at TEXT,
                 finished_at TEXT,
-                logs TEXT
+                FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE
             )
             "#,
         )
         .execute(&pool)
         .await?;
 
+        // Create build_logs table
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS build_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                build_id INTEGER NOT NULL,
+                log_line TEXT NOT NULL,
+                timestamp TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (build_id) REFERENCES builds(id) ON DELETE CASCADE
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await?;
+
+        // Create indexes for performance
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_builds_repo_id ON builds(repo_id)")
+            .execute(&pool)
+            .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_builds_status ON builds(status)")
+            .execute(&pool)
+            .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_build_logs_build_id ON build_logs(build_id)")
+            .execute(&pool)
+            .await?;
+
         info!("Database initialized at {}", database_url);
         Ok(Self { pool })
     }
 
-    pub async fn enqueue(&self, repo: &str, commit: &str, branch: &str) -> Result<i64> {
-        let result = sqlx::query("INSERT INTO builds (repo, commit_hash, branch) VALUES (?, ?, ?)")
-            .bind(repo)
-            .bind(commit)
-            .bind(branch)
-            .execute(&self.pool)
-            .await?;
+    /// Get or create a repo by path, returning its ID
+    async fn get_or_create_repo(&self, repo_path: &str) -> Result<i64> {
+        // Extract repo name from path (remove .git extension if present)
+        let path_buf = std::path::PathBuf::from(repo_path);
+        let repo_name = path_buf
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown");
+
+        // Try to get existing repo
+        if let Some(repo) = sqlx::query_as::<_, Repo>(
+            "SELECT id, name, path, description, created_at FROM repos WHERE path = ?"
+        )
+        .bind(repo_path)
+        .fetch_optional(&self.pool)
+        .await?
+        {
+            return Ok(repo.id);
+        }
+
+        // Create new repo
+        let result = sqlx::query(
+            "INSERT INTO repos (name, path) VALUES (?, ?)"
+        )
+        .bind(repo_name)
+        .bind(repo_path)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.last_insert_rowid())
+    }
+
+    pub async fn enqueue(&self, repo_path: &str, commit: &str, branch: &str) -> Result<i64> {
+        let repo_id = self.get_or_create_repo(repo_path).await?;
+
+        let result = sqlx::query(
+            "INSERT INTO builds (repo_id, commit_hash, branch) VALUES (?, ?, ?)"
+        )
+        .bind(repo_id)
+        .bind(commit)
+        .bind(branch)
+        .execute(&self.pool)
+        .await?;
 
         Ok(result.last_insert_rowid())
     }
 
     pub async fn get_pending(&self) -> Result<Option<Build>> {
         let build = sqlx::query_as::<_, Build>(
-            "SELECT * FROM builds WHERE status = ? ORDER BY created_at LIMIT 1",
+            r#"
+            SELECT
+                b.id, b.repo_id, r.name as repo_name, r.path as repo_path,
+                b.commit_hash, b.branch, b.status, b.retry_count, b.max_retries,
+                b.created_at, b.started_at, b.finished_at
+            FROM builds b
+            JOIN repos r ON b.repo_id = r.id
+            WHERE b.status = ?
+            ORDER BY b.created_at
+            LIMIT 1
+            "#,
         )
         .bind(BuildStatus::Queued.as_str())
         .fetch_optional(&self.pool)
@@ -213,7 +312,16 @@ impl BuildQueue {
     // Web UI methods
     pub async fn list_all_builds(&self) -> Result<Vec<Build>> {
         let builds = sqlx::query_as::<_, Build>(
-            "SELECT * FROM builds ORDER BY created_at DESC LIMIT 100",
+            r#"
+            SELECT
+                b.id, b.repo_id, r.name as repo_name, r.path as repo_path,
+                b.commit_hash, b.branch, b.status, b.retry_count, b.max_retries,
+                b.created_at, b.started_at, b.finished_at
+            FROM builds b
+            JOIN repos r ON b.repo_id = r.id
+            ORDER BY b.created_at DESC
+            LIMIT 100
+            "#,
         )
         .fetch_all(&self.pool)
         .await?;
@@ -222,11 +330,21 @@ impl BuildQueue {
     }
 
     pub async fn get_build(&self, id: i64) -> Result<Build> {
-        let build = sqlx::query_as::<_, Build>("SELECT * FROM builds WHERE id = ?")
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await?
-            .ok_or(QueueError::NotFound(id))?;
+        let build = sqlx::query_as::<_, Build>(
+            r#"
+            SELECT
+                b.id, b.repo_id, r.name as repo_name, r.path as repo_path,
+                b.commit_hash, b.branch, b.status, b.retry_count, b.max_retries,
+                b.created_at, b.started_at, b.finished_at
+            FROM builds b
+            JOIN repos r ON b.repo_id = r.id
+            WHERE b.id = ?
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(QueueError::NotFound(id))?;
 
         Ok(build)
     }
@@ -235,12 +353,13 @@ impl BuildQueue {
         let repos = sqlx::query_as::<_, (String, String, i64)>(
             r#"
             SELECT
-                repo as name,
-                repo as path,
-                COUNT(*) as builds_count
-            FROM builds
-            GROUP BY repo
-            ORDER BY MAX(created_at) DESC
+                r.name,
+                r.path,
+                COUNT(b.id) as builds_count
+            FROM repos r
+            LEFT JOIN builds b ON r.id = b.repo_id
+            GROUP BY r.id, r.name, r.path
+            ORDER BY r.created_at DESC
             "#,
         )
         .fetch_all(&self.pool)
@@ -249,11 +368,21 @@ impl BuildQueue {
         Ok(repos)
     }
 
-    pub async fn get_latest_build_for_repo(&self, repo: &str) -> Result<Option<Build>> {
+    pub async fn get_latest_build_for_repo(&self, repo_name: &str) -> Result<Option<Build>> {
         let build = sqlx::query_as::<_, Build>(
-            "SELECT * FROM builds WHERE repo = ? ORDER BY created_at DESC LIMIT 1",
+            r#"
+            SELECT
+                b.id, b.repo_id, r.name as repo_name, r.path as repo_path,
+                b.commit_hash, b.branch, b.status, b.retry_count, b.max_retries,
+                b.created_at, b.started_at, b.finished_at
+            FROM builds b
+            JOIN repos r ON b.repo_id = r.id
+            WHERE r.name = ?
+            ORDER BY b.created_at DESC
+            LIMIT 1
+            "#,
         )
-        .bind(repo)
+        .bind(repo_name)
         .fetch_optional(&self.pool)
         .await?;
 
@@ -261,24 +390,26 @@ impl BuildQueue {
     }
 
     pub async fn get_build_logs(&self, id: i64) -> Result<Option<String>> {
-        let logs = sqlx::query_scalar::<_, Option<String>>(
-            "SELECT logs FROM builds WHERE id = ?"
+        let log_lines = sqlx::query_scalar::<_, String>(
+            "SELECT log_line FROM build_logs WHERE build_id = ? ORDER BY id"
         )
         .bind(id)
-        .fetch_optional(&self.pool)
-        .await?
-        .flatten();
+        .fetch_all(&self.pool)
+        .await?;
 
-        Ok(logs)
+        if log_lines.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(log_lines.join("")))
+        }
     }
 
     pub async fn append_log(&self, id: i64, log: &str) -> Result<()> {
         sqlx::query(
-            "UPDATE builds SET logs = COALESCE(logs || ?, ?) WHERE id = ?"
+            "INSERT INTO build_logs (build_id, log_line) VALUES (?, ?)"
         )
-        .bind(format!("{}\n", log))
-        .bind(format!("{}\n", log))
         .bind(id)
+        .bind(log)
         .execute(&self.pool)
         .await?;
 
@@ -286,11 +417,22 @@ impl BuildQueue {
     }
 
     pub async fn set_logs(&self, id: i64, logs: &str) -> Result<()> {
-        sqlx::query("UPDATE builds SET logs = ? WHERE id = ?")
-            .bind(logs)
+        // Delete existing logs
+        sqlx::query("DELETE FROM build_logs WHERE build_id = ?")
             .bind(id)
             .execute(&self.pool)
             .await?;
+
+        // Insert new logs
+        if !logs.is_empty() {
+            sqlx::query(
+                "INSERT INTO build_logs (build_id, log_line) VALUES (?, ?)"
+            )
+            .bind(id)
+            .bind(logs)
+            .execute(&self.pool)
+            .await?;
+        }
 
         Ok(())
     }
