@@ -93,6 +93,7 @@ pub struct Build {
     pub created_at: String,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
+    pub logs: Option<String>,
 }
 
 // Implement conversion from String for sqlx
@@ -129,7 +130,8 @@ impl BuildQueue {
                 max_retries INTEGER NOT NULL DEFAULT 3,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 started_at TEXT,
-                finished_at TEXT
+                finished_at TEXT,
+                logs TEXT
             )
             "#,
         )
@@ -206,5 +208,90 @@ impl BuildQueue {
 
     pub async fn can_retry(&self, build: &Build) -> bool {
         build.retry_count < build.max_retries
+    }
+
+    // Web UI methods
+    pub async fn list_all_builds(&self) -> Result<Vec<Build>> {
+        let builds = sqlx::query_as::<_, Build>(
+            "SELECT * FROM builds ORDER BY created_at DESC LIMIT 100",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(builds)
+    }
+
+    pub async fn get_build(&self, id: i64) -> Result<Build> {
+        let build = sqlx::query_as::<_, Build>("SELECT * FROM builds WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or(QueueError::NotFound(id))?;
+
+        Ok(build)
+    }
+
+    pub async fn list_repos(&self) -> Result<Vec<(String, String, i64)>> {
+        let repos = sqlx::query_as::<_, (String, String, i64)>(
+            r#"
+            SELECT
+                repo as name,
+                repo as path,
+                COUNT(*) as builds_count
+            FROM builds
+            GROUP BY repo
+            ORDER BY MAX(created_at) DESC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(repos)
+    }
+
+    pub async fn get_latest_build_for_repo(&self, repo: &str) -> Result<Option<Build>> {
+        let build = sqlx::query_as::<_, Build>(
+            "SELECT * FROM builds WHERE repo = ? ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(repo)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(build)
+    }
+
+    pub async fn get_build_logs(&self, id: i64) -> Result<Option<String>> {
+        let logs = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT logs FROM builds WHERE id = ?"
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        .flatten();
+
+        Ok(logs)
+    }
+
+    pub async fn append_log(&self, id: i64, log: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE builds SET logs = COALESCE(logs || ?, ?) WHERE id = ?"
+        )
+        .bind(format!("{}\n", log))
+        .bind(format!("{}\n", log))
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn set_logs(&self, id: i64, logs: &str) -> Result<()> {
+        sqlx::query("UPDATE builds SET logs = ? WHERE id = ?")
+            .bind(logs)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
     }
 }

@@ -81,6 +81,13 @@ impl Worker {
 
         info!("Running: nix flake check {}", git_url);
 
+        // Store the command in logs
+        let command_log = format!("$ nix flake check {} --print-build-logs\n", git_url);
+        self.queue
+            .set_logs(build.id, &command_log)
+            .await
+            .map_err(|e| WorkerError::Database(e.to_string()))?;
+
         let output = Command::new("nix")
             .arg("flake")
             .arg("check")
@@ -89,6 +96,17 @@ impl Worker {
             .output()
             .await?;
 
+        // Capture both stdout and stderr
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let full_logs = format!("{}{}{}", command_log, stdout, stderr);
+
+        // Store the full logs
+        self.queue
+            .set_logs(build.id, &full_logs)
+            .await
+            .map_err(|e| WorkerError::Database(e.to_string()))?;
+
         if output.status.success() {
             info!("Build #{} succeeded", build.id);
             self.queue
@@ -96,7 +114,6 @@ impl Worker {
                 .await
                 .map_err(|e| WorkerError::Database(e.to_string()))?;
         } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
             error!("Build #{} failed:\n{}", build.id, stderr);
 
             self.queue

@@ -1,6 +1,9 @@
 mod api;
+mod config;
 mod error;
 mod queue;
+mod repo_manager;
+mod web;
 mod worker;
 
 use axum::{routing::post, Router};
@@ -29,6 +32,7 @@ type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone)]
 pub struct AppState {
     queue: Arc<queue::BuildQueue>,
+    repo_manager: Arc<repo_manager::RepoManager>,
 }
 
 #[tokio::main]
@@ -40,15 +44,25 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    // Initialize config singleton
+    let config = config::Config::init();
+
     info!("Starting Procurator CI Service");
+    info!("Database: {}", config.database_url);
+    info!("Repos base path: {}", config.repos_base_path);
+    info!("Bind address: {}", config.bind_address);
 
     // Initialize database
-    let queue = queue::BuildQueue::new("sqlite:ci.db")
+    let queue = queue::BuildQueue::new(&config.database_url)
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
+    // Initialize repository manager (post-receive hook is now embedded)
+    let repo_manager = repo_manager::RepoManager::new(&config.repos_base_path);
+
     let state = AppState {
         queue: Arc::new(queue),
+        repo_manager: Arc::new(repo_manager),
     };
 
     // Start build worker in background
@@ -62,15 +76,26 @@ async fn main() -> Result<()> {
 
     // Build API
     let app = Router::new()
+        // Web UI
+        .route("/", axum::routing::get(web::index))
+        // API - Builds
         .route("/api/builds", post(api::create_build))
+        .route("/api/builds", axum::routing::get(web::list_builds))
+        .route("/api/builds/:id", axum::routing::get(web::get_build))
+        .route("/api/builds/:id/logs", axum::routing::get(web::get_build_logs))
+        // API - Repos
+        .route("/api/repos", axum::routing::get(web::list_repos))
+        .route("/api/repos", post(web::create_repo))
+        // Real-time events
+        .route("/api/events", axum::routing::get(web::build_events))
+        // Health check
         .route("/health", axum::routing::get(|| async { "OK" }))
         .with_state(state);
 
     // Start server
-    let addr = "127.0.0.1:3000";
-    info!("Listening on {}", addr);
+    info!("Listening on {}", config.bind_address);
 
-    let listener = tokio::net::TcpListener::bind(addr)
+    let listener = tokio::net::TcpListener::bind(&config.bind_address)
         .await
         .map_err(|e| Error::Network(e.to_string()))?;
 
