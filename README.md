@@ -27,16 +27,185 @@ To run something that is not in a flake but flakes are enabled use -f
 nix build -f default.nix
 ```
 
+## Notes
+You need to add yourself (or some user) to the trusted users in the nix.settings.trusted-users
+
 # TODO
-[] Better separate worker and control plane
-[] Add monitoring to cli
-[] Add a build pipeline, use fetchGithub, fetchTarball and other to get the source code. How to hide nix stuff from the user?
-[] Add a testing pipeline for simple unit tests (if possible with nix)
-[] Add a pre-production env where to perform DST and look for regressions (if regression observed send notifications and maybe do some automatic rollback)
-[] Sync with a monitoring environement (probably look how to couple it with grafana and elk stack)
-[] Use chain of command to run all the steps and coordinate workers. Steps are in order: unittest, build, pre-prod deployment, dst, generate dst report, deploy to prod or rollback
-[] Find how and what are the steps that we can do with nix running commands and avoiding custom code
-[] The infra may not change that often so having to evaluate all of that info might be useless find if it a problem to evaluate the nix files with the infrastructure
+
+## 1. Control Plane (`procurator-control-plane`)
+
+- [ ] Define Cap'n Proto schema for worker RPC
+- [ ] Implement job queue and scheduling
+- [ ] Implement worker registry and health tracking
+- [ ] Implement pull-based work assignment (`GetWork()`)
+- [ ] Implement status update handling (`UpdateStatus()`)
+- [ ] Implement deployment state machine (rolling, blue-green, canary)
+- [ ] Persist state to database (PostgreSQL)
+- [ ] Implement leader election for HA
+- [ ] Push notifications to workers on deployments/config changes
+
+## 2. Worker (`procurator-worker`)
+
+- [x] Basic builder with state machine (Initial → Built → Tested → StateSaved)
+- [x] Nix flake building and testing
+- [x] Runtime modules structure (application, controller, executable, oci)
+- [ ] Implement Cap'n Proto RPC client
+- [ ] Implement pull loop (`GetWork()` polling with backoff)
+- [ ] Integrate builder with RPC to execute jobs
+- [ ] Implement systemd service executor for deployments
+- [ ] Implement cgroup resource limits
+- [ ] Collect and push metrics to observability
+- [ ] Implement health checks (HTTP/TCP/exec)
+- [ ] Stream logs to observability service
+- [ ] Heartbeat mechanism to signal liveness
+
+## 3. CI/CD Service (`procurator-ci-service`)
+
+- [x] Basic queue system (BuildQueue with SQLite)
+- [x] Build status tracking (Queued, Running, Success, Failed)
+- [x] Worker processing builds and storing logs
+- [x] Git hook integration (post-receive hook)
+- [x] Web UI (index.html with build list)
+- [x] Build events API
+- [ ] Parse `procurator.ci` from flakes (extend nix_parser)
+- [ ] Queue jobs to control plane instead of local processing
+- [ ] Implement deployment triggering on successful builds
+- [ ] Implement retry logic with exponential backoff
+- [ ] Report status back to Git (commit checks)
+- [ ] Improve CI UI logic and error handling
+
+## 4. Cache Service
+
+- [ ] Implement Nix binary cache protocol (`.narinfo`, `.nar`)
+- [ ] Implement upload endpoint for users/CI
+- [ ] Add authentication (API keys, mTLS)
+- [ ] Implement LRU eviction with size limits
+- [ ] Add metrics (hit/miss ratio, storage usage)
+- [ ] Support S3 backend (optional)
+
+## 5. Secret Manager
+
+- [ ] Implement envelope encryption (DEK + KEK)
+- [ ] Create/update/delete secret endpoints
+- [ ] Implement secret injection (env vars + tmpfs files)
+- [ ] Implement worker authentication for secret requests (mTLS)
+- [ ] Audit log secret access
+- [ ] Support secret rotation
+
+## 6. Git Service / Forge
+
+- [x] Bare repository storage (managed via RepoManager)
+- [x] Post-receive hook dispatcher embedded
+- [ ] Webhook integration with CI/CD service
+- [ ] Improve repository access control
+- [ ] Add branch protection rules
+
+## 7. Observability Service
+
+- [ ] Receive metrics from workers
+- [ ] Store time-series data (WAL-based or InfluxDB)
+- [ ] Query API for metrics
+- [ ] Aggregate logs from workers
+- [ ] Track service uptime
+- [ ] (Phase 2) Alerting system
+
+## 8. Web UI
+
+- [ ] Service status dashboard
+- [ ] Deployment management UI
+- [x] CI pipeline visualization (basic)
+- [ ] Improve code diff visualization
+- [ ] Logs viewer with filtering
+- [ ] Metrics/uptime graphs
+
+## 9. Flake Schema & CLI
+
+- [ ] Define `procurator.services.*` schema (extend infrastructure.nix model)
+- [ ] Define `procurator.ci.*` schema
+- [ ] Create `procurator` CLI tool
+  - [x] Basic structure with commands
+  - [x] Apply command scaffolding
+  - [ ] `procurator deploy`
+  - [ ] `procurator status`
+  - [ ] `procurator logs`
+  - [ ] `procurator secrets`
+  - [x] Monitor command with TUI (interactive app)
+
+## 10. NixOS Integration
+
+- [ ] NixOS module for control plane
+- [ ] NixOS module for worker
+- [ ] NixOS module for cache service
+- [ ] Deployment documentation
+
+## 11. Security & Hardening
+
+- [ ] mTLS setup (CA, cert rotation)
+- [ ] RBAC (admin, developer, viewer roles)
+- [ ] API authentication (tokens)
+- [ ] Audit logging
+
 
 ## Notes
 Probably the infra stuff should be separated from the apps things.
+
+┌─────────────────────────────────────────────────────────────────┐
+│                         User's Machine                          │
+│  ┌──────────────┐        ┌─────────────────┐                    │V
+│  │ Nix Build    │───────▶│  Cache Client   │                    │
+│  │ (local dev)  │        │  (sync daemon)  │                    │
+│  └──────────────┘        └────────┬────────┘                    │
+└───────────────────────────────────┼─────────────────────────────┘
+                                    │ push + cache upload
+                                    ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      Procurator Platform                        │
+│                                                                 │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  1. Git Service (forge)                                  │   │
+│  │     - Git hosting + webhooks                             │   │
+│  │     - Trigger CI on push                                 │   │
+│  └──────────────┬───────────────────────────────────────────┘   │
+│                 │                                               │
+│  ┌──────────────▼───────────────────────────────────────────┐   │
+│  │  2. CI/CD Service                                        │   │
+│  │     - Parse procurator.* outputs                         │   │
+│  │     - Queue jobs (flake check, build)                    │   │
+│  │     - Deployment decisions                               │   │
+│  └──────────────┬───────────────────────────────────────────┘   │
+│                 │                                               │
+│  ┌──────────────▼───────────────────────────────────────────┐   │
+│  │  3. Cache Service (nix binary cache)                     │   │
+│  │     - Store/serve .narinfo + .nar files                  │   │
+│  │     - Content-addressed storage                          │   │
+│  │     - Serve to: CI, workers, users                       │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  4. Control Plane                                        │   │
+│  │     - Scheduling (job → worker)                          │   │
+│  │     - Resource management                                │   │
+│  │     - Health tracking                                    │   │
+│  └──────────────┬───────────────────────────────────────────┘   │
+│                 │                                               │
+│  ┌──────────────▼───────────────────────────────────────────┐   │
+│  │  5. Workers (N nodes)                                    │   │
+│  │     - Execute builds (with cache access)                 │   │
+│  │     - Run services (systemd + cgroups)                   │   │
+│  │     - Collect metrics → Observability                    │   │
+│  └──────────────┬───────────────────────────────────────────┘   │
+│                 │                                               │
+│  ┌──────────────▼───────────────────────────────────────────┐   │
+│  │  6. Observability Service                                │   │
+│  │     - Time-series metrics storage (custom)               │   │
+│  │     - Logs aggregation                                   │   │
+│  │     - Uptime monitoring                                  │   │
+│  │     - Dashboard UI                                       │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  7. Secret Manager                                       │   │
+│  │     - Encrypted key-value store                          │   │
+│  │     - Injection to workers at runtime                    │   │
+│  └──────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘

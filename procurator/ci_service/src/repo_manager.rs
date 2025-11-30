@@ -1,3 +1,14 @@
+//! Repository Manager
+//!
+//! Manages the lifecycle of Git bare repositories.
+//! Provides operations for:
+//! - Creating new bare repositories
+//! - Installing post-receive hooks (embedded at compile time)
+//! - Repository validation and error handling
+//!
+//! The post-receive hook is embedded in the binary and automatically installed
+//! when a new repository is created, allowing CI jobs to be triggered on push.
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::info;
@@ -6,6 +17,7 @@ use tracing::info;
 const POST_RECEIVE_HOOK: &str = include_str!("../post-receive");
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum RepoError {
     IoError(std::io::Error),
     GitError(String),
@@ -127,6 +139,7 @@ impl RepoManager {
     }
 
     /// Delete a repository (be careful!)
+    #[allow(dead_code)]
     pub async fn delete_repo(&self, name: &str) -> Result<()> {
         let repo_path = self.repos_base_path.join(format!("{}.git", name));
 

@@ -1,3 +1,25 @@
+//! Procurator CI Service
+//!
+//! A lightweight CI/CD service that integrates with Git repositories via post-receive hooks.
+//!
+//! ## Architecture
+//!
+//! - **Git Service Integration**: Bare Git repositories trigger CI via post-receive hooks
+//! - **Build Queue**: SQLite-based queue for managing pending, running, and completed builds
+//! - **Worker**: Background task that polls the queue and executes builds using Nix
+//! - **Web UI**: Simple SPA for viewing build history and logs
+//! - **REST API**: HTTP endpoints for creating builds and retrieving results
+//!
+//! ## Data Flow
+//!
+//! 1. User pushes to a monitored branch
+//! 2. Post-receive hook calls `POST /api/builds` with commit/push details
+//! 3. Build is enqueued in SQLite
+//! 4. Worker polls queue and picks up the build
+//! 5. Worker runs `nix flake check` on the specified commit
+//! 6. Build status and logs are stored in database
+//! 7. Web UI displays results in real-time via SSE
+
 mod api;
 mod config;
 mod error;
@@ -8,7 +30,7 @@ mod repo_manager;
 mod web;
 mod worker;
 
-use axum::{routing::post, Router};
+use axum::{routing::{get, post}, Router};
 use std::sync::Arc;
 use tracing::info;
 
@@ -49,10 +71,12 @@ async fn main() -> Result<()> {
     // Initialize config singleton
     let config = config::Config::init();
 
-    info!("Starting Procurator CI Service");
-    info!("Database: {}", config.database_url);
-    info!("Repos base path: {}", config.repos_base_path);
-    info!("Bind address: {}", config.bind_address);
+    info!(
+        database = config.database_url.as_str(),
+        bind_address = config.bind_address.as_str(),
+        repos_path = config.repos_base_path.as_str(),
+        "Starting Procurator CI Service"
+    );
 
     // Initialize database
     let queue = queue::BuildQueue::new(&config.database_url)
@@ -72,31 +96,33 @@ async fn main() -> Result<()> {
     tokio::spawn(async move {
         let worker = worker::Worker::new(worker_state.queue.clone());
         if let Err(e) = worker.run().await {
-            tracing::error!("Worker error: {}", e);
+            tracing::error!(error = %e, "Worker task exited with error");
         }
     });
+
+    info!(target: "procurator::main", "Build worker spawned");
 
     // Build API
     let app = Router::new()
         // Web UI
-        .route("/", axum::routing::get(web::index))
+        .route("/", get(web::index))
         // API - Builds
         .route("/api/builds", post(api::create_build))
-        .route("/api/builds", axum::routing::get(web::list_builds))
-        .route("/api/builds/:id", axum::routing::get(web::get_build))
-        .route("/api/builds/:id/logs", axum::routing::get(web::get_build_logs))
+        .route("/api/builds", get(web::list_builds))
+        .route("/api/builds/{id}", get(web::get_build))
+        .route("/api/builds/{id}/logs", get(web::get_build_logs))
         // API - Repos
-        .route("/api/repos", axum::routing::get(web::list_repos))
+        .route("/api/repos", get(web::list_repos))
         .route("/api/repos", post(web::create_repo))
-        .route("/api/repos/:name", axum::routing::get(web::get_repo))
+        .route("/api/repos/{name}", get(web::get_repo))
         // Real-time events
-        .route("/api/events", axum::routing::get(web::build_events))
+        .route("/api/events", get(web::build_events))
         // Health check
-        .route("/health", axum::routing::get(|| async { "OK" }))
+        .route("/health", get(|| async { "OK" }))
         .with_state(state);
 
     // Start server
-    info!("Listening on {}", config.bind_address);
+    info!(target: "procurator::main", bind_address = config.bind_address.as_str(), "Starting HTTP server");
 
     let listener = tokio::net::TcpListener::bind(&config.bind_address)
         .await

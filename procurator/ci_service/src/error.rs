@@ -1,6 +1,12 @@
+//! Error Types
+//!
+//! Defines domain-specific error types for the CI worker and build execution.
+//! Errors are structured to provide context about what went wrong (database, process, nix, git).
+
 use std::fmt;
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum WorkerError {
     Database(String),
     Process(String),

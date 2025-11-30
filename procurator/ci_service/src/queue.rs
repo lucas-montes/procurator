@@ -1,3 +1,15 @@
+//! Build Queue Management
+//!
+//! Manages the lifecycle of CI builds using SQLite as the backing store.
+//! Provides operations for:
+//! - Enqueuing new builds from Git hooks
+//! - Polling pending builds for the worker
+//! - Updating build status (Queued → Running → Success/Failed)
+//! - Storing build logs and metadata
+//! - Retry logic with configurable maximum attempts
+//!
+//! The queue is thread-safe and can be shared across multiple tasks via Arc.
+
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
@@ -5,6 +17,7 @@ use sqlx::{sqlite::SqliteConnectOptions, FromRow, SqlitePool};
 use tracing::info;
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum QueueError {
     Database(sqlx::Error),
     InvalidStatus(String),
@@ -81,6 +94,7 @@ impl std::fmt::Display for BuildStatus {
 }
 
 #[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
 pub struct Build {
     pub id: i64,
     pub repo_id: i64,
@@ -98,6 +112,7 @@ pub struct Build {
 }
 
 #[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
 pub struct Repo {
     pub id: i64,
     pub name: String,
@@ -404,6 +419,7 @@ impl BuildQueue {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn append_log(&self, id: i64, log: &str) -> Result<()> {
         sqlx::query(
             "INSERT INTO build_logs (build_id, log_line) VALUES (?, ?)"

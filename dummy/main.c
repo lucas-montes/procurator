@@ -4,7 +4,7 @@
 #include <string.h>
 #include <sys/sysinfo.h>
 
-// test
+// s
 void print_memory_info() {
     FILE *file = fopen("/proc/meminfo", "r");
     if (file == NULL) {

@@ -1,3 +1,16 @@
+//! CI API Handlers
+//!
+//! This module provides HTTP API endpoints for the CI service:
+//! - `POST /api/builds` - Create a new build (called by Git post-receive hooks)
+//!
+//! The build request contains:
+//! - Repository information (name, path)
+//! - Git ref and commit information
+//! - Optional author/email/message metadata
+//! - Optional GPG signing information
+//!
+//! Builds are enqueued asynchronously and processed by the worker in the background.
+
 use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 use tracing::info;
@@ -6,6 +19,7 @@ use crate::queue::BuildStatus;
 use crate::AppState;
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct BuildRequest {
     repo: String,
     bare_repo_path: String,
@@ -39,12 +53,12 @@ pub async fn create_build(
     };
 
     info!(
-        "Build request: repo={} ref={} commit={} author={} gpg={}",
-        req.repo,
-        req.ref_name,
-        commit_short,
-        req.commit_author.as_deref().unwrap_or("unknown"),
-        req.gpg_status.as_deref().unwrap_or("N")
+        repo = req.repo.as_str(),
+        ref_name = req.ref_name.as_str(),
+        commit = commit_short,
+        author = req.commit_author.as_deref().unwrap_or("unknown"),
+        gpg_status = req.gpg_status.as_deref().unwrap_or("N"),
+        "Build request received"
     );
 
     // Extract branch name
@@ -60,7 +74,12 @@ pub async fn create_build(
         .await
     {
         Ok(id) => {
-            info!("Build #{} queued for {}/{}", id, req.repo, branch);
+            info!(
+                build_id = id,
+                repo = req.repo.as_str(),
+                branch = branch,
+                "Build enqueued successfully"
+            );
             Ok((
                 StatusCode::ACCEPTED,
                 Json(BuildResponse {
@@ -70,7 +89,12 @@ pub async fn create_build(
             ))
         }
         Err(e) => {
-            tracing::error!("Failed to enqueue build: {}", e);
+            tracing::error!(
+                repo = req.repo.as_str(),
+                branch = branch,
+                error = %e,
+                "Failed to enqueue build"
+            );
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Failed to enqueue build: {}", e),

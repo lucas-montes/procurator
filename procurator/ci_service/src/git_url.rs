@@ -1,3 +1,13 @@
+//! Git URL Builder
+//!
+//! Constructs valid `git+file://` URLs for Nix to fetch repositories.
+//! Handles:
+//! - Absolute path resolution
+//! - URL encoding/escaping
+//! - Revision (commit hash) specification
+//!
+//! Nix requires absolute paths and specific URL formatting to fetch from local repositories.
+
 use std::path::Path;
 
 /// Build a proper git URL for Nix to fetch from a bare repository

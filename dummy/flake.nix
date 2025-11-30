@@ -11,6 +11,11 @@
     };
   };
 
+        #   nixConfig = {
+        #   substituters = ["http://0.0.0.0:8081"];
+        #   post-build-hook = "${./upload-hook.sh}";
+        # };
+
   outputs = {
     self,
     nixpkgs,
@@ -76,9 +81,10 @@
         };
 
         # Import CI-specific configuration
-        ciConfig = import ./ci.nix { inherit pkgs; };
-
+        ciConfig = import ./ci.nix {inherit pkgs;};
       in {
+
+
         packages = {
           # This package allow us to run build and have the state generated. Probably shouldn't be here?
           state = pkgs.writeTextFile {
@@ -92,20 +98,22 @@
           default = buildDummy;
         };
 
-        checks = {
-          # Existing basic test
-          dummy-test =
-            pkgs.runCommand "dummy-test" {
-              buildInputs = [buildDummy pkgs.bash];
-            } ''
-              if [ -f ${./test_dummy.sh} ]; then
-                ${pkgs.bash}/bin/bash ${./test_dummy.sh} > $out
-              else
-                echo "Warning: test_dummy.sh not found"
-                true > $out
-              fi
-            '';
-        } // ciConfig.checks; # Merge CI-specific checks
+        checks =
+          {
+            # Existing basic test
+            dummy-test =
+              pkgs.runCommand "dummy-test" {
+                buildInputs = [buildDummy pkgs.bash];
+              } ''
+                if [ -f ${./test_dummy.sh} ]; then
+                  ${pkgs.bash}/bin/bash ${./test_dummy.sh} > $out
+                else
+                  echo "Warning: test_dummy.sh not found"
+                  true > $out
+                fi
+              '';
+          }
+          // ciConfig.checks; # Merge CI-specific checks
 
         apps = {
           default = {
@@ -116,7 +124,6 @@
               license = licenses.mit;
             };
           };
-
         };
       }
     );

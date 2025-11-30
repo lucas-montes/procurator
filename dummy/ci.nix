@@ -24,17 +24,6 @@
       echo "Tests passed" > $out
     '';
 
-    # Build verification (ensures the project builds)
-    build-check = pkgs.runCommand "verify-build" {
-      buildInputs = [ pkgs.gcc ];
-    } ''
-      echo "Verifying project can build..."
-      cp ${./main.c} main.c
-      ${pkgs.gcc}/bin/gcc -o dummy main.c
-      ./dummy
-      echo "Build verification passed" > $out
-    '';
-
     # Security checks (placeholder for future)
     security = pkgs.runCommand "security-checks" { } ''
       echo "Running security checks..."

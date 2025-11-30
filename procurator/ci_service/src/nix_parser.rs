@@ -1,3 +1,16 @@
+//! Nix Flake Parser
+//!
+//! Extracts metadata from Nix flakes to understand available outputs.
+//! Currently parses:
+//! - Packages
+//! - Checks (tests)
+//! - Apps
+//! - Dev shells
+//! - NixOS modules
+//!
+//! This is a foundation for future work to parse `procurator.*` flake outputs
+//! that describe CI jobs, deployments, and other configuration.
+
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 use tracing::{error, info};
@@ -35,7 +48,7 @@ type Result<T> = std::result::Result<T, NixParserError>;
 
 /// Parse flake metadata from a git repository
 pub async fn get_flake_metadata(repo_path: &str) -> Result<FlakeMetadata> {
-    info!("Parsing flake metadata from: {}", repo_path);
+    info!(repo_path = repo_path, "Parsing flake metadata");
 
     // Use nix flake metadata command to get structured info
     let output = Command::new("nix")
@@ -45,7 +58,7 @@ pub async fn get_flake_metadata(repo_path: &str) -> Result<FlakeMetadata> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        error!("Failed to get flake metadata: {}", stderr);
+        error!(repo_path = repo_path, stderr = stderr.as_ref(), "Failed to get flake metadata");
         return Err(NixParserError::NotAFlake);
     }
 

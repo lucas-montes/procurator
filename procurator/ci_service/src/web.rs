@@ -1,3 +1,17 @@
+//! Web API Handlers
+//!
+//! Provides HTTP endpoints for the CI service's web interface and API:
+//! - `GET /` - Single Page Application (SPA)
+//! - `GET /api/builds` - List all builds with pagination
+//! - `GET /api/builds/{id}` - Get build details
+//! - `GET /api/builds/{id}/logs` - Stream build logs
+//! - `GET /api/repos` - List repositories
+//! - `POST /api/repos` - Create repository
+//! - `GET /api/events` - Server-Sent Events (SSE) for real-time updates
+//!
+//! The web module serves both the UI and the REST API, with support for
+//! real-time build status updates via SSE.
+
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -341,6 +355,7 @@ pub async fn get_repo(
 // ============================================================================
 
 #[derive(Debug, Serialize)]
+#[allow(dead_code)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum BuildEvent {
     Created { build: BuildInfo },

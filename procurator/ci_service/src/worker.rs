@@ -1,3 +1,17 @@
+//! CI Build Worker
+//!
+//! Polls the build queue for pending builds and executes them using Nix.
+//! This module handles:
+//! - Polling the queue for pending builds
+//! - Running `nix flake check` on the build target
+//! - Capturing build output (stdout/stderr) and storing logs
+//! - Updating build status in the queue (Queued → Running → Success/Failed)
+//! - Implementing retry logic with exponential backoff
+//!
+//! The worker runs in a background task and continuously polls the queue
+//! at configurable intervals, processing builds serially.
+
+use std::str::Chars;
 use std::sync::Arc;
 use tokio::process::Command;
 use tracing::{error, info};
@@ -18,21 +32,27 @@ impl Worker {
     }
 
     pub async fn run(&self) -> Result<()> {
-        info!("Worker started");
+        info!(target: "procurator::worker", "Worker started");
 
         loop {
             match self.queue.get_pending().await {
                 Ok(Some(build)) => {
                     if let Err(e) = self.process_build(&build).await {
-                        error!("Build #{} failed: {}", build.id, e);
+                        error!(
+                            build_id = build.id,
+                            repo = build.repo_name,
+                            branch = build.branch,
+                            error = %e,
+                            "Build processing failed"
+                        );
 
                         // Check if we can retry
                         if self.queue.can_retry(&build).await {
                             info!(
-                                "Retrying build #{} (attempt {}/{})",
-                                build.id,
-                                build.retry_count + 2,
-                                build.max_retries + 1
+                                build_id = build.id,
+                                attempt = build.retry_count + 2,
+                                max_retries = build.max_retries + 1,
+                                "Scheduling retry for build"
                             );
                             self.queue
                                 .increment_retry(build.id)
@@ -40,8 +60,9 @@ impl Worker {
                                 .map_err(|e| WorkerError::Database(e.to_string()))?;
                         } else {
                             info!(
-                                "Build #{} exhausted all retries, marking as failed",
-                                build.id
+                                build_id = build.id,
+                                max_retries = build.max_retries + 1,
+                                "Build exhausted all retries, marking as failed"
                             );
                             self.queue
                                 .update_status(build.id, BuildStatus::Failed)
@@ -54,7 +75,7 @@ impl Worker {
                     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                 }
                 Err(e) => {
-                    error!("Error fetching builds: {}", e);
+                    error!(error = %e, "Error fetching pending builds");
                     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 }
             }
@@ -63,12 +84,13 @@ impl Worker {
 
     async fn process_build(&self, build: &Build) -> Result<()> {
         info!(
-            "Processing build #{}: {}/{} (attempt {}/{})",
-            build.id,
-            build.repo_name,
-            build.branch,
-            build.retry_count + 1,
-            build.max_retries + 1
+            build_id = build.id,
+            repo = build.repo_name,
+            branch = build.branch,
+            commit = build.commit_hash,
+            attempt = build.retry_count + 1,
+            max_retries = build.max_retries + 1,
+            "Starting build processing"
         );
 
         self.queue
@@ -80,7 +102,11 @@ impl Worker {
         let git_url = git_url::build_nix_git_url(&build.repo_path, &build.commit_hash)
             .map_err(|e| WorkerError::Git(format!("Invalid git URL: {}", e)))?;
 
-        info!("Running: nix flake check {}", git_url);
+        info!(
+            build_id = build.id,
+            git_url = git_url.as_str(),
+            "Executing nix flake check"
+        );
 
         // Store the command in logs
         let command_log = format!("$ nix flake check {} --print-build-logs\n", git_url);
@@ -102,18 +128,18 @@ impl Worker {
         let stderr = String::from_utf8_lossy(&output.stderr);
 
         info!(
-            "Build #{} stdout: {} bytes, stderr: {} bytes",
-            build.id,
-            stdout.len(),
-            stderr.len()
+            build_id = build.id,
+            stdout_bytes = stdout.len(),
+            stderr_bytes = stderr.len(),
+            "Build command completed"
         );
 
         let full_logs = format!("{}{}{}", command_log, stdout, stderr);
 
         info!(
-            "Build #{} captured {} bytes of logs total",
-            build.id,
-            full_logs.len()
+            build_id = build.id,
+            total_log_bytes = full_logs.len(),
+            "Storing build logs"
         );
 
         // Store the full logs
@@ -122,22 +148,26 @@ impl Worker {
             .await
             .map_err(|e| WorkerError::Database(e.to_string()))?;
 
-        // Show preview of stored logs
-        let preview = if full_logs.len() > 200 {
-            format!("{}...", &full_logs[..200])
-        } else {
-            full_logs.clone()
-        };
-        info!("Build #{} logs stored successfully. Preview: {}", build.id, preview);
-
         if output.status.success() {
-            info!("Build #{} succeeded", build.id);
+            info!(
+                build_id = build.id,
+                repo = build.repo_name,
+                branch = build.branch,
+                "Build succeeded"
+            );
             self.queue
                 .update_status(build.id, BuildStatus::Success)
                 .await
                 .map_err(|e| WorkerError::Database(e.to_string()))?;
         } else {
-            error!("Build #{} failed:\n{}", build.id, stderr);
+            error!(
+                build_id = build.id,
+                repo = build.repo_name,
+                branch = build.branch,
+                exit_code = ?output.status.code(),
+                stderr_preview = stderr.chars().take(500).collect::<String>().as_str(),
+                "Build failed"
+            );
 
             self.queue
                 .update_status(build.id, BuildStatus::Failed)
