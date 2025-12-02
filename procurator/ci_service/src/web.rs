@@ -153,7 +153,7 @@ pub async fn list_repos(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<RepoInfo>>, (StatusCode, String)> {
     // List repos from filesystem (this is the source of truth)
-    match state.repo_manager.list_repos().await {
+    match state.repo_manager.list_repos("lucas").await {
         Ok(repos) => {
             let mut repo_infos = Vec::new();
 
@@ -221,7 +221,9 @@ pub async fn create_repo(
         ));
     }
 
-    match state.repo_manager.create_bare_repo(&req.name).await {
+    let username = "lucas";
+
+    match state.repo_manager.create_bare_repo(username, &req.name).await {
         Ok(repo_path) => {
             info!("Repository created at: {}", repo_path);
 
@@ -275,17 +277,14 @@ pub async fn get_repo(
     Path(name): Path<String>,
 ) -> Result<Json<RepoDetails>, (StatusCode, String)> {
     // Check if repo exists
-    let repos = state.repo_manager.list_repos().await
+    let repos = state.repo_manager.list_repos("lucas").await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let repo = repos.iter().find(|(repo_name, _)| repo_name == &name)
         .ok_or((StatusCode::NOT_FOUND, format!("Repository '{}' not found", name)))?;
 
     // Get hostname for URLs
-    let hostname = hostname::get()
-        .ok()
-        .and_then(|h| h.into_string().ok())
-        .unwrap_or_else(|| "localhost".to_string());
+    let hostname = "192.168.1.20";
 
     let repo_path = repo.1.to_string_lossy().to_string();
 

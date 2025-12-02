@@ -243,7 +243,7 @@ Set via environment variables:
 export DATABASE_URL="../ci.db"
 
 # HTTP bind address
-export BIND_ADDRESS="127.0.0.1:3000"
+export BIND_ADDRESS="0.0.0.0:3000"
 
 # Git repos location
 export REPOS_BASE_PATH="../repos"

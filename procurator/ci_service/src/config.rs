@@ -6,7 +6,7 @@
 //! ## Configuration Variables
 //!
 //! - `DATABASE_URL`: Path to SQLite database file (default: `../ci.db`)
-//! - `BIND_ADDRESS`: HTTP server bind address (default: `127.0.0.1:3000`)
+//! - `BIND_ADDRESS`: HTTP server bind address (default: `0.0.0.0:3000`)
 //! - `REPOS_BASE_PATH`: Base path for Git repositories (default: `../repos`)
 //! - `MAX_RETRIES`: Maximum build retry attempts (default: `3`)
 //! - `WORKER_POLL_INTERVAL_MS`: Build queue poll interval in milliseconds (default: `1000`)
@@ -30,7 +30,7 @@ impl Default for Config {
         Self {
             database_url: "../ci.db".to_string(),
             bind_address: "0.0.0.0:3000".to_string(),
-            repos_base_path: "../repos".to_string(),
+            repos_base_path: "/var/lib/git-server".to_string(),
             max_retries: 3,
             worker_poll_interval_ms: 1000,
         }

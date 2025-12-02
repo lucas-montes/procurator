@@ -24,9 +24,8 @@
           extensions = ["rust-src"];
         };
 
-
-        mkRustPackage = cargoDir : let
-          cargoPath =  ./${cargoDir}/Cargo.toml;
+        mkRustPackage = cargoDir: let
+          cargoPath = ./${cargoDir}/Cargo.toml;
           cargoToml = builtins.fromTOML (builtins.readFile cargoPath);
           pname = cargoToml.package.name;
           version = cargoToml.package.version;
@@ -39,14 +38,13 @@
               lockFile = ./Cargo.lock;
             };
 
-            cargoBuildFlags = [ "-p" pname ];
-            cargoInstallFlags = [ "-p" pname ];
+            cargoBuildFlags = ["-p" pname];
+            cargoInstallFlags = ["-p" pname];
 
             nativeBuildInputs = [pkgs.pkg-config];
             buildInputs = [pkgs.openssl];
             doCheck = false;
           };
-
 
         cache = mkRustPackage "cache";
 
@@ -68,7 +66,6 @@
           cp ${procfile} Procfile
           ${pkgs.overmind}/bin/overmind start
         '';
-
       in {
         packages = {
           inherit cache worker ci_service control_plane github;
@@ -78,6 +75,7 @@
           mkShell {
             buildInputs = [
               pkg-config
+              cargo-watch
               rust-bin-custom
               capnproto
             ];

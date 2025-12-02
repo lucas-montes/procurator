@@ -12,8 +12,77 @@
 //! that describe CI jobs, deployments, and other configuration.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::Path;
 use std::process::Command;
 use tracing::{error, info};
+
+// ============================================================================
+// Nix Command Output Structures
+// ============================================================================
+
+/// Output structure from `nix flake metadata --json`
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NixFlakeMetadataOutput {
+    pub description: Option<String>,
+    pub path: Option<String>,
+    pub url: Option<String>,
+    pub original_url: Option<String>,
+    pub resolved_url: Option<String>,
+    pub last_modified: Option<i64>,
+    pub fingerprint: Option<String>,
+    pub dirty_revision: Option<String>,
+    pub locks: Option<NixFlakeLocks>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct NixFlakeLocks {
+    pub version: Option<i64>,
+    pub root: Option<String>,
+    pub nodes: Option<HashMap<String, serde_json::Value>>,
+}
+
+/// Output structure from `nix flake show --json`
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct NixFlakeShowOutput {
+    #[serde(default)]
+    pub packages: HashMap<String, HashMap<String, NixDerivationInfo>>,
+    #[serde(default)]
+    pub checks: HashMap<String, HashMap<String, NixDerivationInfo>>,
+    #[serde(default)]
+    pub apps: HashMap<String, HashMap<String, NixAppInfo>>,
+    #[serde(default, rename = "devShells")]
+    pub dev_shells: HashMap<String, HashMap<String, NixDerivationInfo>>,
+    #[serde(default, rename = "nixosModules")]
+    pub nixos_modules: HashMap<String, NixModuleInfo>,
+    #[serde(default, rename = "nixosConfigurations")]
+    pub nixos_configurations: HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct NixDerivationInfo {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default, rename = "type")]
+    pub derivation_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct NixAppInfo {
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default, rename = "type")]
+    pub app_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct NixModuleInfo {
+    #[serde(default, rename = "type")]
+    pub module_type: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlakeMetadata {
@@ -46,103 +115,68 @@ impl std::error::Error for NixParserError {}
 
 type Result<T> = std::result::Result<T, NixParserError>;
 
-/// Parse flake metadata from a git repository
-pub async fn get_flake_metadata(repo_path: &str) -> Result<FlakeMetadata> {
-    info!(repo_path = repo_path, "Parsing flake metadata");
 
-    // Use nix flake metadata command to get structured info
+/// Run a nix command and return the parsed JSON output
+fn run_nix_command<T: serde::de::DeserializeOwned>(args: &[&str]) -> Result<T> {
     let output = Command::new("nix")
-        .args(&["flake", "metadata", "--json", &format!("git+file://{}", repo_path)])
+        .args(args)
         .output()
         .map_err(|e| NixParserError::CommandFailed(e.to_string()))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        error!(repo_path = repo_path, stderr = stderr.as_ref(), "Failed to get flake metadata");
-        return Err(NixParserError::NotAFlake);
+        return Err(NixParserError::CommandFailed(stderr.to_string()));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let metadata: serde_json::Value = serde_json::from_str(&stdout)
-        .map_err(|e| NixParserError::ParseError(e.to_string()))?;
+    serde_json::from_str(&stdout).map_err(|e| NixParserError::ParseError(e.to_string()))
+}
 
-    let description = metadata["description"]
-        .as_str()
-        .map(|s| s.to_string());
+/// Parse flake metadata from a git repository
+pub async fn get_flake_metadata(repo_path: &str) -> Result<FlakeMetadata> {
+    let path = Path::new(repo_path);
+    let flake_url = format!("git+file://{}", repo_path.display());
 
-    // Now get flake show output for packages, checks, etc.
-    let show_output = Command::new("nix")
-        .args(&["flake", "show", "--json", &format!("git+file://{}", repo_path)])
-        .output()
-        .map_err(|e| NixParserError::CommandFailed(e.to_string()))?;
+    info!(repo_path = repo_path, flake_url = %flake_url, "Parsing flake metadata");
 
-    let show_stdout = String::from_utf8_lossy(&show_output.stdout);
-    let show_data: serde_json::Value = serde_json::from_str(&show_stdout)
-        .unwrap_or(serde_json::json!({}));
+    // Get flake metadata
+    let metadata: NixFlakeMetadataOutput =
+        run_nix_command(&["flake", "metadata", "--json", &flake_url]).map_err(|e| {
+            error!(repo_path = repo_path, error = %e, "Failed to get flake metadata");
+            NixParserError::NotAFlake
+        })?;
 
-    // Extract packages, checks, apps, etc.
-    let mut packages = Vec::new();
-    let mut checks = Vec::new();
-    let mut apps = Vec::new();
-    let mut dev_shells = Vec::new();
-    let mut nixos_modules = Vec::new();
+    // Get flake show output for packages, checks, etc.
+    let show_output: NixFlakeShowOutput =
+        run_nix_command(&["flake", "show", "--json", &flake_url]).unwrap_or_default();
 
-    // Parse the flake show output structure
-    // Structure is: { "system": { "packages": { "name": {...} } } }
-    if let Some(obj) = show_data.as_object() {
-        for (system_name, system_data) in obj {
-            // Skip metadata fields
-            if system_name == "description" {
-                continue;
-            }
-
-            if let Some(system_obj) = system_data.as_object() {
-                // Packages
-                if let Some(packages_obj) = system_obj.get("packages").and_then(|v| v.as_object()) {
-                    for package_name in packages_obj.keys() {
-                        packages.push(format!("{}.{}", system_name, package_name));
-                    }
-                }
-
-                // Checks
-                if let Some(checks_obj) = system_obj.get("checks").and_then(|v| v.as_object()) {
-                    for check_name in checks_obj.keys() {
-                        checks.push(format!("{}.{}", system_name, check_name));
-                    }
-                }
-
-                // Apps
-                if let Some(apps_obj) = system_obj.get("apps").and_then(|v| v.as_object()) {
-                    for app_name in apps_obj.keys() {
-                        apps.push(format!("{}.{}", system_name, app_name));
-                    }
-                }
-
-                // Dev shells
-                if let Some(shells_obj) = system_obj.get("devShells").and_then(|v| v.as_object()) {
-                    for shell_name in shells_obj.keys() {
-                        dev_shells.push(format!("{}.{}", system_name, shell_name));
-                    }
-                }
-            }
-        }
-
-        // NixOS modules (not system-specific)
-        if let Some(modules_obj) = obj.get("nixosModules").and_then(|v| v.as_object()) {
-            for module_name in modules_obj.keys() {
-                nixos_modules.push(module_name.clone());
-            }
-        }
-    }
+    // Extract outputs as flattened paths (system.name format)
+    let packages = flatten_system_outputs(&show_output.packages);
+    let checks = flatten_system_outputs(&show_output.checks);
+    let apps = flatten_system_outputs(&show_output.apps);
+    let dev_shells = flatten_system_outputs(&show_output.dev_shells);
+    let nixos_modules: Vec<String> = show_output.nixos_modules.keys().cloned().collect();
 
     Ok(FlakeMetadata {
-        description,
+        description: metadata.description,
         packages,
         checks,
         apps,
         dev_shells,
         nixos_modules,
     })
+}
+
+/// Flatten system-specific outputs into "system.name" format
+fn flatten_system_outputs<T>(outputs: &HashMap<String, HashMap<String, T>>) -> Vec<String> {
+    outputs
+        .iter()
+        .flat_map(|(system, items)| {
+            items
+                .keys()
+                .map(move |name| format!("{}.{}", system, name))
+        })
+        .collect()
 }
 
 #[cfg(test)]

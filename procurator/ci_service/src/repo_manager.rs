@@ -59,22 +59,25 @@ impl RepoManager {
     }
 
     /// Create a new bare Git repository
-    pub async fn create_bare_repo(&self, name: &str) -> Result<String> {
-        let repo_path = self.repos_base_path.join(format!("{}.git", name));
+    pub async fn create_bare_repo(&self, username: &str, repo: &str) -> Result<String> {
+        let mut repo_path = self.repos_base_path.join(username).join(repo);
+        repo_path.set_extension("git");
 
         // Check if repo already exists
         if repo_path.exists() {
-            return Err(RepoError::AlreadyExists(name.to_string()));
+            return Err(RepoError::AlreadyExists(repo.to_string()));
         }
 
-        // Create base directory if it doesn't exist
-        std::fs::create_dir_all(&self.repos_base_path)?;
-
-        info!("Creating bare repository at: {}", repo_path.display());
+        info!(repo_path=?repo_path, "Creating bare repository at");
 
         // Run git init --bare
         let output = Command::new("git")
-            .args(&["init", "--bare", repo_path.to_str().unwrap()])
+            .args([
+                "init",
+                "--bare",
+                "--shared=group",
+                repo_path.to_str().unwrap(),
+            ])
             .output()?;
 
         if !output.status.success() {
@@ -93,12 +96,11 @@ impl RepoManager {
 
     /// Install post-receive hook from embedded script
     fn install_post_receive_hook(&self, repo_path: &Path) -> Result<()> {
-        let hooks_dir = repo_path.join("hooks");
-        let post_receive = hooks_dir.join("post-receive");
+        let post_receive = repo_path.join("hooks").join("post-receive");
 
         info!(
-            "Installing post-receive hook at: {}",
-            post_receive.display()
+            post_receive=?post_receive,
+            "Installing post-receive hook"
         );
 
         // Write the embedded script to the hooks directory
@@ -118,14 +120,21 @@ impl RepoManager {
     }
 
     /// List all repositories in the base path
-    pub async fn list_repos(&self) -> Result<Vec<(String, PathBuf)>> {
+    pub async fn list_repos(&self, username: &str) -> Result<Vec<(String, PathBuf)>> {
         let mut repos = Vec::new();
 
-        let entries = std::fs::read_dir(&self.repos_base_path)?;
+        let entries = std::fs::read_dir(self.repos_base_path.join(username))?;
+
+        info!(
+            entries=?entries,
+            "Entries found"
+        );
 
         for entry in entries {
             let entry = entry?;
             let path = entry.path();
+
+            info!(path=?path, "Checking path");
 
             // Check if it's a directory ending with .git
             if path.is_dir() && path.extension().and_then(|s| s.to_str()) == Some("git") {
@@ -135,18 +144,23 @@ impl RepoManager {
             }
         }
 
+        info!(
+            repos=?repos,
+            "repos found"
+        );
+
         Ok(repos)
     }
 
     /// Delete a repository (be careful!)
     #[allow(dead_code)]
-    pub async fn delete_repo(&self, name: &str) -> Result<()> {
-        let repo_path = self.repos_base_path.join(format!("{}.git", name));
+    pub async fn delete_repo(&self, username: &str, repo: &str) -> Result<()> {
+        let repo_path = self.repos_base_path.join(username).join(repo).join(".git");
 
         if !repo_path.exists() {
             return Err(RepoError::InvalidPath(format!(
                 "Repository does not exist: {}",
-                name
+                repo_path.display()
             )));
         }
 
