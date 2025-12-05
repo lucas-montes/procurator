@@ -46,6 +46,78 @@ impl From<std::io::Error> for RepoError {
 
 type Result<T> = std::result::Result<T, RepoError>;
 
+#[derive(Debug)]
+pub struct RepoPath {
+    base_path: PathBuf,
+    username: String,
+    repo_name: String,
+}
+
+impl RepoPath {
+    /// Create a new RepoPath from components
+    pub fn new(
+        base_path: impl AsRef<Path>,
+        username: impl Into<String>,
+        repo_name: impl Into<String>,
+    ) -> Self {
+        Self {
+            base_path: base_path.as_ref().to_path_buf(),
+            username: username.into(),
+            repo_name: repo_name.into(),
+        }
+    }
+
+    /// Get the repository name (without .git extension)
+    pub fn repo_name(&self) -> &str {
+        &self.repo_name
+    }
+
+    /// Get the full filesystem path to the bare repository
+    /// Returns: base_path/username/repo.git
+    pub fn bare_repo_path(&self) -> PathBuf {
+        self.base_path
+            .join(&self.username)
+            .join(format!("{}.git", self.repo_name))
+    }
+
+    /// Build full SSH clone URL with domain
+    pub fn to_ssh_url(&self, domain: &str) -> String {
+        format!("git@{}:{}/{}.git", domain, self.username, self.repo_name)
+    }
+
+    /// Get the path as a string
+    pub fn to_path_string(&self) -> String {
+        self.bare_repo_path().to_string_lossy().to_string()
+    }
+
+    /// Build a Nix-compatible git+file:// URL (without revision)
+    pub fn to_nix_url(&self) -> String {
+        format!("git+file://{}", self.bare_repo_path().display())
+    }
+
+    /// Build a Nix-compatible git+file:// URL with a specific revision
+    pub fn to_nix_url_with_rev(&self, commit_hash: &str) -> String {
+        format!(
+            "git+file://{}?rev={}",
+            self.bare_repo_path().display(),
+            commit_hash
+        )
+    }
+}
+
+impl std::fmt::Display for RepoPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}/{}/{}.git",
+            self.base_path.display(),
+            self.username,
+            self.repo_name
+        )
+    }
+}
+
+
 #[derive(Clone)]
 pub struct RepoManager {
     repos_base_path: PathBuf,
@@ -58,17 +130,22 @@ impl RepoManager {
         }
     }
 
+    /// Create a RepoPath for the given username and repo
+    pub fn repo_path(&self, username: &str, repo: &str) -> RepoPath {
+        RepoPath::new(&self.repos_base_path, username, repo)
+    }
+
     /// Create a new bare Git repository
-    pub async fn create_bare_repo(&self, username: &str, repo: &str) -> Result<String> {
-        let mut repo_path = self.repos_base_path.join(username).join(repo);
-        repo_path.set_extension("git");
+    pub async fn create_bare_repo(&self, username: &str, repo: &str) -> Result<RepoPath> {
+        let repo_path = self.repo_path(username, repo);
+        let bare_path = repo_path.bare_repo_path();
 
         // Check if repo already exists
-        if repo_path.exists() {
+        if bare_path.exists() {
             return Err(RepoError::AlreadyExists(repo.to_string()));
         }
 
-        info!(repo_path=?repo_path, "Creating bare repository at");
+        info!(repo_path=%repo_path, "Creating bare repository at");
 
         // Run git init --bare
         let output = Command::new("git")
@@ -76,7 +153,7 @@ impl RepoManager {
                 "init",
                 "--bare",
                 "--shared=group",
-                repo_path.to_str().unwrap(),
+                bare_path.to_str().unwrap(),
             ])
             .output()?;
 
@@ -89,9 +166,9 @@ impl RepoManager {
         }
 
         // Install post-receive hook
-        self.install_post_receive_hook(&repo_path)?;
+        self.install_post_receive_hook(&bare_path)?;
 
-        Ok(repo_path.to_string_lossy().to_string())
+        Ok(repo_path)
     }
 
     /// Install post-receive hook from embedded script
@@ -119,35 +196,28 @@ impl RepoManager {
         Ok(())
     }
 
-    /// List all repositories in the base path
-    pub async fn list_repos(&self, username: &str) -> Result<Vec<(String, PathBuf)>> {
+    /// List all repositories for a user
+    pub async fn list_repos(&self, username: &str) -> Result<Vec<RepoPath>> {
         let mut repos = Vec::new();
+        let user_dir = self.repos_base_path.join(username);
 
-        let entries = std::fs::read_dir(self.repos_base_path.join(username))?;
+        let entries = std::fs::read_dir(&user_dir)?;
 
-        info!(
-            entries=?entries,
-            "Entries found"
-        );
+        info!(user_dir=?user_dir, "Listing repositories");
 
         for entry in entries {
             let entry = entry?;
             let path = entry.path();
 
-            info!(path=?path, "Checking path");
-
             // Check if it's a directory ending with .git
             if path.is_dir() && path.extension().and_then(|s| s.to_str()) == Some("git") {
                 if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
-                    repos.push((name.to_string(), path));
+                    repos.push(self.repo_path(username, name));
                 }
             }
         }
 
-        info!(
-            repos=?repos,
-            "repos found"
-        );
+        info!(count = repos.len(), "Repositories found");
 
         Ok(repos)
     }
@@ -155,17 +225,18 @@ impl RepoManager {
     /// Delete a repository (be careful!)
     #[allow(dead_code)]
     pub async fn delete_repo(&self, username: &str, repo: &str) -> Result<()> {
-        let repo_path = self.repos_base_path.join(username).join(repo).join(".git");
+        let repo_path = self.repo_path(username, repo);
+        let bare_path = repo_path.bare_repo_path();
 
-        if !repo_path.exists() {
+        if !bare_path.exists() {
             return Err(RepoError::InvalidPath(format!(
                 "Repository does not exist: {}",
-                repo_path.display()
+                repo_path
             )));
         }
 
-        info!("Deleting repository at: {}", repo_path.display());
-        std::fs::remove_dir_all(&repo_path)?;
+        info!("Deleting repository at: {}", repo_path);
+        std::fs::remove_dir_all(&bare_path)?;
 
         Ok(())
     }

@@ -10,6 +10,7 @@
 //!
 //! The queue is thread-safe and can be shared across multiple tasks via Arc.
 
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
@@ -99,7 +100,8 @@ pub struct Build {
     pub id: i64,
     pub repo_id: i64,
     pub repo_name: String,
-    pub repo_path: String,
+    #[sqlx(rename = "repo_path")]
+    repo_path_str: String,
     pub commit_hash: String,
     pub branch: String,
     #[sqlx(try_from = "String")]
@@ -111,14 +113,26 @@ pub struct Build {
     pub finished_at: Option<String>,
 }
 
+impl Build {
+    pub fn repo_path(&self) -> PathBuf {
+        PathBuf::from(&self.repo_path_str)
+    }
+}
+
 #[derive(Debug, Clone, FromRow)]
 #[allow(dead_code)]
 pub struct Repo {
     pub id: i64,
     pub name: String,
-    pub path: String,
+    path: String,
     pub description: Option<String>,
     pub created_at: String,
+}
+
+impl Repo {
+    pub fn path(&self) -> PathBuf {
+        PathBuf::from(&self.path)
+    }
 }
 
 // Implement conversion from String for sqlx
@@ -142,7 +156,6 @@ impl BuildQueue {
 
         let pool = SqlitePool::connect_lazy_with(database_config);
 
-        // Create repos table
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS repos (
@@ -157,7 +170,6 @@ impl BuildQueue {
         .execute(&pool)
         .await?;
 
-        // Create builds table
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS builds (
@@ -178,7 +190,6 @@ impl BuildQueue {
         .execute(&pool)
         .await?;
 
-        // Create build_logs table
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS build_logs (
@@ -242,8 +253,9 @@ impl BuildQueue {
         Ok(result.last_insert_rowid())
     }
 
-    pub async fn enqueue(&self, repo_path: &str, commit: &str, branch: &str) -> Result<i64> {
-        let repo_id = self.get_or_create_repo(repo_path).await?;
+    pub async fn enqueue(&self, repo_path: PathBuf, commit: &str, branch: &str) -> Result<i64> {
+        let repo_path_str = repo_path.to_string_lossy().to_string();
+        let repo_id = self.get_or_create_repo(&repo_path_str).await?;
 
         let result = sqlx::query(
             "INSERT INTO builds (repo_id, commit_hash, branch) VALUES (?, ?, ?)"

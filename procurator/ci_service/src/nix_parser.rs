@@ -13,85 +13,83 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
 use std::process::Command;
 use tracing::{error, info};
 
-// ============================================================================
-// Nix Command Output Structures
-// ============================================================================
+use crate::repo_manager::RepoPath;
+
 
 /// Output structure from `nix flake metadata --json`
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NixFlakeMetadataOutput {
-    pub description: Option<String>,
-    pub path: Option<String>,
-    pub url: Option<String>,
-    pub original_url: Option<String>,
-    pub resolved_url: Option<String>,
-    pub last_modified: Option<i64>,
-    pub fingerprint: Option<String>,
-    pub dirty_revision: Option<String>,
-    pub locks: Option<NixFlakeLocks>,
+struct NixFlakeMetadataOutput {
+    description: Option<String>,
+    path: Option<String>,
+    url: Option<String>,
+    original_url: Option<String>,
+    resolved_url: Option<String>,
+    last_modified: Option<i64>,
+    fingerprint: Option<String>,
+    dirty_revision: Option<String>,
+    locks: Option<NixFlakeLocks>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct NixFlakeLocks {
-    pub version: Option<i64>,
-    pub root: Option<String>,
-    pub nodes: Option<HashMap<String, serde_json::Value>>,
+struct NixFlakeLocks {
+    version: Option<i64>,
+    root: Option<String>,
+    nodes: Option<HashMap<String, serde_json::Value>>,
 }
 
 /// Output structure from `nix flake show --json`
 #[derive(Debug, Clone, Deserialize, Default)]
-pub struct NixFlakeShowOutput {
+struct NixFlakeShowOutput {
     #[serde(default)]
-    pub packages: HashMap<String, HashMap<String, NixDerivationInfo>>,
+    packages: HashMap<String, HashMap<String, NixDerivationInfo>>,
     #[serde(default)]
-    pub checks: HashMap<String, HashMap<String, NixDerivationInfo>>,
+    checks: HashMap<String, HashMap<String, NixDerivationInfo>>,
     #[serde(default)]
-    pub apps: HashMap<String, HashMap<String, NixAppInfo>>,
+    apps: HashMap<String, HashMap<String, NixAppInfo>>,
     #[serde(default, rename = "devShells")]
-    pub dev_shells: HashMap<String, HashMap<String, NixDerivationInfo>>,
+    dev_shells: HashMap<String, HashMap<String, NixDerivationInfo>>,
     #[serde(default, rename = "nixosModules")]
-    pub nixos_modules: HashMap<String, NixModuleInfo>,
+    nixos_modules: HashMap<String, NixModuleInfo>,
     #[serde(default, rename = "nixosConfigurations")]
-    pub nixos_configurations: HashMap<String, serde_json::Value>,
+    nixos_configurations: HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
-pub struct NixDerivationInfo {
+struct NixDerivationInfo {
     #[serde(default)]
-    pub name: Option<String>,
+    name: Option<String>,
     #[serde(default)]
-    pub description: Option<String>,
+    description: Option<String>,
     #[serde(default, rename = "type")]
-    pub derivation_type: Option<String>,
+    derivation_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
-pub struct NixAppInfo {
+struct NixAppInfo {
     #[serde(default)]
-    pub description: Option<String>,
+    description: Option<String>,
     #[serde(default, rename = "type")]
-    pub app_type: Option<String>,
+    app_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
-pub struct NixModuleInfo {
+struct NixModuleInfo {
     #[serde(default, rename = "type")]
-    pub module_type: Option<String>,
+    module_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlakeMetadata {
-    pub description: Option<String>,
-    pub packages: Vec<String>,
-    pub checks: Vec<String>,
-    pub apps: Vec<String>,
-    pub dev_shells: Vec<String>,
-    pub nixos_modules: Vec<String>,
+    description: Option<String>,
+    packages: Vec<String>,
+    checks: Vec<String>,
+    apps: Vec<String>,
+    dev_shells: Vec<String>,
+    nixos_modules: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -132,17 +130,16 @@ fn run_nix_command<T: serde::de::DeserializeOwned>(args: &[&str]) -> Result<T> {
     serde_json::from_str(&stdout).map_err(|e| NixParserError::ParseError(e.to_string()))
 }
 
-/// Parse flake metadata from a git repository
-pub async fn get_flake_metadata(repo_path: &str) -> Result<FlakeMetadata> {
-    let path = Path::new(repo_path);
-    let flake_url = format!("git+file://{}", repo_path.display());
+/// Parse flake metadata from a RepoPath
+pub async fn get_flake_metadata(repo_path: &RepoPath) -> Result<FlakeMetadata> {
+    let flake_url = repo_path.to_nix_url();
 
-    info!(repo_path = repo_path, flake_url = %flake_url, "Parsing flake metadata");
+    info!(repo_path = %repo_path, flake_url = %flake_url, "Parsing flake metadata");
 
     // Get flake metadata
     let metadata: NixFlakeMetadataOutput =
         run_nix_command(&["flake", "metadata", "--json", &flake_url]).map_err(|e| {
-            error!(repo_path = repo_path, error = %e, "Failed to get flake metadata");
+            error!(repo_path = %repo_path, error = %e, "Failed to get flake metadata");
             NixParserError::NotAFlake
         })?;
 
@@ -177,16 +174,4 @@ fn flatten_system_outputs<T>(outputs: &HashMap<String, HashMap<String, T>>) -> V
                 .map(move |name| format!("{}.{}", system, name))
         })
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    #[ignore] // Requires actual git repo
-    async fn test_parse_flake() {
-        let metadata = get_flake_metadata("/path/to/test/repo.git").await;
-        assert!(metadata.is_ok());
-    }
 }

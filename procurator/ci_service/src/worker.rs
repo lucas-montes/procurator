@@ -11,14 +11,14 @@
 //! The worker runs in a background task and continuously polls the queue
 //! at configurable intervals, processing builds serially.
 
-use std::str::Chars;
 use std::sync::Arc;
 use tokio::process::Command;
 use tracing::{error, info};
 
+use crate::config::Config;
 use crate::error::WorkerError;
-use crate::git_url;
 use crate::queue::{Build, BuildQueue, BuildStatus};
+use crate::repo_manager::RepoPath;
 
 type Result<T> = std::result::Result<T, WorkerError>;
 
@@ -98,9 +98,23 @@ impl Worker {
             .await
             .map_err(|e| WorkerError::Database(e.to_string()))?;
 
-        // Build git URL using our tested helper function
-        let git_url = git_url::build_nix_git_url(&build.repo_path, &build.commit_hash)
-            .map_err(|e| WorkerError::Git(format!("Invalid git URL: {}", e)))?;
+        // Parse repo path: /base/username/repo.git
+        let config = Config::init();
+        let repo_path_buf = build.repo_path();
+
+        let repo_name = repo_path_buf
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| WorkerError::Git("Invalid repo path format".to_string()))?;
+
+        let username = repo_path_buf
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| WorkerError::Git("Invalid repo path format".to_string()))?;
+
+        let repo_path = RepoPath::new(&config.repos_base_path, username, repo_name);
+        let git_url = repo_path.to_nix_url_with_rev(&build.commit_hash);
 
         info!(
             build_id = build.id,

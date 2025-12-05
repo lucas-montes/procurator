@@ -151,7 +151,7 @@ Probably the infra stuff should be separated from the apps things.
 
 ┌─────────────────────────────────────────────────────────────────┐
 │                         User's Machine                          │
-│  ┌──────────────┐        ┌─────────────────┐                    │V
+│  ┌──────────────┐        ┌─────────────────┐                    │
 │  │ Nix Build    │───────▶│  Cache Client   │                    │
 │  │ (local dev)  │        │  (sync daemon)  │                    │
 │  └──────────────┘        └────────┬────────┘                    │
@@ -162,7 +162,7 @@ Probably the infra stuff should be separated from the apps things.
 │                      Procurator Platform                        │
 │                                                                 │
 │  ┌──────────────────────────────────────────────────────────┐   │
-│  │  1. Git Service (forge)                                  │   │
+│  │  1. Git Service                                          │   │
 │  │     - Git hosting + webhooks                             │   │
 │  │     - Trigger CI on push                                 │   │
 │  └──────────────┬───────────────────────────────────────────┘   │
@@ -171,7 +171,7 @@ Probably the infra stuff should be separated from the apps things.
 │  │  2. CI/CD Service                                        │   │
 │  │     - Parse procurator.* outputs                         │   │
 │  │     - Queue jobs (flake check, build)                    │   │
-│  │     - Deployment decisions                               │   │
+│  │     - Deployment decisions and testing                   │   │
 │  └──────────────┬───────────────────────────────────────────┘   │
 │                 │                                               │
 │  ┌──────────────▼───────────────────────────────────────────┐   │

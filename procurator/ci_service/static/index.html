@@ -668,8 +668,10 @@
             content.innerHTML = '<div class="loading">Loading repository details...</div>';
             modal.classList.add('active');
 
+            // TODO: the username should be dynanmic
             try {
-                const response = await fetch(`/api/repos/${repoName}`);
+                const username = 'lucas';
+                const response = await fetch(`/api/repos/${username}/${repoName}`);
                 const repo = await response.json();
 
                 content.innerHTML = `

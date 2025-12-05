@@ -23,14 +23,13 @@
 mod api;
 mod config;
 mod error;
-mod git_url;
 mod nix_parser;
 mod queue;
 mod repo_manager;
 mod web;
 mod worker;
 
-use axum::{routing::{get, post}, Router};
+use axum::{routing::get, Router};
 use std::sync::Arc;
 use tracing::info;
 
@@ -102,21 +101,10 @@ async fn main() -> Result<()> {
 
     info!(target: "procurator::main", "Build worker spawned");
 
-    // Build API
+    // Build API by merging routes from different modules
     let app = Router::new()
-        // Web UI
-        .route("/", get(web::index))
-        // API - Builds
-        .route("/api/builds", post(api::create_build))
-        .route("/api/builds", get(web::list_builds))
-        .route("/api/builds/{id}", get(web::get_build))
-        .route("/api/builds/{id}/logs", get(web::get_build_logs))
-        // API - Repos
-        .route("/api/repos", get(web::list_repos))
-        .route("/api/repos", post(web::create_repo))
-        .route("/api/repos/{name}", get(web::get_repo))
-        // Real-time events
-        .route("/api/events", get(web::build_events))
+        .merge(web::routes())
+        .nest("/api",api::routes())
         // Health check
         .route("/health", get(|| async { "OK" }))
         .with_state(state);
