@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::{sqlite::SqliteConnectOptions, FromRow, SqlitePool};
 use tracing::info;
 
+use crate::repo_manager::RepoPath;
+
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum QueueError {
@@ -114,8 +116,21 @@ pub struct Build {
 }
 
 impl Build {
-    pub fn repo_path(&self) -> PathBuf {
-        PathBuf::from(&self.repo_path_str)
+    pub fn repo_path(&self, base_path: &str) -> Result<RepoPath> {
+        let repo_path_buf = PathBuf::from(&self.repo_path_str);
+
+        let repo_name = repo_path_buf
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| QueueError::InvalidStatus("Invalid repo path format".to_string()))?;
+
+        let username = repo_path_buf
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| QueueError::InvalidStatus("Invalid repo path format".to_string()))?;
+
+        Ok(RepoPath::new(base_path, username, repo_name))
     }
 }
 

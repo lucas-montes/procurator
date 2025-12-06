@@ -34,4 +34,4 @@ control_plane = { path = "control_plane" }
 
 
 [workspace]
-members = ["cli", "commands", "control_plane", "nixcli", "worker", "ci_service", "cache"]
+members = ["cli", "commands", "control_plane", "worker", "ci_service", "cache"]

@@ -401,7 +401,7 @@ async fn get_repo(
 
     let builds_count = repo_builds.len() as i64;
 
-    let flake_metadata = match crate::nix_parser::get_flake_metadata(repo_path).await {
+    let flake_metadata = match repo_path.try_into() {
         Ok(metadata) => {
             info!("Parsed flake metadata for repo: {}", repo);
             Some(metadata)

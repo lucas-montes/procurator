@@ -16,9 +16,75 @@ use tokio::process::Command;
 use tracing::{error, info};
 
 use crate::config::Config;
-use crate::error::WorkerError;
 use crate::queue::{Build, BuildQueue, BuildStatus};
-use crate::repo_manager::RepoPath;
+
+
+use std::fmt;
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub enum WorkerError {
+    Database(String),
+    Process(String),
+    Nix(String),
+    Git(String),
+    Io(std::io::Error),
+    Queue(String),
+}
+
+impl fmt::Display for WorkerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WorkerError::Database(msg) => write!(f, "Database error: {}", msg),
+            WorkerError::Process(msg) => write!(f, "Process error: {}", msg),
+            WorkerError::Nix(msg) => write!(f, "Nix build error: {}", msg),
+            WorkerError::Git(msg) => write!(f, "Git error: {}", msg),
+            WorkerError::Io(err) => write!(f, "IO error: {}", err),
+            WorkerError::Queue(msg) => write!(f, "Queue error: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for WorkerError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            WorkerError::Io(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for WorkerError {
+    fn from(err: std::io::Error) -> Self {
+        WorkerError::Io(err)
+    }
+}
+
+impl From<Box<dyn std::error::Error + Send + Sync>> for WorkerError {
+    fn from(err: Box<dyn std::error::Error + Send + Sync>) -> Self {
+        WorkerError::Database(err.to_string())
+    }
+}
+
+impl From<crate::nix_parser::checks::ChecksError> for WorkerError {
+    fn from(err: crate::nix_parser::checks::ChecksError) -> Self {
+        match err {
+            crate::nix_parser::checks::ChecksError::IoError(io_err) => WorkerError::Io(io_err),
+            crate::nix_parser::checks::ChecksError::ProcessFailed { exit_code: _, stderr } => {
+                WorkerError::Nix(stderr)
+            }
+            crate::nix_parser::checks::ChecksError::JsonParseError(json_err) => {
+                WorkerError::Process(format!("JSON parse error: {}", json_err))
+            }
+            crate::nix_parser::checks::ChecksError::InvalidFlakePath(path) => {
+                WorkerError::Nix(format!("Invalid flake path: {}", path))
+            }
+            crate::nix_parser::checks::ChecksError::Timeout(duration) => {
+                WorkerError::Process(format!("Process timed out after {:?}", duration))
+            }
+        }
+    }
+}
 
 type Result<T> = std::result::Result<T, WorkerError>;
 
@@ -100,20 +166,8 @@ impl Worker {
 
         // Parse repo path: /base/username/repo.git
         let config = Config::init();
-        let repo_path_buf = build.repo_path();
+        let repo_path = build.repo_path(&config.repos_base_path).map_err(|e| WorkerError::Queue(e.to_string()))?;
 
-        let repo_name = repo_path_buf
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .ok_or_else(|| WorkerError::Git("Invalid repo path format".to_string()))?;
-
-        let username = repo_path_buf
-            .parent()
-            .and_then(|p| p.file_name())
-            .and_then(|s| s.to_str())
-            .ok_or_else(|| WorkerError::Git("Invalid repo path format".to_string()))?;
-
-        let repo_path = RepoPath::new(&config.repos_base_path, username, repo_name);
         let git_url = repo_path.to_nix_url_with_rev(&build.commit_hash);
 
         info!(
@@ -129,67 +183,45 @@ impl Worker {
             .await
             .map_err(|e| WorkerError::Database(e.to_string()))?;
 
-        let output = Command::new("nix")
-            .arg("flake")
-            .arg("check")
-            .arg(&git_url)
-            .arg("--print-build-logs")
-            .output()
-            .await?;
 
-        // Capture both stdout and stderr
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        // map run_checks_with_logs(&git_url).await
 
-        info!(
-            build_id = build.id,
-            stdout_bytes = stdout.len(),
-            stderr_bytes = stderr.len(),
-            "Build command completed"
-        );
+        // let (summary, log_entries) = run_checks_with_logs(&git_url).await?;
 
-        let full_logs = format!("{}{}{}", command_log, stdout, stderr);
+        // // Store the full logs
+        // self.queue
+        //     .set_logs(build.id, &full_logs)
+        //     .await
+        //     .map_err(|e| WorkerError::Database(e.to_string()))?;
 
-        info!(
-            build_id = build.id,
-            total_log_bytes = full_logs.len(),
-            "Storing build logs"
-        );
+        // // Update build status based on success
+        // if summary.success {
+        //     info!(
+        //         build_id = build.id,
+        //         repo = build.repo_name,
+        //         branch = build.branch,
+        //         "Build succeeded"
+        //     );
+        //     self.queue
+        //         .update_status(build.id, BuildStatus::Success)
+        //         .await
+        //         .map_err(|e| WorkerError::Database(e.to_string()))?;
+        // } else {
+        //     error!(
+        //         build_id = build.id,
+        //         repo = build.repo_name,
+        //         branch = build.branch,
+        //         errors = ?summary.errors,
+        //         "Build failed"
+        //     );
 
-        // Store the full logs
-        self.queue
-            .set_logs(build.id, &full_logs)
-            .await
-            .map_err(|e| WorkerError::Database(e.to_string()))?;
+        //     self.queue
+        //         .update_status(build.id, BuildStatus::Failed)
+        //         .await
+        //         .map_err(|e| WorkerError::Database(e.to_string()))?;
 
-        if output.status.success() {
-            info!(
-                build_id = build.id,
-                repo = build.repo_name,
-                branch = build.branch,
-                "Build succeeded"
-            );
-            self.queue
-                .update_status(build.id, BuildStatus::Success)
-                .await
-                .map_err(|e| WorkerError::Database(e.to_string()))?;
-        } else {
-            error!(
-                build_id = build.id,
-                repo = build.repo_name,
-                branch = build.branch,
-                exit_code = ?output.status.code(),
-                stderr_preview = stderr.chars().take(500).collect::<String>().as_str(),
-                "Build failed"
-            );
-
-            self.queue
-                .update_status(build.id, BuildStatus::Failed)
-                .await
-                .map_err(|e| WorkerError::Database(e.to_string()))?;
-
-            return Err(WorkerError::Nix(stderr.to_string()));
-        }
+        //     return Err(WorkerError::Nix(format!("Build failed with {} errors", summary.errors.len())));
+        // }
 
         Ok(())
     }

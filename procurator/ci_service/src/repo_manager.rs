@@ -3,7 +3,6 @@
 //! Manages the lifecycle of Git bare repositories.
 //! Provides operations for:
 //! - Creating new bare repositories
-//! - Installing post-receive hooks (embedded at compile time)
 //! - Repository validation and error handling
 //!
 //! The post-receive hook is embedded in the binary and automatically installed
@@ -12,9 +11,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::info;
-
-// Embed the post-receive hook script at compile time
-const POST_RECEIVE_HOOK: &str = include_str!("../post-receive");
 
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -117,7 +113,6 @@ impl std::fmt::Display for RepoPath {
     }
 }
 
-
 #[derive(Clone)]
 pub struct RepoManager {
     repos_base_path: PathBuf,
@@ -147,14 +142,9 @@ impl RepoManager {
 
         info!(repo_path=%repo_path, "Creating bare repository at");
 
-        // Run git init --bare
         let output = Command::new("git")
-            .args([
-                "init",
-                "--bare",
-                "--shared=group",
-                bare_path.to_str().unwrap(),
-            ])
+            .args(["init", "--bare", "--shared=group"])
+            .arg(&bare_path)
             .output()?;
 
         if !output.status.success() {
@@ -165,35 +155,7 @@ impl RepoManager {
             )));
         }
 
-        // Install post-receive hook
-        self.install_post_receive_hook(&bare_path)?;
-
         Ok(repo_path)
-    }
-
-    /// Install post-receive hook from embedded script
-    fn install_post_receive_hook(&self, repo_path: &Path) -> Result<()> {
-        let post_receive = repo_path.join("hooks").join("post-receive");
-
-        info!(
-            post_receive=?post_receive,
-            "Installing post-receive hook"
-        );
-
-        // Write the embedded script to the hooks directory
-        std::fs::write(&post_receive, POST_RECEIVE_HOOK)?;
-
-        // Make it executable on Unix
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&post_receive)?.permissions();
-            perms.set_mode(0o755); // rwxr-xr-x
-            std::fs::set_permissions(&post_receive, perms)?;
-        }
-
-        info!("Post-receive hook installed");
-        Ok(())
     }
 
     /// List all repositories for a user

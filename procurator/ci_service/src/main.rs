@@ -22,7 +22,6 @@
 
 mod api;
 mod config;
-mod error;
 mod nix_parser;
 mod queue;
 mod repo_manager;
