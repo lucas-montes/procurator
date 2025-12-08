@@ -1,0 +1,89 @@
+{% extends "../base.html" %}
+
+{% block title %}{{ repo_name }} - Builds - Procurator CI{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="/">Home</a>
+    <span class="separator">/</span>
+    <a href="/{{ username }}">{{ username }}</a>
+    <span class="separator">/</span>
+    <span>{{ repo_name }}</span>
+</div>
+
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+    <h1>{{ username }}/{{ repo_name }}</h1>
+    <div class="code-block" style="padding: 8px 12px; font-size: 0.8rem;">
+        {{ git_url }}
+    </div>
+</div>
+
+<div class="tabs">
+    <a href="/{{ username }}/{{ repo_name }}" class="tab {% if active_tab == "builds" %}active{% endif %}">
+        🔨 Builds
+    </a>
+    <a href="/{{ username }}/{{ repo_name }}/files" class="tab {% if active_tab == "files" %}active{% endif %}">
+        📁 Files
+    </a>
+    <a href="/{{ username }}/{{ repo_name }}/flake" class="tab {% if active_tab == "flake" %}active{% endif %}">
+        ❄️ Flake
+    </a>
+</div>
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+    <h2>Build History</h2>
+    <span style="color: var(--text-secondary);">{{ builds.len() }} builds</span>
+</div>
+
+<div class="card">
+    <ul class="list">
+        {% for build in builds %}
+        <li class="list-item" style="flex-direction: column; align-items: flex-start;">
+            <div style="display: flex; justify-content: space-between; width: 100%; align-items: center;">
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <a href="/{{ username }}/{{ repo_name }}/builds/{{ build.id }}">
+                        <strong>#{{ build.id }}</strong>
+                    </a>
+                    <code style="color: var(--text-secondary); font-size: 0.8rem;">{{ build.commit_short }}</code>
+                    <span style="color: var(--text-secondary);">{{ build.branch }}</span>
+                </div>
+                {% if build.status.as_str() == "success" %}
+                <span class="badge badge-success">{{ build.status }}</span>
+                {% else if build.status.as_str() == "failed" %}
+                <span class="badge badge-error">{{ build.status }}</span>
+                {% else if build.status.as_str() == "running" %}
+                <span class="badge badge-warning">{{ build.status }}</span>
+                {% else %}
+                <span class="badge badge-info">{{ build.status }}</span>
+                {% endif %}
+            </div>
+            <div class="meta-info" style="margin-top: 8px;">
+                <span class="meta-item">📅 {{ build.created_at }}</span>
+                {% if let Some(duration) = build.duration_seconds %}
+                <span class="meta-item">⏱️ {{ duration }}s</span>
+                {% endif %}
+                {% if build.retry_count > 0 %}
+                <span class="meta-item">🔄 Retry {{ build.retry_count }}/{{ build.max_retries }}</span>
+                {% endif %}
+            </div>
+        </li>
+        {% endfor %}
+        {% if builds.is_empty() %}
+        <li class="empty-state">
+            <h3>No builds yet</h3>
+            <p>Push to this repository to trigger a build</p>
+        </li>
+        {% endif %}
+    </ul>
+</div>
+
+<div class="card" style="margin-top: 24px;">
+    <h3 class="card-title" style="margin-bottom: 16px;">Setup Instructions</h3>
+    <h4 style="font-size: 0.875rem; margin-bottom: 8px;">New Repository</h4>
+    <div class="code-block" style="margin-bottom: 16px;">{% for instruction in setup_instructions.new_repo %}
+{{ instruction }}{% endfor %}</div>
+
+    <h4 style="font-size: 0.875rem; margin-bottom: 8px;">Existing Repository</h4>
+    <div class="code-block">{% for instruction in setup_instructions.existing_repo %}
+{{ instruction }}{% endfor %}</div>
+</div>
+{% endblock %}

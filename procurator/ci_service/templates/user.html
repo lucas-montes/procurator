@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block title %}{{ username }} - Procurator CI{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="/">Home</a>
+    <span class="separator">/</span>
+    <span>{{ username }}</span>
+</div>
+
+<h1>{{ username }}'s Repositories</h1>
+<p style="color: var(--text-secondary); margin-bottom: 24px;">
+    {{ repos.len() }} repositories
+</p>
+
+<div class="card">
+    <ul class="list">
+        {% for repo in repos %}
+        <li class="list-item" style="flex-direction: column; align-items: flex-start;">
+            <div style="display: flex; justify-content: space-between; width: 100%; align-items: center;">
+                <a href="/{{ username }}/{{ repo.name }}" style="font-size: 1.1rem;">{{ repo.name }}</a>
+                {% if let Some(build) = repo.last_build %}
+                    {% if build.status.as_str() == "success" %}
+                    <span class="badge badge-success">{{ build.status }}</span>
+                    {% else if build.status.as_str() == "failed" %}
+                    <span class="badge badge-error">{{ build.status }}</span>
+                    {% else if build.status.as_str() == "running" %}
+                    <span class="badge badge-warning">{{ build.status }}</span>
+                    {% else %}
+                    <span class="badge badge-info">{{ build.status }}</span>
+                    {% endif %}
+                {% endif %}
+            </div>
+            <div style="color: var(--text-secondary); font-size: 0.875rem; margin-top: 8px;">
+                <span>{{ repo.builds_count }} builds</span>
+                {% if let Some(build) = repo.last_build %}
+                <span style="margin-left: 16px;">Last build: #{{ build.id }}</span>
+                {% endif %}
+            </div>
+        </li>
+        {% endfor %}
+        {% if repos.is_empty() %}
+        <li class="empty-state">
+            <h3>No repositories yet</h3>
+            <p>Create your first repository</p>
+        </li>
+        {% endif %}
+    </ul>
+</div>
+
+<div class="card" style="margin-top: 24px;">
+    <h3 class="card-title" style="margin-bottom: 16px;">Create Repository</h3>
+    <div class="code-block">curl -X POST http://localhost:3000/api/repos \
+  -H "Content-Type: application/json" \
+  -d '{"name": "new-repo"}'</div>
+</div>
+{% endblock %}

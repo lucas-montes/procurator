@@ -1,0 +1,60 @@
+{% extends "../base.html" %}
+
+{% block title %}{{ repo_name }} - Files - Procurator CI{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="/">Home</a>
+    <span class="separator">/</span>
+    <a href="/{{ username }}">{{ username }}</a>
+    <span class="separator">/</span>
+    <span>{{ repo_name }}</span>
+</div>
+
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+    <h1>{{ username }}/{{ repo_name }}</h1>
+    <div class="code-block" style="padding: 8px 12px; font-size: 0.8rem;">
+        {{ git_url }}
+    </div>
+</div>
+
+<div class="tabs">
+    <a href="/{{ username }}/{{ repo_name }}" class="tab {% if active_tab == "builds" %}active{% endif %}">
+        🔨 Builds
+    </a>
+    <a href="/{{ username }}/{{ repo_name }}/files" class="tab {% if active_tab == "files" %}active{% endif %}">
+        📁 Files
+    </a>
+    <a href="/{{ username }}/{{ repo_name }}/flake" class="tab {% if active_tab == "flake" %}active{% endif %}">
+        ❄️ Flake
+    </a>
+</div>
+
+<h2 style="margin-bottom: 16px;">Repository Files</h2>
+
+<div class="card">
+    {% if files.is_empty() %}
+    <div class="empty-state">
+        <h3>No files available</h3>
+        <p>Could not retrieve file listing from this repository</p>
+    </div>
+    {% else %}
+    <ul class="list">
+        {% for file in files %}
+        <li class="list-item">
+            {% if file.is_dir %}
+            📁 <span style="margin-left: 8px;">{{ file.name }}/</span>
+            {% else %}
+            📄 <span style="margin-left: 8px;">{{ file.name }}</span>
+            {% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+</div>
+
+<div class="card" style="margin-top: 24px;">
+    <h3 class="card-title" style="margin-bottom: 12px;">Clone this repository</h3>
+    <div class="code-block">git clone {{ git_url }}</div>
+</div>
+{% endblock content %}

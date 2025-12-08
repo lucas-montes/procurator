@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block title %}Procurator CI - Home{% endblock %}
+
+{% block content %}
+<h1>Users</h1>
+<p style="color: var(--text-secondary); margin-bottom: 24px;">
+    Browse repositories by user
+</p>
+
+<div class="card">
+    <ul class="list">
+        {% for user in users %}
+        <li class="list-item">
+            <div style="flex: 1;">
+                <a href="/{{ user.username }}">{{ user.username }}</a>
+                <div style="color: var(--text-secondary); font-size: 0.875rem; margin-top: 4px;">
+                    {{ user.repos_count }} repositories
+                </div>
+            </div>
+        </li>
+        {% endfor %}
+        {% if users.is_empty() %}
+        <li class="empty-state">
+            <h3>No users yet</h3>
+            <p>Create a repository to get started</p>
+        </li>
+        {% endif %}
+    </ul>
+</div>
+
+<div class="card" style="margin-top: 32px;">
+    <h3 class="card-title" style="margin-bottom: 16px;">Quick Start</h3>
+    <p style="color: var(--text-secondary); margin-bottom: 16px;">
+        Create a new repository using the API:
+    </p>
+    <div class="code-block">curl -X POST http://localhost:3000/api/repos \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-project"}'</div>
+</div>
+{% endblock %}

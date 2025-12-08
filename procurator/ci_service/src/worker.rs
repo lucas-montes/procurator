@@ -11,6 +11,11 @@
 //! The worker runs in a background task and continuously polls the queue
 //! at configurable intervals, processing builds serially.
 
+
+trait SomeTrait {
+    const
+}
+
 use std::sync::Arc;
 use tracing::{error, info};
 

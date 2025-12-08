@@ -83,12 +83,12 @@ struct NixModuleInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlakeMetadata {
-    description: Option<String>,
-    packages: Vec<String>,
-    checks: Vec<String>,
-    apps: Vec<String>,
-    dev_shells: Vec<String>,
-    nixos_modules: Vec<String>,
+    pub description: Option<String>,
+    pub packages: Vec<String>,
+    pub checks: Vec<String>,
+    pub apps: Vec<String>,
+    pub dev_shells: Vec<String>,
+    pub nixos_modules: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -128,11 +128,31 @@ fn run_nix_command<T: serde::de::DeserializeOwned>(args: &[&str]) -> Result<T> {
     serde_json::from_str(&stdout).map_err(|e| NixParserError::ParseError(e.to_string()))
 }
 
+/// Get the HEAD commit hash from a bare git repository
+fn get_head_rev(bare_repo_path: &std::path::Path) -> Result<String> {
+    let output = Command::new("git")
+        .args(["--git-dir", &bare_repo_path.to_string_lossy()])
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .map_err(|e| NixParserError::CommandFailed(e.to_string()))?;
+
+    if !output.status.success() {
+        return Err(NixParserError::CommandFailed(
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 impl TryFrom<&RepoPath> for FlakeMetadata {
     type Error = NixParserError;
 
     fn try_from(repo_path: &RepoPath) -> Result<Self> {
-        let flake_url = repo_path.to_nix_url();
+        // For bare repos, we need to specify a revision
+        let bare_path = repo_path.bare_repo_path();
+        let head_rev = get_head_rev(&bare_path)?;
+        let flake_url = repo_path.to_nix_url_with_rev(&head_rev);
 
         info!(repo_path = %repo_path, flake_url = %flake_url, "Parsing flake metadata");
 
