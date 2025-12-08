@@ -15,8 +15,7 @@ use axum::{
     http::StatusCode,
     response::Sse,
     routing::{get, post},
-    Json,
-    Router,
+    Json, Router,
 };
 use futures::stream::{self, Stream};
 use serde::{Deserialize, Serialize};
@@ -29,7 +28,6 @@ use crate::config::Config;
 use crate::nix_parser::FlakeMetadata;
 use crate::queue::{Build, BuildStatus};
 use crate::AppState;
-
 
 #[derive(Debug, Serialize)]
 pub struct BuildInfo {
@@ -55,19 +53,18 @@ impl From<Build> for BuildInfo {
             build.commit_hash.clone()
         };
 
-        let duration_seconds = if let (Some(started), Some(finished)) =
-            (&build.started_at, &build.finished_at)
-        {
-            chrono::NaiveDateTime::parse_from_str(finished, "%Y-%m-%d %H:%M:%S")
-                .ok()
-                .and_then(|f| {
-                    chrono::NaiveDateTime::parse_from_str(started, "%Y-%m-%d %H:%M:%S")
-                        .ok()
-                        .map(|s| (f - s).num_seconds())
-                })
-        } else {
-            None
-        };
+        let duration_seconds =
+            if let (Some(started), Some(finished)) = (&build.started_at, &build.finished_at) {
+                chrono::NaiveDateTime::parse_from_str(finished, "%Y-%m-%d %H:%M:%S")
+                    .ok()
+                    .and_then(|f| {
+                        chrono::NaiveDateTime::parse_from_str(started, "%Y-%m-%d %H:%M:%S")
+                            .ok()
+                            .map(|s| (f - s).num_seconds())
+                    })
+            } else {
+                None
+            };
 
         BuildInfo {
             id: build.id,
@@ -95,7 +92,7 @@ struct BuildsListResponse {
 #[derive(Debug, Serialize)]
 struct RepoInfo {
     name: String,
-    path: String,
+    path: PathBuf,
     builds_count: i64,
     last_build: Option<BuildInfo>,
 }
@@ -123,7 +120,6 @@ enum BuildEvent {
     Updated { build: BuildInfo },
     Completed { build: BuildInfo },
 }
-
 
 #[derive(Debug, Deserialize)]
 pub struct CreateRepoRequest {
@@ -153,6 +149,7 @@ pub struct BuildRequest {
     gpg_key: Option<String>,
     gpg_signer: Option<String>,
     pusher: Option<String>,
+    ssh_client_ip: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -165,20 +162,7 @@ async fn create_build(
     State(state): State<AppState>,
     Json(req): Json<BuildRequest>,
 ) -> impl axum::response::IntoResponse {
-    let commit_short = if req.new_rev.len() >= 8 {
-        &req.new_rev[..8]
-    } else {
-        &req.new_rev
-    };
-
-    info!(
-        repo = req.repo.as_str(),
-        ref_name = req.ref_name.as_str(),
-        commit = commit_short,
-        author = req.commit_author.as_deref().unwrap_or("unknown"),
-        gpg_status = req.gpg_status.as_deref().unwrap_or("N"),
-        "Build request received"
-    );
+    info!(?req, "Build request received");
 
     // Extract branch name
     let branch = req
@@ -189,12 +173,10 @@ async fn create_build(
     // Convert bare_repo_path to PathBuf
     let repo_path = PathBuf::from(&req.bare_repo_path);
 
+    //TODO: check if this works as expected
+
     // Enqueue build with bare repo path
-    match state
-        .queue
-        .enqueue(repo_path, &req.new_rev, branch)
-        .await
-    {
+    match state.queue.enqueue(repo_path, &req.new_rev, branch).await {
         Ok(id) => {
             info!(
                 build_id = id,
@@ -224,7 +206,6 @@ async fn create_build(
         }
     }
 }
-
 
 /// List all builds
 async fn list_builds(
@@ -289,7 +270,6 @@ async fn get_build_logs(
     }
 }
 
-
 /// List all repositories
 async fn list_repos(
     State(state): State<AppState>,
@@ -318,7 +298,7 @@ async fn list_repos(
 
                 repo_infos.push(RepoInfo {
                     name,
-                    path: repo_path.to_path_string(),
+                    path: repo_path.bare_repo_path(),
                     builds_count,
                     last_build,
                 });
@@ -343,7 +323,11 @@ async fn create_repo(
 ) -> Result<(StatusCode, Json<CreateRepoResponse>), (StatusCode, String)> {
     info!("Creating repo: {}", req.name);
 
-    if !req.name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+    if !req
+        .name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
         return Err((
             StatusCode::BAD_REQUEST,
             "Invalid repo name. Use only alphanumeric, dash, and underscore".to_string(),
@@ -353,18 +337,20 @@ async fn create_repo(
     let username = "lucas";
     let config = Config::init();
 
-    match state.repo_manager.create_bare_repo(username, &req.name).await {
+    match state
+        .repo_manager
+        .create_bare_repo(username, &req.name)
+        .await
+    {
         Ok(repo_path) => {
             info!("Repository created at: {}", repo_path);
-
-            let path_str = repo_path.to_path_string();
 
             Ok((
                 StatusCode::CREATED,
                 Json(CreateRepoResponse {
                     name: req.name.clone(),
-                    path: path_str.clone(),
-                    git_url: format!("git@{}:{}", config.domain, path_str),
+                    path: repo_path.to_string(),
+                    git_url: repo_path.to_ssh_url(&config.domain),
                 }),
             ))
         }
@@ -383,17 +369,25 @@ async fn get_repo(
     State(state): State<AppState>,
     Path((username, repo)): Path<(String, String)>,
 ) -> Result<Json<RepoDetails>, (StatusCode, String)> {
-    let repos = state.repo_manager.list_repos(&username).await
+    let repos = state
+        .repo_manager
+        .list_repos(&username)
+        .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let repo_path = repos.iter()
-        .find(|r| r.repo_name() == repo)
-        .ok_or((StatusCode::NOT_FOUND, format!("Repository '{}' not found", repo)))?;
+    let repo_path = repos.iter().find(|r| r.repo_name() == repo).ok_or((
+        StatusCode::NOT_FOUND,
+        format!("Repository '{}' not found", repo),
+    ))?;
 
-    let all_builds = state.queue.list_all_builds().await
+    let all_builds = state
+        .queue
+        .list_all_builds()
+        .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let repo_builds: Vec<BuildInfo> = all_builds.into_iter()
+    let repo_builds: Vec<BuildInfo> = all_builds
+        .into_iter()
         .filter(|b| b.repo_name == repo)
         .take(10)
         .map(BuildInfo::from)
@@ -439,7 +433,6 @@ async fn get_repo(
     Ok(Json(details))
 }
 
-
 /// Stream build events in real-time
 async fn build_events(
     State(state): State<AppState>,
@@ -471,7 +464,6 @@ async fn build_events(
     )
 }
 
-
 /// Build the API routes
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -483,4 +475,28 @@ pub fn routes() -> Router<AppState> {
         .route("/repos", post(create_repo))
         .route("/repos/{username}/{repo}", get(get_repo))
         .route("/events", get(build_events))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_info_from_build() {
+        BuildRequest {
+            repo: "dummy".into(),
+            bare_repo_path: "/var/lib/git-server/lucas/dummy.git".into(),
+            old_rev: Some("0000000000000000000000000000000000000000".into()),
+            new_rev: "1e43a4529500115f72383235e7112e4e3ba91005".into(),
+            ref_name: "refs/heads/master".into(),
+            commit_author: Some("Lucas".into()),
+            commit_email: Some("lluc23@hotmail.com".into()),
+            commit_message: Some("4".into()),
+            gpg_status: None,
+            gpg_key: None,
+            gpg_signer: None,
+            pusher: Some("git".into()),
+            ssh_client_ip: Some("192.168.1.15".into()),
+        };
+    }
 }

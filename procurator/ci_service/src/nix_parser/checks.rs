@@ -1,12 +1,11 @@
-use core::time;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use std::ops::Not;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 #[derive(Debug)]
 pub enum ChecksError {
@@ -102,7 +101,6 @@ pub enum NixLogEntry {
 pub struct StepTiming {
     id: u64,
     name: String,
-    duration: Duration,
     started_at: SystemTime,
     completed_at: SystemTime,
     level: u8,
@@ -123,6 +121,30 @@ impl BuildSummary {
         self.completed_at
             .duration_since(self.started_at)
             .expect("we should be able to get the time")
+    }
+
+    pub fn steps(&self) -> &Vec<StepTiming> {
+        &self.steps
+    }
+
+    pub fn important_messages(&self) -> &Vec<String> {
+        &self.important_messages
+    }
+
+    pub fn packages_checked(&self) -> &Vec<String> {
+        &self.packages_checked
+    }
+
+    pub fn checks_run(&self) -> &Vec<String> {
+        &self.checks_run
+    }
+
+    pub fn started_at(&self) -> SystemTime {
+        self.started_at
+    }
+
+    pub fn completed_at(&self) -> SystemTime {
+        self.completed_at
     }
 }
 
@@ -168,14 +190,11 @@ fn handle_start_entry(state: &mut LogParsingState, start: StartEntry, timestamp:
 
 fn handle_stop_entry(state: &mut LogParsingState, stop: StopEntry, timestamp: SystemTime) {
     if let Some((start_entry, start_time)) = state.active_operations.remove(&stop.id) {
-        let duration = timestamp.duration_since(start_time).unwrap_or_default();
-
-        info!(step=&start_entry.text, ?duration, "Completed");
+        info!(step = &start_entry.text, "Completed");
 
         state.completed_steps.push(StepTiming {
             id: stop.id,
             name: start_entry.text,
-            duration,
             started_at: start_time,
             completed_at: timestamp,
             level: start_entry.level,
@@ -558,7 +577,6 @@ mod tests {
         assert_eq!(state.completed_steps.len(), 1);
         assert_eq!(state.completed_steps[0].name, "evaluating flake");
         assert_eq!(state.completed_steps[0].level, 3);
-        assert!(state.completed_steps[0].duration.as_nanos() > 0);
     }
 
     #[test]
@@ -576,7 +594,6 @@ mod tests {
         state.completed_steps.push(StepTiming {
             id: 1,
             name: "test step".to_string(),
-            duration: Duration::from_millis(50),
             started_at: start_time,
             completed_at: end_time,
             level: 3,
@@ -657,7 +674,6 @@ not a nix line"#;
         assert_eq!(step.name, "test operation");
         assert_eq!(step.started_at, start_time);
         assert_eq!(step.completed_at, end_time);
-        assert!(step.duration.as_millis() >= 50);
     }
 
     #[test]
@@ -711,7 +727,6 @@ not a nix line"#;
         state.completed_steps.push(StepTiming {
             id: 2,
             name: "second".to_string(),
-            duration: Duration::from_millis(10),
             started_at: base_time + Duration::from_millis(100),
             completed_at: base_time + Duration::from_millis(110),
             level: 3,
@@ -720,7 +735,6 @@ not a nix line"#;
         state.completed_steps.push(StepTiming {
             id: 1,
             name: "first".to_string(),
-            duration: Duration::from_millis(10),
             started_at: base_time,
             completed_at: base_time + Duration::from_millis(10),
             level: 3,

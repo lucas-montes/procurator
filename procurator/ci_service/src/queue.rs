@@ -18,6 +18,7 @@ use sqlx::{sqlite::SqliteConnectOptions, FromRow, SqlitePool};
 use tracing::info;
 
 use crate::repo_manager::RepoPath;
+use crate::nix_parser::checks::BuildSummary;
 
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -219,6 +220,21 @@ impl BuildQueue {
         .execute(&pool)
         .await?;
 
+        // Table for structured build summaries
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS build_summaries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                build_id INTEGER NOT NULL UNIQUE,
+                summary_json TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (build_id) REFERENCES builds(id) ON DELETE CASCADE
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await?;
+
         // Create indexes for performance
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_builds_repo_id ON builds(repo_id)")
             .execute(&pool)
@@ -229,6 +245,10 @@ impl BuildQueue {
             .await?;
 
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_build_logs_build_id ON build_logs(build_id)")
+            .execute(&pool)
+            .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_build_summaries_build_id ON build_summaries(build_id)")
             .execute(&pool)
             .await?;
 
@@ -478,5 +498,322 @@ impl BuildQueue {
         }
 
         Ok(())
+    }
+
+    /// Store structured build summary
+    pub async fn set_build_summary(&self, id: i64, summary: &BuildSummary) -> Result<()> {
+        let summary_json = serde_json::to_string(summary)
+            .map_err(|e| QueueError::InvalidStatus(format!("Failed to serialize build summary: {}", e)))?;
+
+        sqlx::query(
+            "INSERT OR REPLACE INTO build_summaries (build_id, summary_json) VALUES (?, ?)"
+        )
+        .bind(id)
+        .bind(&summary_json)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Get structured build summary
+    pub async fn get_build_summary(&self, id: i64) -> Result<Option<BuildSummary>> {
+        let summary_json = sqlx::query_scalar::<_, String>(
+            "SELECT summary_json FROM build_summaries WHERE build_id = ?"
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(json) = summary_json {
+            let summary: BuildSummary = serde_json::from_str(&json)
+                .map_err(|e| QueueError::InvalidStatus(format!("Failed to deserialize build summary: {}", e)))?;
+            Ok(Some(summary))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Check if build has structured summary
+    pub async fn has_build_summary(&self, id: i64) -> Result<bool> {
+        let count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM build_summaries WHERE build_id = ?"
+        )
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(count > 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_repo_path_components() {
+        let path = RepoPath::new("/base/path", "testuser", "myrepo");
+        assert_eq!(path.repo_name(), "myrepo");
+    }
+
+    #[test]
+    fn test_repo_path_bare_repo_path() {
+        let path = RepoPath::new("/base/path", "testuser", "myrepo");
+        let bare_path = path.bare_repo_path();
+        assert_eq!(bare_path, PathBuf::from("/base/path/testuser/myrepo.git"));
+    }
+
+    #[test]
+    fn test_repo_path_to_ssh_url() {
+        let path = RepoPath::new("/base/path", "testuser", "myrepo");
+        let ssh_url = path.to_ssh_url("example.com");
+        assert_eq!(ssh_url, "git@example.com:testuser/myrepo.git");
+    }
+
+    #[test]
+    fn test_repo_path_to_nix_url() {
+        let path = RepoPath::new("/base/path", "testuser", "myrepo");
+        let nix_url = path.to_nix_url();
+        assert_eq!(nix_url, "git+file:///base/path/testuser/myrepo.git");
+    }
+
+    #[test]
+    fn test_repo_path_to_nix_url_with_rev() {
+        let path = RepoPath::new("/base/path", "testuser", "myrepo");
+        let nix_url = path.to_nix_url_with_rev("abc123");
+        assert_eq!(nix_url, "git+file:///base/path/testuser/myrepo.git?rev=abc123");
+    }
+
+    #[test]
+    fn test_build_repo_path_parsing() {
+        let build = Build {
+            id: 1,
+            repo_id: 1,
+            repo_name: "test-repo".to_string(),
+            repo_path_str: "/base/testuser/test-repo.git".to_string(),
+            commit_hash: "abc123".to_string(),
+            branch: "main".to_string(),
+            status: BuildStatus::Queued,
+            retry_count: 0,
+            max_retries: 3,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            started_at: None,
+            finished_at: None,
+        };
+
+        let repo_path = build.repo_path("/base").unwrap();
+        assert_eq!(repo_path.repo_name(), "test-repo");
+    }
+
+    #[test]
+    fn test_build_repo_path_invalid_format() {
+        let build = Build {
+            id: 1,
+            repo_id: 1,
+            repo_name: "test-repo".to_string(),
+            repo_path_str: "/invalid".to_string(), // No parent directory
+            commit_hash: "abc123".to_string(),
+            branch: "main".to_string(),
+            status: BuildStatus::Queued,
+            retry_count: 0,
+            max_retries: 3,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            started_at: None,
+            finished_at: None,
+        };
+
+        let result = build.repo_path("/base");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_repo_path_method() {
+        let repo = Repo {
+            id: 1,
+            name: "test-repo".to_string(),
+            path: "/repos/user/test-repo.git".to_string(),
+            description: Some("Test description".to_string()),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+        };
+
+        assert_eq!(repo.path(), PathBuf::from("/repos/user/test-repo.git"));
+    }
+
+    #[test]
+    fn test_build_status_all_variants() {
+        let variants = vec![
+            BuildStatus::Queued,
+            BuildStatus::Running,
+            BuildStatus::Success,
+            BuildStatus::Failed,
+        ];
+
+        for variant in variants {
+            // Test round-trip through string
+            let as_str = variant.as_str();
+            let parsed: BuildStatus = as_str.parse().unwrap();
+            assert_eq!(variant, parsed);
+        }
+    }
+
+    #[test]
+    fn test_queue_error_source() {
+        use std::error::Error;
+
+        let sqlx_err = sqlx::Error::RowNotFound;
+        let queue_err = QueueError::Database(sqlx_err);
+
+        assert!(queue_err.source().is_some());
+
+        let status_err = QueueError::InvalidStatus("test".to_string());
+        assert!(status_err.source().is_none());
+    }
+
+    #[test]
+    fn test_multiple_repo_paths() {
+        let paths = vec![
+            RepoPath::new("/base", "user1", "repo1"),
+            RepoPath::new("/base", "user2", "repo2"),
+            RepoPath::new("/other", "user3", "repo3"),
+        ];
+
+        assert_eq!(paths[0].repo_name(), "repo1");
+        assert_eq!(paths[1].repo_name(), "repo2");
+        assert_eq!(paths[2].repo_name(), "repo3");
+
+        assert_eq!(paths[0].bare_repo_path(), PathBuf::from("/base/user1/repo1.git"));
+        assert_eq!(paths[1].bare_repo_path(), PathBuf::from("/base/user2/repo2.git"));
+        assert_eq!(paths[2].bare_repo_path(), PathBuf::from("/other/user3/repo3.git"));
+    }
+
+    #[test]
+    fn test_build_struct_fields() {
+        let build = Build {
+            id: 42,
+            repo_id: 10,
+            repo_name: "my-repo".to_string(),
+            repo_path_str: "/repos/user/my-repo.git".to_string(),
+            commit_hash: "abc123def456".to_string(),
+            branch: "feature-branch".to_string(),
+            status: BuildStatus::Running,
+            retry_count: 2,
+            max_retries: 5,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            started_at: Some("2024-01-01T00:01:00Z".to_string()),
+            finished_at: None,
+        };
+
+        assert_eq!(build.id, 42);
+        assert_eq!(build.repo_id, 10);
+        assert_eq!(build.repo_name, "my-repo");
+        assert_eq!(build.commit_hash, "abc123def456");
+        assert_eq!(build.branch, "feature-branch");
+        assert_eq!(build.status, BuildStatus::Running);
+        assert_eq!(build.retry_count, 2);
+        assert_eq!(build.max_retries, 5);
+        assert!(build.started_at.is_some());
+        assert!(build.finished_at.is_none());
+    }
+
+    #[test]
+    fn test_repo_struct_fields() {
+        let repo = Repo {
+            id: 1,
+            name: "my-repo".to_string(),
+            path: "/repos/user/my-repo.git".to_string(),
+            description: Some("A test repository".to_string()),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+        };
+
+        assert_eq!(repo.id, 1);
+        assert_eq!(repo.name, "my-repo");
+        assert_eq!(repo.description.as_deref(), Some("A test repository"));
+        assert_eq!(repo.created_at, "2024-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn test_repo_struct_no_description() {
+        let repo = Repo {
+            id: 1,
+            name: "my-repo".to_string(),
+            path: "/repos/user/my-repo.git".to_string(),
+            description: None,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+        };
+
+        assert!(repo.description.is_none());
+    }
+
+    #[test]
+    fn test_build_status_clone_and_copy() {
+        let status1 = BuildStatus::Queued;
+        let status2 = status1; // Copy
+        let status3 = status1.clone(); // Clone
+
+        assert_eq!(status1, status2);
+        assert_eq!(status1, status3);
+        assert_eq!(status2, status3);
+    }
+
+    #[test]
+    fn test_build_clone() {
+        let build = Build {
+            id: 1,
+            repo_id: 1,
+            repo_name: "test".to_string(),
+            repo_path_str: "/path".to_string(),
+            commit_hash: "abc".to_string(),
+            branch: "main".to_string(),
+            status: BuildStatus::Queued,
+            retry_count: 0,
+            max_retries: 3,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            started_at: None,
+            finished_at: None,
+        };
+
+        let cloned = build.clone();
+        assert_eq!(build.id, cloned.id);
+        assert_eq!(build.commit_hash, cloned.commit_hash);
+        assert_eq!(build.status, cloned.status);
+    }
+
+    #[test]
+    fn test_pathbuf_extraction() {
+        let path_str = "/repos/user/my-repo.git";
+        let path_buf = PathBuf::from(path_str);
+
+        // Test file_stem extraction (removes .git)
+        let stem = path_buf.file_stem().and_then(|s| s.to_str());
+        assert_eq!(stem, Some("my-repo"));
+
+        // Test parent extraction
+        let parent = path_buf.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str());
+        assert_eq!(parent, Some("user"));
+    }
+
+    #[test]
+    fn test_pathbuf_edge_cases() {
+        // Path with multiple dots
+        let path_buf = PathBuf::from("/repos/user/my.repo.test.git");
+        let stem = path_buf.file_stem().and_then(|s| s.to_str());
+        assert_eq!(stem, Some("my.repo.test"));
+
+        // Path without extension
+        let path_buf = PathBuf::from("/repos/user/myrepo");
+        let stem = path_buf.file_stem().and_then(|s| s.to_str());
+        assert_eq!(stem, Some("myrepo"));
+    }
+
+    #[test]
+    fn test_error_variants_debug() {
+        let err1 = QueueError::InvalidStatus("test".to_string());
+        let debug_str = format!("{:?}", err1);
+        assert!(debug_str.contains("InvalidStatus"));
+
+        let err2 = QueueError::NotFound(42);
+        let debug_str = format!("{:?}", err2);
+        assert!(debug_str.contains("NotFound"));
     }
 }
