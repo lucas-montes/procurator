@@ -28,6 +28,9 @@
     <a href="/{{ username }}/{{ repo_name }}/flake" class="tab {% if active_tab == "flake" %}active{% endif %}">
         ❄️ Flake
     </a>
+    <a href="/{{ username }}/{{ repo_name }}/infrastructure" class="tab {% if active_tab == "infrastructure" %}active{% endif %}">
+        🏗️ Infrastructure
+    </a>
 </div>
 
 <h2 style="margin-bottom: 16px;">Flake Information</h2>
@@ -114,6 +117,155 @@
     </div>
     {% endif %}
 </div>
+
+<!-- Infrastructure Section -->
+{% if let Some(infra) = metadata.infrastructure %}
+<h2 style="margin-top: 32px; margin-bottom: 16px;">🏗️ Infrastructure Configuration</h2>
+
+<div class="grid grid-2" style="margin-bottom: 24px;">
+    <!-- Machines -->
+    <div class="card" style="grid-column: span 2;">
+        <h3 class="card-title">Machines</h3>
+        {% if infra.machines.is_empty() %}
+        <p style="color: var(--text-secondary); margin-top: 8px;">No machines defined</p>
+        {% else %}
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; margin-top: 12px;">
+            {% for (name, machine) in infra.machines %}
+            <div style="border: 1px solid var(--border-color); border-radius: 6px; padding: 12px;">
+                <h4 style="font-size: 1rem; margin-bottom: 8px;">{{ name }}</h4>
+                <div class="meta-info" style="flex-direction: column; gap: 6px;">
+                    <div class="meta-item">
+                        <strong>CPU:</strong> {{ machine.cpu }} cores
+                    </div>
+                    <div class="meta-item">
+                        <strong>Memory:</strong> {{ machine.memory.amount }} {{ machine.memory.unit }}
+                    </div>
+                    <div class="meta-item" style="flex-wrap: wrap;">
+                        <strong>Roles:</strong>
+                        <div style="display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px;">
+                            {% for role in machine.roles %}
+                            <span class="badge badge-info">{{ role }}</span>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Continuous Delivery -->
+    <div class="card">
+        <h3 class="card-title">Continuous Delivery</h3>
+        <div class="meta-info" style="flex-direction: column; gap: 8px; margin-top: 12px;">
+            <div class="meta-item">
+                <strong>Tests:</strong>
+                {% if infra.cd.tests %}
+                <span class="badge badge-success">✓ Enabled</span>
+                {% else %}
+                <span class="badge badge-error">✗ Disabled</span>
+                {% endif %}
+            </div>
+            <div class="meta-item">
+                <strong>Build:</strong>
+                {% if infra.cd.build %}
+                <span class="badge badge-success">✓ Enabled</span>
+                {% else %}
+                <span class="badge badge-error">✗ Disabled</span>
+                {% endif %}
+            </div>
+            <div class="meta-item">
+                <strong>DST:</strong>
+                {% if infra.cd.dst %}
+                <span class="badge badge-success">✓ Enabled</span>
+                {% else %}
+                <span class="badge badge-error">✗ Disabled</span>
+                {% endif %}
+            </div>
+            <div class="meta-item">
+                <strong>Staging:</strong>
+                {% if infra.cd.staging %}
+                <span class="badge badge-success">✓ Enabled</span>
+                {% else %}
+                <span class="badge badge-error">✗ Disabled</span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Rollback Configuration -->
+    {% if infra.rollback.enabled %}
+    <div class="card">
+        <h3 class="card-title">Rollback Strategy</h3>
+        <div class="meta-info" style="flex-direction: column; gap: 8px; margin-top: 12px;">
+            <div class="meta-item">
+                <strong>Enabled:</strong>
+                <span class="badge badge-success">✓ Yes</span>
+            </div>
+
+            {% if let Some(threshold) = infra.rollback.threshold %}
+            <div style="margin-top: 8px;">
+                <strong style="display: block; margin-bottom: 4px;">Thresholds:</strong>
+                <div style="margin-left: 16px;">
+                    {% if let Some(cpu) = threshold.cpu %}
+                    <div class="meta-item">CPU: {{ cpu }}</div>
+                    {% endif %}
+                    {% if let Some(memory) = threshold.memory %}
+                    <div class="meta-item">Memory: {{ memory.amount }} {{ memory.unit }}</div>
+                    {% endif %}
+                    {% if let Some(latency) = threshold.latency %}
+                    <div style="margin-top: 4px;">
+                        <div class="meta-item">Latency:</div>
+                        <div style="margin-left: 16px; font-size: 0.875rem;">
+                            {% if let Some(p99) = latency.p99 %}
+                            <div>p99: {{ p99 }}</div>
+                            {% endif %}
+                            {% if let Some(p90) = latency.p90 %}
+                            <div>p90: {{ p90 }}</div>
+                            {% endif %}
+                            {% if let Some(p50) = latency.p50 %}
+                            <div>p50: {{ p50 }}</div>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+
+            {% if let Some(notification) = infra.rollback.notification %}
+            {% if notification.enabled %}
+            <div style="margin-top: 8px;">
+                <strong style="display: block; margin-bottom: 4px;">Notifications:</strong>
+                <div style="margin-left: 16px;">
+                    {% if let Some(email) = notification.email %}
+                    <div class="meta-item">📧 Email: {{ email.recipients.len() }} recipient(s)</div>
+                    {% endif %}
+                    {% if let Some(slack) = notification.slack %}
+                    <div class="meta-item">💬 Slack: {{ slack.channel }}</div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Services (if present) -->
+    {% if !infra.services.is_empty() %}
+    <div class="card" style="grid-column: span 2;">
+        <h3 class="card-title">Services</h3>
+        <div style="margin-top: 12px;">
+            <p style="color: var(--text-secondary); font-size: 0.875rem;">
+                {{ infra.services.len() }} service(s) configured
+            </p>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endif %}
 
 <div class="card">
     <h3 class="card-title" style="margin-bottom: 16px;">Quick Commands</h3>

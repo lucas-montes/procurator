@@ -4,53 +4,48 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
     flake-utils.url = "github:numtide/flake-utils";
-    # Here i can use a relative path, but in prod i could use something better, same for the package in the services, how to handle those files?
-    infrastructure = {
-      url = "./infrastructure.nix";
-      flake = false;
-    };
+    # Example: external service as flake input (pinned via lock file)
+    # auth-service.url = "github:myorg/auth-service";
   };
 
-        #   nixConfig = {
-        #   substituters = ["http://0.0.0.0:8081"];
-        #   post-build-hook = "${./upload-hook.sh}";
-        # };
+  #   nixConfig = {
+  #   substituters = ["http://0.0.0.0:8081"];
+  #   post-build-hook = "${./upload-hook.sh}";
+  # };
 
   outputs = {
     self,
     nixpkgs,
     flake-utils,
-    infrastructure,
     ...
   }:
+    let
+      lib = nixpkgs.lib;
+
+      # Evaluate procurator config for a given system
+      evalProcurator = system: pkgs: lib.evalModules {
+        modules = [
+          ./procurator/module.nix
+          ./procurator/config.nix
+          {
+            _module.args = {
+              inherit pkgs;
+              packages = self.packages.${system};
+              # inputs = { inherit auth-service; };
+            };
+          }
+        ];
+      };
+    in
+    {
+      # Export the module for reuse
+      nixosModules.procurator = import ./procurator/module.nix;
+    }
+    //
     flake-utils.lib.eachDefaultSystem (
       system: let
         pkgs = import nixpkgs {
           inherit system;
-        };
-
-        services = {
-          # Define new services that point to a custom package
-          dummy = {
-            production = {
-              cpu = 1.5;
-              memory = {
-                amount = 1;
-                unit = "GB";
-              };
-              packages = self.packages.${system}.default;
-            };
-            staging = [
-              {
-                cpu = 1.1;
-                memory = {
-                  amount = 1;
-                  unit = "GB";
-                };
-                packages = self.packages.${system}.default;
-              }
-            ];
-          };
         };
 
         buildDummy = pkgs.stdenv.mkDerivation {
@@ -82,20 +77,28 @@
 
         # Import CI-specific configuration
         ciConfig = import ./ci.nix {inherit pkgs;};
+
+        # Evaluate procurator configuration
+        procuratorEval = evalProcurator system pkgs;
       in {
-
-
         packages = {
-          # This package allow us to run build and have the state generated. Probably shouldn't be here?
+          default = buildDummy;
+          dummy = buildDummy;
+
+          # This package allows us to run build and have the state generated
           state = pkgs.writeTextFile {
             name = "state-lock";
             text = builtins.toJSON {
-              inherit infrastructure services;
+              machines = procuratorEval.config.procurator.machines;
+              services = lib.mapAttrs (name: svc: {
+                sourceInfo = svc.sourceInfo;
+                environments = svc.environments;
+              }) procuratorEval.config.procurator.services;
+              cd = procuratorEval.config.procurator.cd;
+              rollback = procuratorEval.config.procurator.rollback;
             };
             destination = "/state.json";
           };
-
-          default = buildDummy;
         };
 
         checks =
@@ -124,6 +127,17 @@
               license = licenses.mit;
             };
           };
+        };
+
+        # Export infrastructure configuration (JSON-serializable)
+        infrastructure = {
+          machines = procuratorEval.config.procurator.machines;
+          services = lib.mapAttrs (name: svc: {
+            sourceInfo = svc.sourceInfo;
+            environments = svc.environments;
+          }) procuratorEval.config.procurator.services;
+          cd = procuratorEval.config.procurator.cd;
+          rollback = procuratorEval.config.procurator.rollback;
         };
       }
     );

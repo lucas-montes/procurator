@@ -55,6 +55,8 @@ struct NixFlakeShowOutput {
     nixos_modules: HashMap<String, NixModuleInfo>,
     #[serde(default, rename = "nixosConfigurations")]
     nixos_configurations: HashMap<String, serde_json::Value>,
+    #[serde(default)]
+    infrastructure: Option<HashMap<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -81,6 +83,130 @@ struct NixModuleInfo {
     module_type: Option<String>,
 }
 
+// ============================================================================
+// Infrastructure Types
+// ============================================================================
+
+/// Infrastructure configuration from the flake
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Infrastructure {
+    #[serde(default)]
+    pub machines: HashMap<String, Machine>,
+    #[serde(default)]
+    pub services: HashMap<String, Service>,
+    #[serde(default)]
+    pub cd: ContinuousDelivery,
+    #[serde(default)]
+    pub rollback: RollbackConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Machine {
+    pub cpu: f64,
+    pub memory: MemorySpec,
+    #[serde(default)]
+    pub roles: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemorySpec {
+    pub amount: f64,
+    #[serde(default = "default_unit")]
+    pub unit: String,
+}
+
+fn default_unit() -> String {
+    "GB".to_string()
+}
+
+/// Service definition - supports multiple source types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Service {
+    #[serde(rename = "sourceInfo")]
+    pub source_info: ServiceSourceInfo,
+    #[serde(default)]
+    pub environments: HashMap<String, Environment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceSourceInfo {
+    #[serde(rename = "type")]
+    pub source_type: String, // "package", "flake", or "url"
+    pub url: Option<String>,
+    pub rev: Option<String>,
+    pub output: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Environment {
+    pub cpu: f64,
+    pub memory: MemorySpec,
+    #[serde(default = "default_replicas")]
+    pub replicas: i32,
+    #[serde(rename = "healthCheck")]
+    pub health_check: Option<String>,
+}
+
+fn default_replicas() -> i32 {
+    1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ContinuousDelivery {
+    #[serde(default)]
+    pub tests: bool,
+    #[serde(default)]
+    pub build: bool,
+    #[serde(default)]
+    pub dst: bool,
+    #[serde(default)]
+    pub staging: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RollbackConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    pub threshold: Option<RollbackThreshold>,
+    pub notification: Option<NotificationConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RollbackThreshold {
+    pub cpu: Option<f64>,
+    pub memory: Option<MemorySpec>,
+    pub latency: Option<LatencyThreshold>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LatencyThreshold {
+    pub p99: Option<String>,
+    pub p90: Option<String>,
+    pub p50: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationConfig {
+    pub enabled: bool,
+    pub email: Option<EmailConfig>,
+    pub slack: Option<SlackConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmailConfig {
+    pub subject: String,
+    pub body: String,
+    pub recipients: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlackConfig {
+    pub channel: String,
+    pub message: String,
+    #[serde(rename = "webhookUrl")]
+    pub webhook_url: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlakeMetadata {
     pub description: Option<String>,
@@ -89,6 +215,7 @@ pub struct FlakeMetadata {
     pub apps: Vec<String>,
     pub dev_shells: Vec<String>,
     pub nixos_modules: Vec<String>,
+    pub infrastructure: Option<Infrastructure>,
 }
 
 #[derive(Debug)]
@@ -123,9 +250,7 @@ fn run_nix_command<T: serde::de::DeserializeOwned>(args: &[&str]) -> Result<T> {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(NixParserError::CommandFailed(stderr.to_string()));
     }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_str(&stdout).map_err(|e| NixParserError::ParseError(e.to_string()))
+    serde_json::from_slice(&output.stdout).map_err(|e| NixParserError::ParseError(e.to_string()))
 }
 
 /// Get the HEAD commit hash from a bare git repository
@@ -143,6 +268,51 @@ fn get_head_rev(bare_repo_path: &std::path::Path) -> Result<String> {
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Parse infrastructure configuration from flake output
+fn parse_infrastructure(flake_url: &str) -> Option<Infrastructure> {
+    let flake_url = format!("{}#infrastructure", flake_url);
+    info!(flake_url = %flake_url, "Parsing infrastructure configuration from flake");
+    let output = match Command::new("nix")
+        .args(["eval", "--json", &flake_url])
+        .output()
+    {
+        Ok(output) => output,
+        Err(e) => {
+            error!(flake_url = %flake_url, error = %e, "Failed to run nix eval for infrastructure");
+            return None;
+        }
+    };
+
+    if !output.status.success() {
+        tracing::debug!("No infrastructure output found in flake");
+        return None;
+    }
+
+    info!(output = ?str::from_utf8(&output.stdout), "Parsing infrastructure configuration from flake");
+
+    match serde_json::from_slice(&output.stdout) {
+        Ok(infra) => {
+            tracing::info!("Successfully parsed infrastructure from flake output");
+            Some(infra)
+        }
+        Err(e) => {
+            tracing::warn!("Failed to deserialize infrastructure: {}", e);
+            None
+        }
+    }
+}
+
+/// Parse infrastructure configuration directly from a repository
+pub fn parse_infrastructure_from_repo(repo_path: &RepoPath) -> Option<Infrastructure> {
+    let bare_path = repo_path.bare_repo_path();
+    let head_rev = get_head_rev(&bare_path).ok()?;
+    let flake_url = repo_path.to_nix_url_with_rev(&head_rev);
+
+    info!(bare_path = %bare_path.display(), repo_path = %repo_path, flake_url = %flake_url, "Parsing infrastructure configuration");
+
+    parse_infrastructure(&flake_url)
 }
 
 impl TryFrom<&RepoPath> for FlakeMetadata {
@@ -174,6 +344,9 @@ impl TryFrom<&RepoPath> for FlakeMetadata {
         let dev_shells = flatten_system_outputs(&show_output.dev_shells);
         let nixos_modules: Vec<String> = show_output.nixos_modules.keys().cloned().collect();
 
+        // Try to parse infrastructure configuration (system-independent top-level output)
+        let infrastructure = parse_infrastructure(&flake_url);
+
         Ok(Self {
             description: metadata.description,
             packages,
@@ -181,6 +354,7 @@ impl TryFrom<&RepoPath> for FlakeMetadata {
             apps,
             dev_shells,
             nixos_modules,
+            infrastructure,
         })
     }
 }

@@ -1,0 +1,280 @@
+{% extends "../base.html" %}
+
+{% block title %}{{ repo_name }} - Infrastructure - Procurator CI{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="/">Home</a>
+    <span class="separator">/</span>
+    <a href="/{{ username }}">{{ username }}</a>
+    <span class="separator">/</span>
+    <span>{{ repo_name }}</span>
+</div>
+
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+    <h1>{{ username }}/{{ repo_name }}</h1>
+    <div class="code-block" style="padding: 8px 12px; font-size: 0.8rem;">
+        {{ git_url }}
+    </div>
+</div>
+
+<div class="tabs">
+    <a href="/{{ username }}/{{ repo_name }}" class="tab {% if active_tab == "builds" %}active{% endif %}">
+        🔨 Builds
+    </a>
+    <a href="/{{ username }}/{{ repo_name }}/files" class="tab {% if active_tab == "files" %}active{% endif %}">
+        📁 Files
+    </a>
+    <a href="/{{ username }}/{{ repo_name }}/flake" class="tab {% if active_tab == "flake" %}active{% endif %}">
+        ❄️ Flake
+    </a>
+    <a href="/{{ username }}/{{ repo_name }}/infrastructure" class="tab {% if active_tab == "infrastructure" %}active{% endif %}">
+        🏗️ Infrastructure
+    </a>
+</div>
+
+<h2 style="margin-bottom: 16px;">Infrastructure Configuration</h2>
+
+{% if let Some(infra) = infrastructure %}
+
+<!-- Machines Section -->
+<div class="card" style="margin-bottom: 24px;">
+    <h3 class="card-title">Machines & Resources</h3>
+    {% if infra.machines.is_empty() %}
+    <p style="color: var(--text-secondary); margin-top: 8px;">No machines defined</p>
+    {% else %}
+    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; margin-top: 16px;">
+        {% for (name, machine) in infra.machines %}
+        <div style="border: 1px solid var(--border-color); border-radius: 6px; padding: 16px; background-color: var(--bg-tertiary);">
+            <h4 style="font-size: 1.1rem; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                🖥️ {{ name }}
+            </h4>
+            <div class="meta-info" style="flex-direction: column; gap: 10px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <div style="background-color: var(--bg-secondary); padding: 8px; border-radius: 4px; min-width: 100px; text-align: center;">
+                        <div style="font-size: 1.5rem; font-weight: 600; color: var(--text-link);">{{ machine.cpu }}</div>
+                        <div style="font-size: 0.75rem; color: var(--text-secondary);">CPU Cores</div>
+                    </div>
+                    <div style="background-color: var(--bg-secondary); padding: 8px; border-radius: 4px; min-width: 100px; text-align: center;">
+                        <div style="font-size: 1.5rem; font-weight: 600; color: var(--success);">{{ machine.memory.amount }}</div>
+                        <div style="font-size: 0.75rem; color: var(--text-secondary);">{{ machine.memory.unit }} RAM</div>
+                    </div>
+                </div>
+                <div>
+                    <strong style="font-size: 0.875rem; color: var(--text-secondary);">Roles:</strong>
+                    <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px;">
+                        {% for role in machine.roles %}
+                        <span class="badge badge-info" style="font-size: 0.75rem;">{{ role }}</span>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+
+<!-- Continuous Delivery Pipeline -->
+<div class="card" style="margin-bottom: 24px;">
+    <h3 class="card-title">Continuous Delivery Pipeline</h3>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-top: 16px;">
+        <div style="text-align: center; padding: 16px; border: 2px solid {% if infra.cd.tests %}var(--success){% else %}var(--border-color){% endif %}; border-radius: 6px;">
+            <div style="font-size: 2rem; margin-bottom: 8px;">
+                {% if infra.cd.tests %}✅{% else %}⬜{% endif %}
+            </div>
+            <div style="font-weight: 600; margin-bottom: 4px;">Tests</div>
+            <div style="font-size: 0.75rem; color: var(--text-secondary);">
+                {% if infra.cd.tests %}Enabled{% else %}Disabled{% endif %}
+            </div>
+        </div>
+
+        <div style="text-align: center; padding: 16px; border: 2px solid {% if infra.cd.build %}var(--success){% else %}var(--border-color){% endif %}; border-radius: 6px;">
+            <div style="font-size: 2rem; margin-bottom: 8px;">
+                {% if infra.cd.build %}✅{% else %}⬜{% endif %}
+            </div>
+            <div style="font-weight: 600; margin-bottom: 4px;">Build</div>
+            <div style="font-size: 0.75rem; color: var(--text-secondary);">
+                {% if infra.cd.build %}Enabled{% else %}Disabled{% endif %}
+            </div>
+        </div>
+
+        <div style="text-align: center; padding: 16px; border: 2px solid {% if infra.cd.dst %}var(--success){% else %}var(--border-color){% endif %}; border-radius: 6px;">
+            <div style="font-size: 2rem; margin-bottom: 8px;">
+                {% if infra.cd.dst %}✅{% else %}⬜{% endif %}
+            </div>
+            <div style="font-weight: 600; margin-bottom: 4px;">DST</div>
+            <div style="font-size: 0.75rem; color: var(--text-secondary);">
+                {% if infra.cd.dst %}Enabled{% else %}Disabled{% endif %}
+            </div>
+        </div>
+
+        <div style="text-align: center; padding: 16px; border: 2px solid {% if infra.cd.staging %}var(--success){% else %}var(--border-color){% endif %}; border-radius: 6px;">
+            <div style="font-size: 2rem; margin-bottom: 8px;">
+                {% if infra.cd.staging %}✅{% else %}⬜{% endif %}
+            </div>
+            <div style="font-weight: 600; margin-bottom: 4px;">Staging</div>
+            <div style="font-size: 0.75rem; color: var(--text-secondary);">
+                {% if infra.cd.staging %}Enabled{% else %}Disabled{% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Services Section -->
+{% if !infra.services.is_empty() %}
+<div class="card" style="margin-bottom: 24px;">
+    <h3 class="card-title">Services</h3>
+    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); gap: 16px; margin-top: 16px;">
+        {% for (name, service) in infra.services %}
+        <div style="border: 1px solid var(--border-color); border-radius: 6px; padding: 16px; background-color: var(--bg-tertiary);">
+            <h4 style="font-size: 1.1rem; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                📦 {{ name }}
+            </h4>
+            <div style="margin-bottom: 12px;">
+                <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 4px;">Source Type:</div>
+                <span class="badge badge-info">{{ service.source_info.source_type }}</span>
+                {% if let Some(url) = service.source_info.url %}
+                <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 8px;">
+                    URL: <code style="font-size: 0.75rem;">{{ url }}</code>
+                </div>
+                {% endif %}
+                {% if let Some(rev) = service.source_info.rev %}
+                <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 4px;">
+                    Revision: <code style="font-size: 0.75rem;">{{ rev }}</code>
+                </div>
+                {% endif %}
+            </div>
+            <div style="margin-top: 12px;">
+                <div style="font-size: 0.875rem; font-weight: 600; margin-bottom: 8px;">Environments:</div>
+                {% for (env_name, env) in service.environments %}
+                <div style="background-color: var(--bg-secondary); padding: 10px; border-radius: 4px; margin-bottom: 8px;">
+                    <div style="font-weight: 600; margin-bottom: 6px; color: var(--text-link);">{{ env_name }}</div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 0.8rem;">
+                        <div>CPU: <strong>{{ env.cpu }}</strong></div>
+                        <div>Memory: <strong>{{ env.memory.amount }} {{ env.memory.unit }}</strong></div>
+                        <div>Replicas: <strong>{{ env.replicas }}</strong></div>
+                        {% if let Some(health) = env.health_check %}
+                        <div style="grid-column: 1 / -1;">Health: <code style="font-size: 0.75rem;">{{ health }}</code></div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Rollback Strategy -->
+{% if infra.rollback.enabled %}
+<div class="card" style="margin-bottom: 24px;">
+    <h3 class="card-title">Rollback Strategy</h3>
+    <div style="margin-top: 16px;">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+            <strong>Status:</strong>
+            {% if infra.rollback.enabled %}
+            <span class="badge badge-success" style="padding: 6px 12px;">✓ Enabled</span>
+            {% else %}
+            <span class="badge badge-error" style="padding: 6px 12px;">✗ Disabled</span>
+            {% endif %}
+        </div>
+
+        {% if infra.rollback.enabled %}
+        {% if let Some(threshold) = infra.rollback.threshold %}
+        <div style="background-color: var(--bg-tertiary); padding: 16px; border-radius: 6px; margin-bottom: 16px;">
+            <h4 style="font-size: 0.95rem; margin-bottom: 12px; color: var(--warning);">⚠️ Rollback Thresholds</h4>
+            <div style="display: grid; gap: 12px;">
+                {% if let Some(cpu) = threshold.cpu %}
+                <div style="display: flex; justify-content: space-between; padding: 8px; background-color: var(--bg-secondary); border-radius: 4px;">
+                    <span style="color: var(--text-secondary);">CPU Usage:</span>
+                    <strong>{{ cpu }}</strong>
+                </div>
+                {% endif %}
+
+                {% if let Some(memory) = threshold.memory %}
+                <div style="display: flex; justify-content: space-between; padding: 8px; background-color: var(--bg-secondary); border-radius: 4px;">
+                    <span style="color: var(--text-secondary);">Memory:</span>
+                    <strong>{{ memory.amount }} {{ memory.unit }}</strong>
+                </div>
+                {% endif %}
+
+                {% if let Some(latency) = threshold.latency %}
+                <div style="padding: 8px; background-color: var(--bg-secondary); border-radius: 4px;">
+                    <div style="color: var(--text-secondary); margin-bottom: 8px;">Latency:</div>
+                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-left: 12px;">
+                        {% if let Some(p99) = latency.p99 %}
+                        <div><strong>p99:</strong> {{ p99 }}</div>
+                        {% endif %}
+                        {% if let Some(p90) = latency.p90 %}
+                        <div><strong>p90:</strong> {{ p90 }}</div>
+                        {% endif %}
+                        {% if let Some(p50) = latency.p50 %}
+                        <div><strong>p50:</strong> {{ p50 }}</div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+
+        {% if let Some(notification) = infra.rollback.notification %}
+        {% if notification.enabled %}
+        <div style="background-color: var(--bg-tertiary); padding: 16px; border-radius: 6px;">
+            <h4 style="font-size: 0.95rem; margin-bottom: 12px;">📢 Notifications</h4>
+            <div style="display: grid; gap: 12px;">
+                {% if let Some(email) = notification.email %}
+                <div style="padding: 12px; background-color: var(--bg-secondary); border-radius: 4px; border-left: 3px solid var(--info);">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                        <span style="font-size: 1.2rem;">📧</span>
+                        <strong>Email Notification</strong>
+                    </div>
+                    <div style="font-size: 0.875rem; color: var(--text-secondary); margin-left: 28px;">
+                        <div><strong>Subject:</strong> {{ email.subject }}</div>
+                        <div style="margin-top: 4px;"><strong>Recipients:</strong> {{ email.recipients.len() }} recipient(s)</div>
+                    </div>
+                </div>
+                {% endif %}
+
+                {% if let Some(slack) = notification.slack %}
+                <div style="padding: 12px; background-color: var(--bg-secondary); border-radius: 4px; border-left: 3px solid var(--success);">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                        <span style="font-size: 1.2rem;">💬</span>
+                        <strong>Slack Notification</strong>
+                    </div>
+                    <div style="font-size: 0.875rem; color: var(--text-secondary); margin-left: 28px;">
+                        <div><strong>Channel:</strong> {{ slack.channel }}</div>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+        {% endif %}
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+{% else %}
+<div class="card">
+    <div class="empty-state">
+        <h3>No Infrastructure Configuration</h3>
+        <p>This repository does not contain infrastructure configuration.</p>
+        <div style="margin-top: 24px; text-align: left; max-width: 600px; margin-left: auto; margin-right: auto;">
+            <h4 style="margin-bottom: 12px;">To add infrastructure configuration:</h4>
+            <ol style="margin-top: 12px; color: var(--text-secondary); line-height: 1.8;">
+                <li>Create <code>procurator/module.nix</code> and <code>procurator/config.nix</code></li>
+                <li>Use the Procurator module system to declare machines, services, and deployment config</li>
+                <li>Export infrastructure in your flake outputs</li>
+            </ol>
+            <p style="margin-top: 16px; color: var(--text-secondary);">
+                See the Procurator documentation for examples and templates.
+            </p>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% endblock content %}

@@ -19,7 +19,7 @@ use axum::{
 use std::process::Command;
 
 use crate::config::Config;
-use crate::nix_parser::FlakeMetadata;
+use crate::nix_parser::{FlakeMetadata, Infrastructure, parse_infrastructure_from_repo};
 use crate::queue::BuildStatus;
 use crate::AppState;
 
@@ -154,6 +154,16 @@ struct RepoFlakeTemplate {
     git_url: String,
     active_tab: String,
     flake_metadata: Option<FlakeMetadata>,
+}
+
+#[derive(Template)]
+#[template(path = "repo/infrastructure.html")]
+struct RepoInfrastructureTemplate {
+    username: String,
+    repo_name: String,
+    git_url: String,
+    active_tab: String,
+    infrastructure: Option<Infrastructure>,
 }
 
 // ============================================================================
@@ -439,6 +449,37 @@ async fn repo_flake(
     }))
 }
 
+/// Repository infrastructure configuration page
+async fn repo_infrastructure(
+    State(state): State<AppState>,
+    Path((username, repo)): Path<(String, String)>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let repos = state
+        .repo_manager
+        .list_repos(&username)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let repo_path = repos
+        .iter()
+        .find(|r| r.repo_name() == repo)
+        .ok_or((StatusCode::NOT_FOUND, format!("Repository '{}' not found", repo)))?;
+
+    let config = Config::init();
+    let git_url = repo_path.to_ssh_url(&config.domain);
+
+    // Parse infrastructure directly from the repository
+    let infrastructure = parse_infrastructure_from_repo(repo_path);
+
+    Ok(HtmlTemplate(RepoInfrastructureTemplate {
+        username,
+        repo_name: repo,
+        git_url,
+        active_tab: "infrastructure".to_string(),
+        infrastructure,
+    }))
+}
+
 /// Build the web UI routes
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -448,4 +489,5 @@ pub fn routes() -> Router<AppState> {
         .route("/{username}/{repo}/builds/{id}", get(build_detail))
         .route("/{username}/{repo}/files", get(repo_files))
         .route("/{username}/{repo}/flake", get(repo_flake))
+        .route("/{username}/{repo}/infrastructure", get(repo_infrastructure))
 }
