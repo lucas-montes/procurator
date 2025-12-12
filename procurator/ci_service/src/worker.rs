@@ -15,8 +15,9 @@ use std::sync::Arc;
 use tracing::{error, info};
 
 use crate::config::Config;
+use crate::domain::{Build, BuildStatus};
+use crate::job_queue::JobQueue;
 use crate::nix_parser::run_checks_with_logs;
-use crate::queue::{Build, BuildQueue, BuildStatus};
 
 use std::fmt;
 
@@ -89,11 +90,11 @@ impl From<crate::nix_parser::checks::ChecksError> for WorkerError {
 type Result<T> = std::result::Result<T, WorkerError>;
 
 pub struct Worker {
-    queue: Arc<BuildQueue>,
+    queue: Arc<JobQueue>,
 }
 
 impl Worker {
-    pub fn new(queue: Arc<BuildQueue>) -> Self {
+    pub fn new(queue: Arc<JobQueue>) -> Self {
         Self { queue }
     }
 
@@ -106,34 +107,34 @@ impl Worker {
                     if let Err(e) = self.process_build(&build).await {
                         if let WorkerError::Queue(err) = e {
                             error!(
-                                build_id = build.id,
-                                repo = build.repo_name,
-                                branch = build.branch,
+                                build_id = build.id(),
+                                repo = build.repo_name(),
+                                branch = build.branch(),
                                 error = %err,
                                 "Build processing failed"
                             );
                         }
 
                         // Check if we can retry
-                        if self.queue.can_retry(&build).await {
+                        if build.can_retry() {
                             info!(
-                                build_id = build.id,
-                                attempt = build.retry_count + 2,
-                                max_retries = build.max_retries + 1,
+                                build_id = build.id(),
+                                attempt = build.retry_count() + 2,
+                                max_retries = build.max_retries() + 1,
                                 "Scheduling retry for build"
                             );
                             self.queue
-                                .increment_retry(build.id)
+                                .increment_retry(build.id())
                                 .await
                                 .map_err(|e| WorkerError::Database(e.to_string()))?;
                         } else {
                             info!(
-                                build_id = build.id,
-                                max_retries = build.max_retries + 1,
+                                build_id = build.id(),
+                                max_retries = build.max_retries() + 1,
                                 "Build exhausted all retries, marking as failed"
                             );
                             self.queue
-                                .update_status(build.id, BuildStatus::Failed)
+                                .update_status(build.id(), BuildStatus::Failed)
                                 .await
                                 .map_err(|e| WorkerError::Database(e.to_string()))?;
                         }
@@ -153,30 +154,32 @@ impl Worker {
     //TODO: we need to ensure that the repo has a flake.nix
     async fn process_build(&self, build: &Build) -> Result<()> {
         info!(
-            build_id = build.id,
-            repo = build.repo_name,
-            branch = build.branch,
-            commit = build.commit_hash,
-            attempt = build.retry_count + 1,
-            max_retries = build.max_retries + 1,
+            build_id = build.id(),
+            repo = build.repo_name(),
+            branch = build.branch(),
+            commit = build.commit_hash(),
+            attempt = build.retry_count() + 1,
+            max_retries = build.max_retries() + 1,
             "Starting build processing"
         );
 
         self.queue
-            .update_status(build.id, BuildStatus::Running)
+            .update_status(build.id(), BuildStatus::Running)
             .await
             .map_err(|e| WorkerError::Database(e.to_string()))?;
 
-        // Parse repo path: /base/username/repo.git
+        // Build has all the information we need - no parsing required!
         let config = Config::init();
-        let repo_path = build
-            .repo_path(&config.repos_base_path)
-            .map_err(|e| WorkerError::Queue(e.to_string()))?;
+        let repo_path = crate::git_manager::RepoPath::new(
+            &config.repos_base_path,
+            build.username(),
+            build.repo_name(),
+        );
 
-        let git_url = repo_path.to_nix_url_with_rev(&build.commit_hash);
+        let git_url = repo_path.to_nix_url_with_rev(build.commit_hash());
 
         info!(
-            build_id = build.id,
+            build_id = build.id(),
             git_url = git_url.as_str(),
             "Executing nix flake check"
         );
@@ -184,7 +187,7 @@ impl Worker {
         // Store the command in logs
         let command_log = format!("$ nix flake check {} --print-build-logs\n", git_url);
         self.queue
-            .set_logs(build.id, &command_log)
+            .set_logs(build.id(), &command_log)
             .await
             .map_err(|e| WorkerError::Database(e.to_string()))?;
 
@@ -192,14 +195,14 @@ impl Worker {
             Ok(summary) => {
                 // Store the structured build summary
                 self.queue
-                    .set_build_summary(build.id, &summary)
+                    .set_build_summary(build.id(), &summary)
                     .await
                     .map_err(|e| WorkerError::Database(e.to_string()))?;
 
                 info!(
-                    build_id = build.id,
-                    repo = build.repo_name,
-                    branch = build.branch,
+                    build_id = build.id(),
+                    repo = build.repo_name(),
+                    branch = build.branch(),
                     duration = ?summary.total_duration(),
                     steps_count = summary.steps().len(),
                     packages_checked = summary.packages_checked().len(),
@@ -208,15 +211,15 @@ impl Worker {
                 );
 
                 self.queue
-                    .update_status(build.id, BuildStatus::Success)
+                    .update_status(build.id(), BuildStatus::Success)
                     .await
                     .map_err(|e| WorkerError::Database(e.to_string()))?;
             }
             Err(e) => {
                 error!(
-                    build_id = build.id,
-                    repo = build.repo_name,
-                    branch = build.branch,
+                    build_id = build.id(),
+                    repo = build.repo_name(),
+                    branch = build.branch(),
                     error = %e,
                     "Build failed"
                 );
@@ -224,12 +227,12 @@ impl Worker {
                 // Store the error information in logs
                 let error_log = format!("Build failed: {}\n", e);
                 self.queue
-                    .append_log(build.id, &error_log)
+                    .append_log(build.id(), &error_log)
                     .await
                     .map_err(|e| WorkerError::Database(e.to_string()))?;
 
                 self.queue
-                    .update_status(build.id, BuildStatus::Failed)
+                    .update_status(build.id(), BuildStatus::Failed)
                     .await
                     .map_err(|e| WorkerError::Database(e.to_string()))?;
 

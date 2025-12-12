@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::process::Command;
 use tracing::{error, info};
 
-use crate::repo_manager::RepoPath;
+use crate::git_manager::RepoPath;
 
 /// Output structure from `nix flake metadata --json`
 #[derive(Debug, Clone, Deserialize)]
@@ -215,7 +215,6 @@ pub struct FlakeMetadata {
     pub apps: Vec<String>,
     pub dev_shells: Vec<String>,
     pub nixos_modules: Vec<String>,
-    pub infrastructure: Option<Infrastructure>,
 }
 
 #[derive(Debug)]
@@ -270,49 +269,22 @@ fn get_head_rev(bare_repo_path: &std::path::Path) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// Parse infrastructure configuration from flake output
-fn parse_infrastructure(flake_url: &str) -> Option<Infrastructure> {
-    let flake_url = format!("{}#infrastructure", flake_url);
-    info!(flake_url = %flake_url, "Parsing infrastructure configuration from flake");
-    let output = match Command::new("nix")
-        .args(["eval", "--json", &flake_url])
-        .output()
-    {
-        Ok(output) => output,
-        Err(e) => {
-            error!(flake_url = %flake_url, error = %e, "Failed to run nix eval for infrastructure");
-            return None;
-        }
-    };
+impl TryFrom<&RepoPath> for Infrastructure {
+    type Error = NixParserError;
 
-    if !output.status.success() {
-        tracing::debug!("No infrastructure output found in flake");
-        return None;
+    fn try_from(repo_path: &RepoPath) -> Result<Self> {
+        let bare_path = repo_path.bare_repo_path();
+        let head_rev = get_head_rev(&bare_path)?;
+        let flake_url = repo_path.to_nix_url_with_rev(&head_rev);
+
+        let flake_url = format!("{}#infrastructure", flake_url);
+
+        info!(bare_path = %bare_path.display(), repo_path = %repo_path, flake_url = %flake_url, "Parsing infrastructure configuration");
+        run_nix_command(&["eval", "--json", &flake_url]).map_err(|e| {
+            error!(repo_path = %repo_path, error = %e, "Failed to get flake metadata");
+            NixParserError::NotAFlake
+        })
     }
-
-    info!(output = ?str::from_utf8(&output.stdout), "Parsing infrastructure configuration from flake");
-
-    match serde_json::from_slice(&output.stdout) {
-        Ok(infra) => {
-            tracing::info!("Successfully parsed infrastructure from flake output");
-            Some(infra)
-        }
-        Err(e) => {
-            tracing::warn!("Failed to deserialize infrastructure: {}", e);
-            None
-        }
-    }
-}
-
-/// Parse infrastructure configuration directly from a repository
-pub fn parse_infrastructure_from_repo(repo_path: &RepoPath) -> Option<Infrastructure> {
-    let bare_path = repo_path.bare_repo_path();
-    let head_rev = get_head_rev(&bare_path).ok()?;
-    let flake_url = repo_path.to_nix_url_with_rev(&head_rev);
-
-    info!(bare_path = %bare_path.display(), repo_path = %repo_path, flake_url = %flake_url, "Parsing infrastructure configuration");
-
-    parse_infrastructure(&flake_url)
 }
 
 impl TryFrom<&RepoPath> for FlakeMetadata {
@@ -344,9 +316,6 @@ impl TryFrom<&RepoPath> for FlakeMetadata {
         let dev_shells = flatten_system_outputs(&show_output.dev_shells);
         let nixos_modules: Vec<String> = show_output.nixos_modules.keys().cloned().collect();
 
-        // Try to parse infrastructure configuration (system-independent top-level output)
-        let infrastructure = parse_infrastructure(&flake_url);
-
         Ok(Self {
             description: metadata.description,
             packages,
@@ -354,7 +323,6 @@ impl TryFrom<&RepoPath> for FlakeMetadata {
             apps,
             dev_shells,
             nixos_modules,
-            infrastructure,
         })
     }
 }

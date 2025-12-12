@@ -776,6 +776,7 @@ not a nix line"#;
         }
     }
 
+    //NOTE: this test is slow
     #[tokio::test]
     async fn test_run_checks() {
         let mut flake_path: String = env!("CARGO_MANIFEST_DIR").into();

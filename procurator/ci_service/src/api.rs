@@ -25,8 +25,8 @@ use std::time::Duration;
 use tracing::info;
 
 use crate::config::Config;
+use crate::domain::{Build, BuildStatus};
 use crate::nix_parser::FlakeMetadata;
-use crate::queue::{Build, BuildStatus};
 use crate::AppState;
 
 #[derive(Debug, Serialize)]
@@ -47,14 +47,15 @@ pub struct BuildInfo {
 
 impl From<Build> for BuildInfo {
     fn from(build: Build) -> Self {
-        let commit_short = if build.commit_hash.len() >= 8 {
-            build.commit_hash[..8].to_string()
+        let commit_hash = build.commit_hash();
+        let commit_short = if commit_hash.len() >= 8 {
+            commit_hash[..8].to_string()
         } else {
-            build.commit_hash.clone()
+            commit_hash.to_string()
         };
 
         let duration_seconds =
-            if let (Some(started), Some(finished)) = (&build.started_at, &build.finished_at) {
+            if let (Some(started), Some(finished)) = (build.started_at(), build.finished_at()) {
                 chrono::NaiveDateTime::parse_from_str(finished, "%Y-%m-%d %H:%M:%S")
                     .ok()
                     .and_then(|f| {
@@ -67,17 +68,17 @@ impl From<Build> for BuildInfo {
             };
 
         BuildInfo {
-            id: build.id,
-            repo: build.repo_name,
-            commit_hash: build.commit_hash,
+            id: build.id(),
+            repo: build.repo_name().to_string(),
+            commit_hash: commit_hash.to_string(),
             commit_short,
-            branch: build.branch,
-            status: build.status,
-            retry_count: build.retry_count,
-            max_retries: build.max_retries,
-            created_at: build.created_at,
-            started_at: build.started_at,
-            finished_at: build.finished_at,
+            branch: build.branch().to_string(),
+            status: build.status(),
+            retry_count: build.retry_count(),
+            max_retries: build.max_retries(),
+            created_at: build.created_at().to_string(),
+            started_at: build.started_at().map(|s| s.to_string()),
+            finished_at: build.finished_at().map(|s| s.to_string()),
             duration_seconds,
         }
     }
@@ -274,14 +275,14 @@ async fn get_build_logs(
 async fn list_repos(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<RepoInfo>>, (StatusCode, String)> {
-    match state.repo_manager.list_repos("lucas").await {
+    match state.git_manager.list_repos("lucas").await {
         Ok(repos) => {
             let mut repo_infos = Vec::new();
 
             for repo_path in repos {
                 let name = repo_path.repo_name().to_string();
 
-                let builds_from_db = state.queue.list_repos().await.ok().unwrap_or_default();
+                let builds_from_db = state.repo_store.list_repos_with_build_counts().await.ok().unwrap_or_default();
                 let builds_count = builds_from_db
                     .iter()
                     .find(|(db_name, _, _)| db_name == &name)
@@ -338,7 +339,7 @@ async fn create_repo(
     let config = Config::init();
 
     match state
-        .repo_manager
+        .git_manager
         .create_bare_repo(username, &req.name)
         .await
     {
@@ -370,7 +371,7 @@ async fn get_repo(
     Path((username, repo)): Path<(String, String)>,
 ) -> Result<Json<RepoDetails>, (StatusCode, String)> {
     let repos = state
-        .repo_manager
+        .git_manager
         .list_repos(&username)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -388,7 +389,7 @@ async fn get_repo(
 
     let repo_builds: Vec<BuildInfo> = all_builds
         .into_iter()
-        .filter(|b| b.repo_name == repo)
+        .filter(|b| b.repo_name() == repo)
         .take(10)
         .map(BuildInfo::from)
         .collect();

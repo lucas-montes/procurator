@@ -22,8 +22,11 @@
 
 mod api;
 mod config;
+mod database;
+mod domain;
+mod job_queue;
 mod nix_parser;
-mod queue;
+mod git_manager;
 mod repo_manager;
 mod web;
 mod worker;
@@ -53,8 +56,9 @@ type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Clone)]
 pub struct AppState {
-    queue: Arc<queue::BuildQueue>,
-    repo_manager: Arc<repo_manager::RepoManager>,
+    queue: Arc<job_queue::JobQueue>,
+    repo_store: Arc<repo_manager::RepositoryStore>,
+    git_manager: Arc<repo_manager::RepoManager>,
 }
 
 #[tokio::main]
@@ -77,16 +81,22 @@ async fn main() -> Result<()> {
     );
 
     // Initialize database
-    let queue = queue::BuildQueue::new(&config.database_url)
+    let database = database::Database::new(&config.database_url)
         .await
         .map_err(|e| Error::Database(e.to_string()))?;
 
-    // Initialize repository manager (post-receive hook is now embedded)
-    let repo_manager = repo_manager::RepoManager::new(&config.repos_base_path);
+    // Initialize job queue and repository store
+    let queue = Arc::new(job_queue::JobQueue::new(database.clone()));
+    let repo_store = Arc::new(repo_manager::RepositoryStore::new(database));
+
+    // Initialize repository manager with repository store access
+    let git_manager = repo_manager::RepoManager::new(&config.repos_base_path)
+        .with_repo_store(repo_store.clone());
 
     let state = AppState {
-        queue: Arc::new(queue),
-        repo_manager: Arc::new(repo_manager),
+        queue,
+        repo_store,
+        git_manager: Arc::new(git_manager),
     };
 
     // Start build worker in background

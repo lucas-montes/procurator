@@ -19,8 +19,8 @@ use axum::{
 use std::process::Command;
 
 use crate::config::Config;
-use crate::nix_parser::{FlakeMetadata, Infrastructure, parse_infrastructure_from_repo};
-use crate::queue::BuildStatus;
+use crate::domain::BuildStatus;
+use crate::nix_parser::{FlakeMetadata, Infrastructure, };
 use crate::AppState;
 
 // ============================================================================
@@ -66,16 +66,17 @@ struct BuildInfo {
     commit_hash: String,
 }
 
-impl From<crate::queue::Build> for BuildInfo {
-    fn from(build: crate::queue::Build) -> Self {
-        let commit_short = if build.commit_hash.len() >= 8 {
-            build.commit_hash[..8].to_string()
+impl From<crate::domain::Build> for BuildInfo {
+    fn from(build: crate::domain::Build) -> Self {
+        let commit_hash = build.commit_hash();
+        let commit_short = if commit_hash.len() >= 8 {
+            commit_hash[..8].to_string()
         } else {
-            build.commit_hash.clone()
+            commit_hash.to_string()
         };
 
         let duration_seconds =
-            if let (Some(started), Some(finished)) = (&build.started_at, &build.finished_at) {
+            if let (Some(started), Some(finished)) = (build.started_at(), build.finished_at()) {
                 // Parse timestamps and calculate duration
                 chrono::DateTime::parse_from_rfc3339(finished)
                     .ok()
@@ -89,17 +90,17 @@ impl From<crate::queue::Build> for BuildInfo {
             };
 
         BuildInfo {
-            id: build.id,
+            id: build.id(),
             commit_short,
-            commit_hash: build.commit_hash,
-            branch: build.branch,
-            status: build.status,
-            created_at: build.created_at,
-            started_at: build.started_at,
-            finished_at: build.finished_at,
+            commit_hash: commit_hash.to_string(),
+            branch: build.branch().to_string(),
+            status: build.status(),
+            created_at: build.created_at().to_string(),
+            started_at: build.started_at().map(|s| s.to_string()),
+            finished_at: build.finished_at().map(|s| s.to_string()),
             duration_seconds,
-            retry_count: build.retry_count,
-            max_retries: build.max_retries,
+            retry_count: build.retry_count(),
+            max_retries: build.max_retries(),
         }
     }
 }
@@ -194,21 +195,20 @@ impl<T: Template> IntoResponse for HtmlTemplate<T> {
 
 /// Home page - list of users
 async fn index(State(state): State<AppState>) -> impl IntoResponse {
-    // For now, we only support "lucas" as a user
-    // In the future, this could scan the repos directory for user folders
-    let username = "lucas";
-
-    let repos_count = state
-        .repo_manager
-        .list_repos(username)
-        .await
-        .map(|r| r.len())
-        .unwrap_or(0);
-
-    let users = vec![UserInfo {
-        username: username.to_string(),
-        repos_count,
-    }];
+    // Get all users from the database by extracting unique usernames from repo paths
+    let users = match state.repo_store.get_all_users_with_repo_count().await {
+        Ok(user_data) => user_data
+            .into_iter()
+            .map(|(username, repos_count)| UserInfo {
+                username,
+                repos_count: repos_count as usize,
+            })
+            .collect(),
+        Err(e) => {
+            tracing::error!("Failed to get users from database: {}", e);
+            Vec::new()
+        }
+    };
 
     HtmlTemplate(IndexTemplate { users })
 }
@@ -219,7 +219,7 @@ async fn user_repos(
     Path(username): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let repos = state
-        .repo_manager
+        .git_manager
         .list_repos(&username)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, format!("User not found: {}", e)))?;
@@ -229,7 +229,7 @@ async fn user_repos(
     for repo_path in repos {
         let name = repo_path.repo_name().to_string();
 
-        let builds_from_db = state.queue.list_repos().await.ok().unwrap_or_default();
+        let builds_from_db = state.repo_store.list_repos_with_build_counts().await.ok().unwrap_or_default();
         let builds_count = builds_from_db
             .iter()
             .find(|(db_name, _, _)| db_name == &name)
@@ -263,7 +263,7 @@ async fn repo_builds(
     Path((username, repo)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let repos = state
-        .repo_manager
+        .git_manager
         .list_repos(&username)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -281,7 +281,7 @@ async fn repo_builds(
 
     let repo_builds: Vec<BuildInfo> = all_builds
         .into_iter()
-        .filter(|b| b.repo_name == repo)
+        .filter(|b| b.repo_name() == repo)
         .map(BuildInfo::from)
         .collect();
 
@@ -317,7 +317,7 @@ async fn build_detail(
     Path((username, repo, build_id)): Path<(String, String, i64)>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let repos = state
-        .repo_manager
+        .git_manager
         .list_repos(&username)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -359,7 +359,7 @@ async fn repo_files(
     Path((username, repo)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let repos = state
-        .repo_manager
+        .git_manager
         .list_repos(&username)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -424,7 +424,7 @@ async fn repo_flake(
     Path((username, repo)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let repos = state
-        .repo_manager
+        .git_manager
         .list_repos(&username)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -455,7 +455,7 @@ async fn repo_infrastructure(
     Path((username, repo)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let repos = state
-        .repo_manager
+        .git_manager
         .list_repos(&username)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -469,7 +469,7 @@ async fn repo_infrastructure(
     let git_url = repo_path.to_ssh_url(&config.domain);
 
     // Parse infrastructure directly from the repository
-    let infrastructure = parse_infrastructure_from_repo(repo_path);
+    let infrastructure = repo_path.try_into().ok();
 
     Ok(HtmlTemplate(RepoInfrastructureTemplate {
         username,
