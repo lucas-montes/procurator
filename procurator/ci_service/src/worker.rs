@@ -12,12 +12,13 @@
 //! at configurable intervals, processing builds serially.
 
 use std::sync::Arc;
+use repo_outils::nix;
 use tracing::{error, info};
 
 use crate::config::Config;
-use crate::domain::{Build, BuildStatus};
+use crate::builds::{Build, BuildStatus};
 use crate::job_queue::JobQueue;
-use crate::nix_parser::run_checks_with_logs;
+use nix::run_checks_with_logs;
 
 use std::fmt;
 
@@ -66,21 +67,21 @@ impl From<Box<dyn std::error::Error + Send + Sync>> for WorkerError {
     }
 }
 
-impl From<crate::nix_parser::checks::ChecksError> for WorkerError {
-    fn from(err: crate::nix_parser::checks::ChecksError) -> Self {
+impl From<nix::checks::ChecksError> for WorkerError {
+    fn from(err: nix::checks::ChecksError) -> Self {
         match err {
-            crate::nix_parser::checks::ChecksError::IoError(io_err) => WorkerError::Io(io_err),
-            crate::nix_parser::checks::ChecksError::ProcessFailed {
+            nix::checks::ChecksError::IoError(io_err) => WorkerError::Io(io_err),
+            nix::checks::ChecksError::ProcessFailed {
                 exit_code: _,
                 stderr,
             } => WorkerError::Nix(stderr),
-            crate::nix_parser::checks::ChecksError::JsonParseError(json_err) => {
+            nix::checks::ChecksError::JsonParseError(json_err) => {
                 WorkerError::Process(format!("JSON parse error: {}", json_err))
             }
-            crate::nix_parser::checks::ChecksError::InvalidFlakePath(path) => {
+            nix::checks::ChecksError::InvalidFlakePath(path) => {
                 WorkerError::Nix(format!("Invalid flake path: {}", path))
             }
-            crate::nix_parser::checks::ChecksError::Timeout(duration) => {
+            nix::checks::ChecksError::Timeout(duration) => {
                 WorkerError::Process(format!("Process timed out after {:?}", duration))
             }
         }

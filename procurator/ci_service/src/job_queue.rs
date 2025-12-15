@@ -13,22 +13,19 @@
 use std::path::PathBuf;
 
 use crate::database::{Database, DatabaseError};
-use crate::domain::{Build, BuildStatus};
-use crate::repo_manager::RepositoryStore;
-use crate::nix_parser::checks::BuildSummary;
+use crate::builds::{Build, BuildStatus};
+
 
 pub type Result<T> = std::result::Result<T, DatabaseError>;
 
 #[derive(Clone)]
 pub struct JobQueue {
     db: Database,
-    repo_store: RepositoryStore,
 }
 
 impl JobQueue {
     pub fn new(db: Database) -> Self {
-        let repo_store = RepositoryStore::new(db.clone());
-        Self { db, repo_store }
+        Self { db }
     }
 
     /// Enqueue a new build job

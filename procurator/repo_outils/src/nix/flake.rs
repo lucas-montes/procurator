@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::process::Command;
 use tracing::{error, info};
 
-use crate::git_manager::RepoPath;
+use crate::git::RepoPath;
 
 /// Output structure from `nix flake metadata --json`
 #[derive(Debug, Clone, Deserialize)]

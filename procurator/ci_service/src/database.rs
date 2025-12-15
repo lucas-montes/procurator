@@ -10,7 +10,7 @@ use std::str::FromStr;
 use sqlx::{sqlite::SqliteConnectOptions, FromRow, SqlitePool};
 use tracing::info;
 
-use crate::domain::{Build, BuildId, BuildStatus, CommitInfo, RepositoryInfo, RetryInfo, Timestamps};
+use crate::builds::{Build, BuildId, BuildStatus, CommitInfo, RepositoryInfo, RetryInfo, Timestamps};
 
 // ============================================================================
 // Error Types

@@ -117,6 +117,18 @@ pub struct BuildSummary {
 }
 
 impl BuildSummary {
+    pub fn new(steps: Vec<StepTiming>) -> Self {
+        let now = SystemTime::now();
+        Self {
+            started_at: now,
+            completed_at: now,
+            steps,
+            important_messages: Vec::new(),
+            packages_checked: Vec::new(),
+            checks_run: Vec::new(),
+        }
+    }
+
     pub fn total_duration(&self) -> Duration {
         self.completed_at
             .duration_since(self.started_at)

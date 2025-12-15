@@ -472,9 +472,6 @@ pub fn routes() -> Router<AppState> {
         .route("/builds", get(list_builds))
         .route("/builds/{id}", get(get_build))
         .route("/builds/{id}/logs", get(get_build_logs))
-        .route("/repos", get(list_repos))
-        .route("/repos", post(create_repo))
-        .route("/repos/{username}/{repo}", get(get_repo))
         .route("/events", get(build_events))
 }
 

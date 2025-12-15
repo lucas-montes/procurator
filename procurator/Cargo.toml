@@ -21,6 +21,8 @@ serde_json = "1.0"
 
 chrono = "0.4"
 
+repo_outils = { path = "./repo_outils" }
+
 [dependencies]
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -34,4 +36,4 @@ control_plane = { path = "control_plane" }
 
 
 [workspace]
-members = ["cli", "commands", "control_plane", "worker", "ci_service", "cache"]
+members = ["cli", "commands", "control_plane", "worker", "ci_service", "cache", "repo_outils", "repohub"]

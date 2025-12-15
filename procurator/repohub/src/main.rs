@@ -25,8 +25,6 @@ mod config;
 mod database;
 mod domain;
 mod job_queue;
-mod nix_parser;
-mod git_manager;
 mod repo_manager;
 mod web;
 mod worker;
