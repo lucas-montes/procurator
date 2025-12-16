@@ -11,12 +11,12 @@
 //! The worker runs in a background task and continuously polls the queue
 //! at configurable intervals, processing builds serially.
 
-use std::sync::Arc;
 use repo_outils::nix;
+use std::sync::Arc;
 use tracing::{error, info};
 
-use crate::config::Config;
 use crate::builds::{Build, BuildStatus};
+use crate::config::Config;
 use crate::job_queue::JobQueue;
 use nix::run_checks_with_logs;
 
@@ -99,8 +99,8 @@ impl Worker {
         Self { queue }
     }
 
-    pub async fn run(&self) -> Result<()> {
-        info!(target: "procurator::worker", "Worker started");
+    pub async fn run(&self) {
+        info!(target: "ci_service::worker", "Worker started");
 
         loop {
             match self.queue.get_pending().await {
@@ -124,20 +124,38 @@ impl Worker {
                                 max_retries = build.max_retries() + 1,
                                 "Scheduling retry for build"
                             );
-                            self.queue
+
+                            if let Err(err) = self
+                                .queue
                                 .increment_retry(build.id())
                                 .await
-                                .map_err(|e| WorkerError::Database(e.to_string()))?;
+                                .map_err(|e| WorkerError::Database(e.to_string()))
+                            {
+                                error!(
+                                    build_id = build.id(),
+                                    error = %err,
+                                    "Failed to increment retry count"
+                                );
+                            };
+
                         } else {
                             info!(
                                 build_id = build.id(),
                                 max_retries = build.max_retries() + 1,
                                 "Build exhausted all retries, marking as failed"
                             );
-                            self.queue
+                            if let Err(err) = self
+                                .queue
                                 .update_status(build.id(), BuildStatus::Failed)
                                 .await
-                                .map_err(|e| WorkerError::Database(e.to_string()))?;
+                                .map_err(|e| WorkerError::Database(e.to_string()))
+                            {
+                                error!(
+                                    build_id = build.id(),
+                                    error = %err,
+                                    "Failed to update build status to Failed"
+                                );
+                            };
                         }
                     }
                 }
