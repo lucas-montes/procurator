@@ -1,0 +1,252 @@
+{
+  "started_at": {
+    "secs_since_epoch": 1766680930,
+    "nanos_since_epoch": 268395318
+  },
+  "completed_at": {
+    "secs_since_epoch": 1766680930,
+    "nanos_since_epoch": 539517594
+  },
+  "steps": [
+    {
+      "id": 118098715738113,
+      "name": "evaluating flake",
+      "started_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 321966705
+      },
+      "completed_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 510919379
+      },
+      "level": 3
+    },
+    {
+      "id": 118098715738114,
+      "name": "checking flake output 'packages'",
+      "started_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 322204832
+      },
+      "completed_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 501208960
+      },
+      "level": 3
+    },
+    {
+      "id": 118098715738115,
+      "name": "checking derivation packages.x86_64-linux.default",
+      "started_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 322212722
+      },
+      "completed_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 501100971
+      },
+      "level": 3
+    },
+    {
+      "id": 118098715738217,
+      "name": "checking derivation packages.x86_64-linux.helper-package-2",
+      "started_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 501105661
+      },
+      "completed_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 501207360
+      },
+      "level": 3
+    },
+    {
+      "id": 118098715738218,
+      "name": "checking flake output 'checks'",
+      "started_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 501212290
+      },
+      "completed_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 501448377
+      },
+      "level": 3
+    },
+    {
+      "id": 118098715738219,
+      "name": "checking derivation checks.x86_64-linux.basic-test",
+      "started_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 501215480
+      },
+      "completed_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 501299369
+      },
+      "level": 3
+    },
+    {
+      "id": 118098715738220,
+      "name": "checking derivation checks.x86_64-linux.format-check",
+      "started_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 501302669
+      },
+      "completed_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 501374338
+      },
+      "level": 3
+    },
+    {
+      "id": 118098715738221,
+      "name": "checking derivation checks.x86_64-linux.slow-test",
+      "started_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 501381258
+      },
+      "completed_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 501446737
+      },
+      "level": 3
+    },
+    {
+      "id": 118098715738222,
+      "name": "checking flake output 'apps'",
+      "started_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 501449937
+      },
+      "completed_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 501483236
+      },
+      "level": 3
+    },
+    {
+      "id": 118098715738223,
+      "name": "checking app 'apps.x86_64-linux.default'",
+      "started_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 501454727
+      },
+      "completed_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 501481656
+      },
+      "level": 3
+    },
+    {
+      "id": 118098715738224,
+      "name": "checking flake output 'devShells'",
+      "started_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 501484986
+      },
+      "completed_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 510915609
+      },
+      "level": 3
+    },
+    {
+      "id": 118098715738225,
+      "name": "checking derivation devShells.x86_64-linux.default",
+      "started_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 501489846
+      },
+      "completed_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 510913039
+      },
+      "level": 3
+    },
+    {
+      "id": 118098715738236,
+      "name": "running 3 flake checks",
+      "started_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 510921149
+      },
+      "completed_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 527857891
+      },
+      "level": 3
+    },
+    {
+      "id": 118111600640000,
+      "name": "",
+      "started_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 510973678
+      },
+      "completed_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 527856341
+      },
+      "level": 0
+    },
+    {
+      "id": 118111600640001,
+      "name": "",
+      "started_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 510977418
+      },
+      "completed_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 527854691
+      },
+      "level": 0
+    },
+    {
+      "id": 118111600640002,
+      "name": "",
+      "started_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 510980418
+      },
+      "completed_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 527849421
+      },
+      "level": 0
+    },
+    {
+      "id": 118111600640003,
+      "name": "querying info about missing paths",
+      "started_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 511033867
+      },
+      "completed_at": {
+        "secs_since_epoch": 1766680930,
+        "nanos_since_epoch": 511581760
+      },
+      "level": 6
+    }
+  ],
+  "important_messages": [
+    "warning: ignoring untrusted flake configuration setting 'substituters'.\nPass '--accept-flake-config' to trust it",
+    "derivation evaluated to /nix/store/1bxizw9ww8ibvy4y6c2nflzyh15w2h5w-test-app.drv",
+    "derivation evaluated to /nix/store/6m7z2n2f1nmlfpvxqkg1qqws1939v7gc-test-helper.drv",
+    "derivation evaluated to /nix/store/8xr2nmpzflp8n0h3cb8xwxj5ffxsr8xj-basic-test.drv",
+    "derivation evaluated to /nix/store/k3kgy77dixyipx9hdbkgcgbkyv8gnjqm-format-check.drv",
+    "derivation evaluated to /nix/store/yl9z0afhsplv5agywhd97943wy02mdsc-slow-test.drv",
+    "warning: app 'apps.x86_64-linux.default' lacks attribute 'meta'",
+    "derivation evaluated to /nix/store/gcahvfxivppv9xjj98crnfp5iq9jsh3m-nix-shell.drv"
+  ],
+  "packages_checked": [
+    "default",
+    "helper-package-2"
+  ],
+  "checks_run": [
+    "basic-test",
+    "format-check",
+    "slow-test"
+  ]
+}

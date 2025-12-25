@@ -1,0 +1,2345 @@
+{
+  "activities": {
+    "119150982725655": {
+      "id": 119150982725655,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/bintools-wrapper/gnu-binutils-strip-wrapper.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 878018992
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 38090
+      },
+      "children": [],
+      "messages": []
+    },
+    "119163867627522": {
+      "id": 119163867627522,
+      "level": 0,
+      "parent": 0,
+      "text": "",
+      "entry_type": 103,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 992073262
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 5399677
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725735": {
+      "id": 119150982725735,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/tools/text/gnupatch/CVE-2019-13636.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 978985959
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 117628
+      },
+      "children": [],
+      "messages": []
+    },
+    "119163867627520": {
+      "id": 119163867627520,
+      "level": 0,
+      "parent": 0,
+      "text": "",
+      "entry_type": 102,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 992057552
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 5421807
+      },
+      "children": [],
+      "messages": []
+    },
+    "119163867627523": {
+      "id": 119163867627523,
+      "level": 6,
+      "parent": 0,
+      "text": "querying info about missing paths",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 992119961
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 345236
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725701": {
+      "id": 119150982725701,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/by-name/pk/pkg-config-unwrapped/requires-private.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 902659630
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 177387
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725704": {
+      "id": 119150982725704,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/interpreters/python/cpython/3.12/no-ldconfig.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 903217532
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 89339
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725660": {
+      "id": 119150982725660,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/setup-hooks/role.bash' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 878261409
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 35550
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725634": {
+      "id": 119150982725634,
+      "level": 3,
+      "parent": 0,
+      "text": "checking flake output 'packages'",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 806826364
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 174391504
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725648": {
+      "id": 119150982725648,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/setup-hooks/prune-libtool-files.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 864507535
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 35170
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725671": {
+      "id": 119150982725671,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/shells/bash/pgrp-pipe-5.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 883227402
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 33430
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725743": {
+      "id": 119150982725743,
+      "level": 3,
+      "parent": 0,
+      "text": "checking app 'apps.x86_64-linux.default'",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 981550724
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 27960
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725680": {
+      "id": 119150982725680,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/tools/misc/binutils/0001-Revert-libtool.m4-fix-nm-BSD-flag-detection.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 884840210
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 36700
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725646": {
+      "id": 119150982725646,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/setup-hooks/multiple-outputs.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 864414296
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 44800
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725688": {
+      "id": 119150982725688,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/compilers/gcc/patches/13/no-sys-dirs-riscv.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 889862212
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 37970
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725661": {
+      "id": 119150982725661,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/bintools-wrapper/setup-hook.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 878305008
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 31640
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725694": {
+      "id": 119150982725694,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/tools/misc/automake/setup-hook.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 896899167
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 46240
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725746": {
+      "id": 119150982725746,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/by-name/ve/versionCheckHook/hook.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 982439782
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 82029
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725676": {
+      "id": 119150982725676,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/libraries/gettext/gettext-setup-hook.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 883782475
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 35909
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725699": {
+      "id": 119150982725699,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/by-name/au/autoconf-archive/0003-ax_switch_flags.m4-properly-quote-m4_fatal.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 901972619
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 25619
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725732": {
+      "id": 119150982725732,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/tools/text/gnupatch/Abort_when_cleaning_up_fails.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 978708742
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 59519
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725632": {
+      "id": 119150982725632,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/home/lucas/Projects/procurator/' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 792143402
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 14086440
+      },
+      "children": [],
+      "messages": [
+        "\u001b[35;1mwarning:\u001b[0m ignoring untrusted flake configuration setting 'substituters'.\nPass '--accept-flake-config' to trust it"
+      ]
+    },
+    "119150982725674": {
+      "id": 119150982725674,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/libraries/gettext/absolute-paths.diff' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 883671316
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 53709
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725641": {
+      "id": 119150982725641,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/setup-hooks/make-symlinks-relative.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 864219759
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 31449
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725725": {
+      "id": 119150982725725,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/tools/build-managers/gnumake/patches/0002-Remove-impure-dirs.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 973840968
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 31280
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725649": {
+      "id": 119150982725649,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/setup-hooks/reproducible-builds.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 864549554
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 31340
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725672": {
+      "id": 119150982725672,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/shells/bash/parallel.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 883269591
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 30600
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725745": {
+      "id": 119150982725745,
+      "level": 3,
+      "parent": 0,
+      "text": "checking derivation devShells.x86_64-linux.default",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 981612213
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 10367810
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725681": {
+      "id": 119150982725681,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/tools/misc/binutils/always-search-rpath.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 884888720
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 30809
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725709": {
+      "id": 119150982725709,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/interpreters/python/setup-hook.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 903701335
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 44220
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725717": {
+      "id": 119150982725717,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/libraries/glibc/0001-Revert-Remove-all-usage-of-BASH-or-BASH-in-installed.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 905611880
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 42259
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725687": {
+      "id": 119150982725687,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/compilers/gcc/patches/gcc-12-no-sys-dirs.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 889792363
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 50890
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725720": {
+      "id": 119150982725720,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/setup-hooks/die.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 969045733
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 42839
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725647": {
+      "id": 119150982725647,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/setup-hooks/patch-shebangs.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 864466836
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 33209
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725752": {
+      "id": 119150982725752,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/libraries/openssl/3.3/use-etc-ssl-certs.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 986568396
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 38510
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725742": {
+      "id": 119150982725742,
+      "level": 3,
+      "parent": 0,
+      "text": "checking flake output 'apps'",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 981547274
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 33160
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725668": {
+      "id": 119150982725668,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/interpreters/perl/fix-build-with-only-C-locale-5.40.0.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 881579964
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 37970
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725702": {
+      "id": 119150982725702,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/pkg-config-wrapper/add-flags.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 902985515
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 36640
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725689": {
+      "id": 119150982725689,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/compilers/gcc/patches/13/mangle-NIX_STORE-in-__FILE__.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 889915442
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 39229
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725711": {
+      "id": 119150982725711,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/libraries/glibc/nix-locale-archive.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 905287234
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 76919
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725738": {
+      "id": 119150982725738,
+      "level": 3,
+      "parent": 0,
+      "text": "checking flake output 'checks'",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 981219878
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 324116
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725686": {
+      "id": 119150982725686,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/tools/misc/patchelf/setup-hook.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 888157666
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 203667
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725718": {
+      "id": 119150982725718,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/libraries/glibc/reenable_DT_HASH.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 905664619
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 51029
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725737": {
+      "id": 119150982725737,
+      "level": 3,
+      "parent": 0,
+      "text": "checking derivation packages.x86_64-linux.helper-package-2",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 981080940
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 135018
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725756": {
+      "id": 119150982725756,
+      "level": 3,
+      "parent": 0,
+      "text": "running 3 flake checks",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 991989733
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 5493146
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725643": {
+      "id": 119150982725643,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/setup-hooks/move-lib64.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 864297568
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 32079
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725693": {
+      "id": 119150982725693,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/setup-hooks/autoreconf.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 895531376
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 104908
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725669": {
+      "id": 119150982725669,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/interpreters/perl/setup-hook.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 881651383
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 31840
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725719": {
+      "id": 119150982725719,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/setup-hooks/make-wrapper.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 968943894
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 53760
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725644": {
+      "id": 119150982725644,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/setup-hooks/move-sbin.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 864337047
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 30380
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725638": {
+      "id": 119150982725638,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/stdenv/generic/builder.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 864050121
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 49589
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725723": {
+      "id": 119150982725723,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/tools/misc/findutils/no-install-statedir.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 972547516
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 46989
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725706": {
+      "id": 119150982725706,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/interpreters/python/cpython/virtualenv-permissions.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 903391170
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 36569
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725633": {
+      "id": 119150982725633,
+      "level": 3,
+      "parent": 0,
+      "text": "evaluating flake",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 806587477
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 185399966
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725635": {
+      "id": 119150982725635,
+      "level": 3,
+      "parent": 0,
+      "text": "checking derivation packages.x86_64-linux.default",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 806832724
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 174243606
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725726": {
+      "id": 119150982725726,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/tools/build-managers/gnumake/patches/0003-Do-not-search-for-a-C-compiler-and-set-MAKE_CXX.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 973886707
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 36980
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725670": {
+      "id": 119150982725670,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/setup-hooks/separate-debug-info.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 881985199
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 38259
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725691": {
+      "id": 119150982725691,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/nuke-references/nuke-refs.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 891730937
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 49300
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725682": {
+      "id": 119150982725682,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/tools/misc/binutils/plugins-no-BINDIR.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 884931069
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 31870
+      },
+      "children": [],
+      "messages": [
+        "derivation evaluated to /nix/store/1bxizw9ww8ibvy4y6c2nflzyh15w2h5w-test-app.drv",
+        "derivation evaluated to /nix/store/6m7z2n2f1nmlfpvxqkg1qqws1939v7gc-test-helper.drv",
+        "derivation evaluated to /nix/store/8xr2nmpzflp8n0h3cb8xwxj5ffxsr8xj-basic-test.drv",
+        "derivation evaluated to /nix/store/k3kgy77dixyipx9hdbkgcgbkyv8gnjqm-format-check.drv",
+        "derivation evaluated to /nix/store/yl9z0afhsplv5agywhd97943wy02mdsc-slow-test.drv",
+        "\u001b[35;1mwarning:\u001b[0m app '\u001b[35;1mapps.x86_64-linux.default\u001b[0m' lacks attribute 'meta'"
+      ]
+    },
+    "119150982725734": {
+      "id": 119150982725734,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/tools/text/gnupatch/CVE-2018-6952.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 978897450
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 74409
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725645": {
+      "id": 119150982725645,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/setup-hooks/move-systemd-user-units.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 864375127
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 31669
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725666": {
+      "id": 119150982725666,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/interpreters/perl/CVE-2024-56406.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 881473546
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 38559
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725679": {
+      "id": 119150982725679,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/tools/misc/binutils/0001-Revert-libtool.m4-fix-the-NM-nm-over-here-B-option-w.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 884792841
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 35570
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725721": {
+      "id": 119150982725721,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/libraries/attr/musl.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 971445190
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 67890
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725673": {
+      "id": 119150982725673,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/shells/bash/fix-pop-var-context-error.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 883308061
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 30870
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725728": {
+      "id": 119150982725728,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/libraries/glibc/locales-builder.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 975025522
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 34480
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725722": {
+      "id": 119150982725722,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/tools/misc/coreutils/fix-mix-flags-deps-libintl.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 971953384
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 41389
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725741": {
+      "id": 119150982725741,
+      "level": 3,
+      "parent": 0,
+      "text": "checking derivation checks.x86_64-linux.slow-test",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 981445825
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 96589
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725692": {
+      "id": 119150982725692,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/os-specific/linux/kernel-headers/no-relocs.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 893006420
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 61609
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725749": {
+      "id": 119150982725749,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/by-name/ma/makeBinaryWrapper/make-binary-wrapper.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 984585323
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 87619
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725650": {
+      "id": 119150982725650,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/setup-hooks/set-source-date-epoch-to-latest.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 864589524
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 33289
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725729": {
+      "id": 119150982725729,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/by-name/lz/lzip/lzip-setup-hook.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 978351297
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 38110
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725639": {
+      "id": 119150982725639,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/setup-hooks/audit-tmpdir.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 864125250
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 43770
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725659": {
+      "id": 119150982725659,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/wrapper-common/darwin-sdk-setup.bash' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 878205040
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 30759
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725653": {
+      "id": 119150982725653,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/setup-hooks/update-autotools-gnu-config-scripts.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 876952537
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 49879
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725678": {
+      "id": 119150982725678,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/tools/misc/binutils/deterministic.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 884733752
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 45559
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725636": {
+      "id": 119150982725636,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/stdenv/generic/default-builder.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 863221822
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 158348
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725713": {
+      "id": 119150982725713,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/libraries/glibc/dont-use-system-ld-so-preload.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 905432032
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 35810
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725750": {
+      "id": 119150982725750,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/libraries/openssl/3.0/nix-ssl-cert-file.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 986424938
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 67999
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725684": {
+      "id": 119150982725684,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/tools/misc/binutils/avr-size.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 885017748
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 52849
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725730": {
+      "id": 119150982725730,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/tools/text/gnupatch/CVE-2018-6951.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 978603824
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 37949
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725747": {
+      "id": 119150982725747,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/fetchurl/builder.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 983154952
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 83029
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725697": {
+      "id": 119150982725697,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/by-name/au/autoconf-archive/0001-ax_check_gl.m4-properly-quote-m4_fatal.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 901860140
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 45080
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725708": {
+      "id": 119150982725708,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/interpreters/python/cpython/platform-triplet-detection.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 903494988
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 41700
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725754": {
+      "id": 119150982725754,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/by-name/ke/keyutils/0001-Remove-unused-function-after_eq.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 989794483
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 50119
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725642": {
+      "id": 119150982725642,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/setup-hooks/move-docs.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 864258948
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 31430
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725662": {
+      "id": 119150982725662,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/cc-wrapper/add-flags.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 878592625
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 38969
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725664": {
+      "id": 119150982725664,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/cc-wrapper/setup-hook.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 878719293
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 35669
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725740": {
+      "id": 119150982725740,
+      "level": 3,
+      "parent": 0,
+      "text": "checking derivation checks.x86_64-linux.format-check",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 981343837
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 98718
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725700": {
+      "id": 119150982725700,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/pkg-config-wrapper/pkg-config-wrapper.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 902464822
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 43450
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725690": {
+      "id": 119150982725690,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/compilers/gcc/patches/ppc-musl.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 889966261
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 31950
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725640": {
+      "id": 119150982725640,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/setup-hooks/compress-man-pages.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 864177499
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 34080
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725651": {
+      "id": 119150982725651,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/setup-hooks/strip.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 864630713
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 35820
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725652": {
+      "id": 119150982725652,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/stdenv/generic/setup.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 864680613
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 103458
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725727": {
+      "id": 119150982725727,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/tools/archivers/gnutar/link-libiconv.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 974411210
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 34850
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725716": {
+      "id": 119150982725716,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/libraries/glibc/nix-nss-open-files.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 905566300
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 35210
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725705": {
+      "id": 119150982725705,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/interpreters/python/cpython/CVE-2025-0938.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 903319791
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 59229
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725707": {
+      "id": 119150982725707,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/interpreters/python/cpython/3.12/CVE-2024-12254.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 903443819
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 37539
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725658": {
+      "id": 119150982725658,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/wrapper-common/utils.bash' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 878159840
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 37460
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725675": {
+      "id": 119150982725675,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/libraries/gettext/0001-msginit-Do-not-use-POT-Creation-Date.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 883736615
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 32450
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725710": {
+      "id": 119150982725710,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/libraries/glibc/2.40-master.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 904106250
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 1170154
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725724": {
+      "id": 119150982725724,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/tools/build-managers/gnumake/patches/0001-No-impure-bin-sh.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 973776259
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 48589
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725739": {
+      "id": 119150982725739,
+      "level": 3,
+      "parent": 0,
+      "text": "checking derivation checks.x86_64-linux.basic-test",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 981226248
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 113869
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725751": {
+      "id": 119150982725751,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/libraries/openssl/3.0/openssl-disable-kernel-detection.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 986510467
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 42429
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725753": {
+      "id": 119150982725753,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/by-name/ke/keyutils/conf-symlink.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 989713304
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 69319
+      },
+      "children": [],
+      "messages": []
+    },
+    "119163867627521": {
+      "id": 119163867627521,
+      "level": 0,
+      "parent": 0,
+      "text": "",
+      "entry_type": 104,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 992069752
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 5407897
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725744": {
+      "id": 119150982725744,
+      "level": 3,
+      "parent": 0,
+      "text": "checking flake output 'devShells'",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 981583663
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 10398650
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725667": {
+      "id": 119150982725667,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/interpreters/perl/no-sys-dirs-5.40.0.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 881521145
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 48950
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725654": {
+      "id": 119150982725654,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/bintools-wrapper/ld-wrapper.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 877889084
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 64749
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725656": {
+      "id": 119150982725656,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/bintools-wrapper/add-flags.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 878074082
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 32329
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725657": {
+      "id": 119150982725657,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/bintools-wrapper/add-hardening.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 878112991
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 38680
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725695": {
+      "id": 119150982725695,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/tools/misc/file/32-bit-time_t.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 897642677
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 77909
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725755": {
+      "id": 119150982725755,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/by-name/ke/keyutils/pkg-config-static.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 989856732
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 40609
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725714": {
+      "id": 119150982725714,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/libraries/glibc/fix_path_attribute_in_getconf.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 905482871
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 31140
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725731": {
+      "id": 119150982725731,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/tools/text/gnupatch/Allow_input_files_to_be_missing_for_ed-style_patches.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 978653533
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 33330
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725748": {
+      "id": 119150982725748,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/fetchurl/write-mirror-list.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 983497578
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 61979
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725677": {
+      "id": 119150982725677,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/by-name/ex/expand-response-params/expand-response-params.c' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 884286938
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 66669
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725685": {
+      "id": 119150982725685,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/tools/misc/binutils/windres-locate-gcc.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 885082237
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 32070
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725698": {
+      "id": 119150982725698,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/by-name/au/autoconf-archive/0002-ax_check_glx.m4-properly-quote-m4_fatal.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 901923769
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 31260
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725683": {
+      "id": 119150982725683,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/tools/misc/binutils/0001-libtool.m4-update-macos-version-detection-block.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 884974519
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 31649
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725733": {
+      "id": 119150982725733,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/tools/text/gnupatch/CVE-2018-1000156.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 978778511
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 87869
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725703": {
+      "id": 119150982725703,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/pkg-config-wrapper/setup-hook.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 903038974
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 33170
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725736": {
+      "id": 119150982725736,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/tools/text/gnupatch/CVE-2019-13638-and-CVE-2018-20969.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 979125657
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 51809
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725665": {
+      "id": 119150982725665,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/cc-wrapper/cc-wrapper.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 878770172
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 38420
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725663": {
+      "id": 119150982725663,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/build-support/cc-wrapper/add-hardening.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 878639834
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 34739
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725637": {
+      "id": 119150982725637,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/stdenv/linux/bootstrap-tools/glibc/unpack-bootstrap-tools.sh' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 863408640
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 62879
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725696": {
+      "id": 119150982725696,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/libraries/libffi/label-before-cfi_startproc.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 900577098
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 41179
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725712": {
+      "id": 119150982725712,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/libraries/glibc/dont-use-system-ld-so-cache.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 905373103
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 47499
+      },
+      "children": [],
+      "messages": []
+    },
+    "119150982725715": {
+      "id": 119150982725715,
+      "level": 5,
+      "parent": 0,
+      "text": "copying '/nix/store/lc5bxq4vsgpjjc7i9phdm8s0bxjz0drm-source/pkgs/development/libraries/glibc/fix-x64-abi.patch' to the store",
+      "entry_type": 0,
+      "started_at": {
+        "secs_since_epoch": 1766680937,
+        "nanos_since_epoch": 905522181
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 34389
+      },
+      "children": [],
+      "messages": [
+        "derivation evaluated to /nix/store/gcahvfxivppv9xjj98crnfp5iq9jsh3m-nix-shell.drv"
+      ]
+    }
+  },
+  "root_activities": [
+    119150982725632,
+    119150982725633,
+    119150982725634,
+    119150982725635,
+    119150982725636,
+    119150982725637,
+    119150982725638,
+    119150982725639,
+    119150982725640,
+    119150982725641,
+    119150982725642,
+    119150982725643,
+    119150982725644,
+    119150982725645,
+    119150982725646,
+    119150982725647,
+    119150982725648,
+    119150982725649,
+    119150982725650,
+    119150982725651,
+    119150982725652,
+    119150982725653,
+    119150982725654,
+    119150982725655,
+    119150982725656,
+    119150982725657,
+    119150982725658,
+    119150982725659,
+    119150982725660,
+    119150982725661,
+    119150982725662,
+    119150982725663,
+    119150982725664,
+    119150982725665,
+    119150982725666,
+    119150982725667,
+    119150982725668,
+    119150982725669,
+    119150982725670,
+    119150982725671,
+    119150982725672,
+    119150982725673,
+    119150982725674,
+    119150982725675,
+    119150982725676,
+    119150982725677,
+    119150982725678,
+    119150982725679,
+    119150982725680,
+    119150982725681,
+    119150982725682,
+    119150982725683,
+    119150982725684,
+    119150982725685,
+    119150982725686,
+    119150982725687,
+    119150982725688,
+    119150982725689,
+    119150982725690,
+    119150982725691,
+    119150982725692,
+    119150982725693,
+    119150982725694,
+    119150982725695,
+    119150982725696,
+    119150982725697,
+    119150982725698,
+    119150982725699,
+    119150982725700,
+    119150982725701,
+    119150982725702,
+    119150982725703,
+    119150982725704,
+    119150982725705,
+    119150982725706,
+    119150982725707,
+    119150982725708,
+    119150982725709,
+    119150982725710,
+    119150982725711,
+    119150982725712,
+    119150982725713,
+    119150982725714,
+    119150982725715,
+    119150982725716,
+    119150982725717,
+    119150982725718,
+    119150982725719,
+    119150982725720,
+    119150982725721,
+    119150982725722,
+    119150982725723,
+    119150982725724,
+    119150982725725,
+    119150982725726,
+    119150982725727,
+    119150982725728,
+    119150982725729,
+    119150982725730,
+    119150982725731,
+    119150982725732,
+    119150982725733,
+    119150982725734,
+    119150982725735,
+    119150982725736,
+    119150982725737,
+    119150982725738,
+    119150982725739,
+    119150982725740,
+    119150982725741,
+    119150982725742,
+    119150982725743,
+    119150982725744,
+    119150982725745,
+    119150982725746,
+    119150982725747,
+    119150982725748,
+    119150982725749,
+    119150982725750,
+    119150982725751,
+    119150982725752,
+    119150982725753,
+    119150982725754,
+    119150982725755,
+    119150982725756,
+    119163867627520,
+    119163867627521,
+    119163867627522,
+    119163867627523
+  ],
+  "warnings": [
+    "\u001b[35;1mwarning:\u001b[0m ignoring untrusted flake configuration setting 'substituters'.\nPass '--accept-flake-config' to trust it",
+    "\u001b[35;1mwarning:\u001b[0m app '\u001b[35;1mapps.x86_64-linux.default\u001b[0m' lacks attribute 'meta'"
+  ],
+  "errors": [],
+  "raw_logs": []
+}
