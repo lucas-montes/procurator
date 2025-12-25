@@ -13,19 +13,18 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tracing::info;
 
-use crate::{builds::BuildStatus, config::Config, job_queue::JobQueue};
+use crate::{builds::{BuildInfo, BuildStatus}, config::Config, job_queue::JobQueue};
+
 
 
 #[derive(Debug, Serialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
-enum BuildEvent {
-    Created { build: BuildInfo },
-    Updated { build: BuildInfo },
-    Completed { build: BuildInfo },
+pub struct BuildsListResponse {
+    builds: Vec<BuildInfo>,
+    total: usize,
 }
 
+
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct BuildRequest {
     repo: String,
     bare_repo_path: String,
@@ -67,13 +66,10 @@ async fn create_build(
         .strip_prefix("refs/heads/")
         .unwrap_or(&req.ref_name);
 
-    // Convert bare_repo_path to PathBuf
-    let repo_path = PathBuf::from(&req.bare_repo_path);
-
-    //TODO: check if this works as expected
+    //TODO: check if this works as expected. Maybe we want to use username/reponame
 
     // Enqueue build with bare repo path
-    match state.queue.enqueue(repo_path, &req.new_rev, branch).await {
+    match state.queue.enqueue(&req.bare_repo_path, &req.new_rev, branch).await {
         Ok(id) => {
             info!(
                 build_id = id,

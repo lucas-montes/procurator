@@ -5,12 +5,10 @@
 //!
 //! This layer is responsible ONLY for database concerns - no business logic.
 
-use std::str::FromStr;
+use std::{ops::Deref, str::FromStr};
 
-use sqlx::{sqlite::SqliteConnectOptions, FromRow, SqlitePool};
+use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
 use tracing::info;
-
-use crate::builds::{Build, BuildId, BuildStatus, CommitInfo, RepositoryInfo, RetryInfo, Timestamps};
 
 // ============================================================================
 // Error Types
@@ -52,54 +50,53 @@ impl From<sqlx::Error> for DatabaseError {
 
 pub type Result<T> = std::result::Result<T, DatabaseError>;
 
-// ============================================================================
-// Data Transfer Objects (DTOs)
-// ============================================================================
-
-/// Database row with JOINed repository and user information
-/// Maps directly to SQL query results
-#[derive(Debug, Clone, FromRow)]
+// DTO for reading builds from simplified tables
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct BuildRow {
-    pub id: i64,
-    pub commit_hash: String,
-    pub branch: String,
-    #[sqlx(try_from = "String")]
-    pub status: BuildStatus,
-    pub retry_count: i64,
-    pub max_retries: i64,
-    pub created_at: String,
-    pub started_at: Option<String>,
-    pub finished_at: Option<String>,
-    // JOINed from repos table
-    pub repo_name: String,
-    // JOINed from users table
-    pub username: String,
+    id: i64,
+    repo_path: String,
+    commit_hash: String,
+    branch: String,
+    status: String,
+    retry_count: i64,
+    max_retries: i64,
+    created_at: String,
+    started_at: Option<String>,
+    finished_at: Option<String>,
 }
 
-// ============================================================================
-// Mapping: Database → Domain
-// ============================================================================
-
-impl From<BuildRow> for Build {
-    fn from(row: BuildRow) -> Self {
-        Build::new(
-            BuildId(row.id),
-            RepositoryInfo::new(row.username, row.repo_name),
-            CommitInfo::new(row.commit_hash, row.branch),
-            row.status,
-            RetryInfo::new(row.retry_count, row.max_retries),
-            Timestamps::new(row.created_at, row.started_at, row.finished_at),
-        )
-    }
+impl BuildRow {
+    pub fn id(&self) -> i64 { self.id }
+    pub fn repo_path(&self) -> &str { &self.repo_path }
+    pub fn commit_hash(&self) -> &str { &self.commit_hash }
+    pub fn branch(&self) -> &str { &self.branch }
+    pub fn status(&self) -> &str { &self.status }
+    pub fn retry_count(&self) -> i64 { self.retry_count }
+    pub fn max_retries(&self) -> i64 { self.max_retries }
+    pub fn created_at(&self) -> &str { &self.created_at }
+    pub fn started_at(&self) -> Option<&str> { self.started_at.as_deref() }
+    pub fn finished_at(&self) -> Option<&str> { self.finished_at.as_deref() }
 }
 
-// ============================================================================
-// Database Core
-// ============================================================================
+// Structured summary placeholder - stores arbitrary JSON produced by the runner
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BuildSummary {
+    pub total_duration_seconds: Option<i64>,
+    pub steps: Vec<String>,
+    pub packages_checked: Vec<String>,
+    pub checks_run: Vec<String>,
+}
 
 #[derive(Clone)]
 pub struct Database {
     pool: SqlitePool,
+}
+
+impl Deref for Database {
+    type Target = SqlitePool;
+    fn deref(&self) -> &Self::Target {
+        &self.pool
+    }
 }
 
 impl Database {
@@ -118,44 +115,14 @@ impl Database {
     }
 
     async fn initialize_tables(&self) -> Result<()> {
-        // Users table
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL UNIQUE,
-                email TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        // Repos table (now with user_id foreign key)
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS repos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                name TEXT NOT NULL,
-                path TEXT NOT NULL UNIQUE,
-                description TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                UNIQUE(user_id, name)
-            )
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        // Builds table
+        // Simplified single table for builds. Status will be used to track lifecycle
+        // (queued, running, success, failed, canceled). This keeps schema simple
+        // while allowing efficient queries and straightforward migrations.
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS builds (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                repo_id INTEGER NOT NULL,
+                repo_path TEXT NOT NULL,
                 commit_hash TEXT NOT NULL,
                 branch TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'queued',
@@ -164,22 +131,21 @@ impl Database {
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 started_at TEXT,
                 finished_at TEXT,
-                FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE
+                last_heartbeat TEXT
             )
             "#,
         )
         .execute(&self.pool)
         .await?;
 
-        // Build logs table
+        // Build logs table (referencing builds.build_id)
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS build_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 build_id INTEGER NOT NULL,
                 log_line TEXT NOT NULL,
-                timestamp TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (build_id) REFERENCES builds(id) ON DELETE CASCADE
+                timestamp TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             "#,
         )
@@ -193,24 +159,20 @@ impl Database {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 build_id INTEGER NOT NULL UNIQUE,
                 summary_json TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (build_id) REFERENCES builds(id) ON DELETE CASCADE
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             "#,
         )
         .execute(&self.pool)
         .await?;
 
+
         // Create indexes for performance
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_repos_user_id ON repos(user_id)")
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_builds_status_created ON builds(status, created_at)")
             .execute(&self.pool)
             .await?;
 
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_builds_repo_id ON builds(repo_id)")
-            .execute(&self.pool)
-            .await?;
-
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_builds_status ON builds(status)")
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_builds_repo_path ON builds(repo_path)")
             .execute(&self.pool)
             .await?;
 
@@ -218,14 +180,12 @@ impl Database {
             .execute(&self.pool)
             .await?;
 
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_build_summaries_build_id ON build_summaries(build_id)")
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_build_summaries_build_id ON build_summaries(build_id)",
+        )
+        .execute(&self.pool)
+        .await?;
 
         Ok(())
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
     }
 }

@@ -45,5 +45,4 @@ impl Config {
     pub fn init() -> &'static Config {
         CONFIG.get_or_init(|| Config::default())
     }
-
 }

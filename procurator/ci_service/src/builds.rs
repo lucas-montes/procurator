@@ -1,5 +1,56 @@
-
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct BuildJob {
+    id: i64,
+    repo_path: String,
+    commit_hash: String,
+    branch: String,
+    status: String,
+    retry_count: u8,
+    max_retries: u8,
+    created_at: String,
+    started_at: Option<String>,
+    finished_at: Option<String>,
+}
+
+impl BuildJob {
+    pub fn id(&self) -> i64 {
+        self.id
+    }
+
+    pub fn git_url(&self) -> String {
+        format!("{}#{}", self.repo_path, self.commit_hash)
+    }
+
+    pub fn can_retry(&self) -> bool {
+        self.retry_count < self.max_retries
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct BuildInfo {
+    id: i64,
+    repo_path: String,
+    commit_hash: String,
+    branch: String,
+    status: BuildStatus,
+    retry_count: u8,
+}
+
+impl From<BuildJob> for BuildInfo {
+    fn from(b: BuildJob) -> Self {
+        let status = b.status.parse().unwrap_or(BuildStatus::Queued);
+        Self {
+            id: b.id,
+            repo_path: b.repo_path,
+            commit_hash: b.commit_hash,
+            branch: b.branch,
+            status,
+            retry_count: b.retry_count as u8,
+        }
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

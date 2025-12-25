@@ -10,13 +10,13 @@
     # Define the machines in your cluster
     machines = {
       victoria = {
-        cpu = 1;
-        memory = { amount = 1; unit = "GB"; };
+        cpu = 1.0;
+        memory = { amount = 1.0; unit = "GB"; };
         roles = [ "tests" "build" "monitoring" ];
       };
       tauri = {
-        cpu = 3;
-        memory = { amount = 3; unit = "GB"; };
+        cpu = 3.0;
+        memory = { amount = 3.0; unit = "GB"; };
         roles = [ "production" "DST" "staging" ];
       };
     };
@@ -29,13 +29,13 @@
         environments = {
           production = {
             cpu = 1.5;
-            memory = { amount = 1; unit = "GB"; };
+            memory = { amount = 1.0; unit = "GB"; };
             replicas = 2;
             healthCheck = "/health";
           };
           staging = {
             cpu = 1.0;
-            memory = { amount = 512; unit = "MB"; };
+            memory = { amount = 0.512; unit = "MB"; };
           };
         };
       };

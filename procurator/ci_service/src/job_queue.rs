@@ -10,13 +10,16 @@
 //!
 //! The queue is thread-safe and can be shared across multiple tasks via Arc.
 
-use std::path::PathBuf;
+// std::path::PathBuf was unused here previously
 
-use crate::database::{Database, DatabaseError};
-use crate::builds::{Build, BuildStatus};
+use crate::database::{Database, DatabaseError, BuildSummary};
+use crate::builds::{BuildStatus, BuildJob};
 
 
 pub type Result<T> = std::result::Result<T, DatabaseError>;
+
+
+
 
 #[derive(Clone)]
 pub struct JobQueue {
@@ -29,45 +32,61 @@ impl JobQueue {
     }
 
     /// Enqueue a new build job
-    pub async fn enqueue(&self, repo_path: PathBuf, commit: &str, branch: &str) -> Result<i64> {
-        let repo_path_str = repo_path.to_string_lossy().to_string();
-        let repo_id = self.repo_store.get_or_create_repo(&repo_path_str).await?;
-
+    pub async fn enqueue(&self, repo_path: &str, commit: &str, branch: &str) -> Result<i64> {
         let result = sqlx::query(
-            "INSERT INTO builds (repo_id, commit_hash, branch) VALUES (?, ?, ?)"
+            "INSERT INTO builds (repo_path, commit_hash, branch, status) VALUES (?, ?, ?, 'queued')"
         )
-        .bind(repo_id)
+        .bind(repo_path)
         .bind(commit)
         .bind(branch)
-        .execute(self.db.pool())
+        .execute(&*self.db)
         .await?;
 
         Ok(result.last_insert_rowid())
     }
 
     /// Get the next pending build from the queue
-    pub async fn get_pending(&self) -> Result<Option<Build>> {
-        let build_row = sqlx::query_as::<_, crate::database::BuildRow>(
-            r#"
-            SELECT
-                b.id, b.commit_hash, b.branch, b.status,
-                b.retry_count, b.max_retries,
-                b.created_at, b.started_at, b.finished_at,
-                r.name as repo_name,
-                u.username as username
-            FROM builds b
-            JOIN repos r ON b.repo_id = r.id
-            JOIN users u ON r.user_id = u.id
-            WHERE b.status = ?
-            ORDER BY b.created_at
-            LIMIT 1
-            "#,
+    pub async fn get_pending(&self) -> Result<Option<BuildJob>> {
+        // Atomic claim: update a single queued row to running and read it back.
+
+        let now = chrono::Utc::now().to_rfc3339();
+
+                let updated = sqlx::query(
+                        r#"UPDATE builds SET status = 'running', started_at = ?
+                             WHERE id = (
+                                 SELECT id FROM builds WHERE status = 'queued' ORDER BY created_at LIMIT 1
+                             )"#,
+                )
+                .bind(&now)
+                .execute(&*self.db)
+                .await?;
+
+        if updated.rows_affected() == 0 {
+            return Ok(None);
+        }
+
+        #[derive(sqlx::FromRow)]
+        struct Row {
+            id: i64,
+            repo_path: String,
+            commit_hash: String,
+            branch: String,
+            status: String,
+            retry_count: i64,
+            max_retries: i64,
+            created_at: String,
+            started_at: Option<String>,
+            finished_at: Option<String>,
+        }
+
+        let job = sqlx::query_as::<_, BuildJob>(
+            r#"SELECT id, repo_path, commit_hash, branch, status, retry_count, max_retries, created_at, started_at, finished_at
+               FROM builds WHERE status = 'running' ORDER BY started_at LIMIT 1"#
         )
-        .bind(BuildStatus::Queued.as_str())
-        .fetch_optional(self.db.pool())
+        .fetch_one(&*self.db)
         .await?;
 
-        Ok(build_row.map(Build::from))
+        Ok(Some(job))
     }
 
     /// Update the status of a build
@@ -80,7 +99,7 @@ impl JobQueue {
                     .bind(status.as_str())
                     .bind(&now)
                     .bind(id)
-                    .execute(self.db.pool())
+                    .execute(&*self.db)
                     .await?;
             }
             BuildStatus::Success | BuildStatus::Failed => {
@@ -88,14 +107,14 @@ impl JobQueue {
                     .bind(status.as_str())
                     .bind(&now)
                     .bind(id)
-                    .execute(self.db.pool())
+                    .execute(&*self.db)
                     .await?;
             }
             _ => {
                 sqlx::query("UPDATE builds SET status = ? WHERE id = ?")
                     .bind(status.as_str())
                     .bind(id)
-                    .execute(self.db.pool())
+                    .execute(&*self.db)
                     .await?;
             }
         }
@@ -108,82 +127,100 @@ impl JobQueue {
         sqlx::query("UPDATE builds SET retry_count = retry_count + 1, status = ? WHERE id = ?")
             .bind(BuildStatus::Queued.as_str())
             .bind(id)
-            .execute(self.db.pool())
+            .execute(&*self.db)
             .await?;
 
         Ok(())
     }
 
     /// Get a specific build by ID
-    pub async fn get_build(&self, id: i64) -> Result<Build> {
-        let build_row = sqlx::query_as::<_, crate::database::BuildRow>(
+    pub async fn get_build(&self, id: i64) -> Result<BuildJob> {
+        #[derive(sqlx::FromRow)]
+        struct Row {
+            id: i64,
+            repo_path: String,
+            commit_hash: String,
+            branch: String,
+            status: String,
+            retry_count: i64,
+            max_retries: i64,
+            created_at: String,
+            started_at: Option<String>,
+            finished_at: Option<String>,
+        }
+
+        let job = sqlx::query_as::<_, BuildJob>(
             r#"
             SELECT
-                b.id, b.commit_hash, b.branch, b.status,
-                b.retry_count, b.max_retries,
-                b.created_at, b.started_at, b.finished_at,
-                r.name as repo_name,
-                u.username as username
-            FROM builds b
-            JOIN repos r ON b.repo_id = r.id
-            JOIN users u ON r.user_id = u.id
-            WHERE b.id = ?
+                id, repo_path, commit_hash, branch, status,
+                retry_count, max_retries,
+                created_at, started_at, finished_at
+            FROM builds
+            WHERE id = ?
             "#,
         )
         .bind(id)
-        .fetch_optional(self.db.pool())
+        .fetch_optional(&*self.db)
         .await?
         .ok_or_else(|| DatabaseError::NotFound(format!("Build {} not found", id)))?;
 
-        Ok(Build::from(build_row))
+        Ok(job)
     }
 
     /// List all builds (for web UI)
-    pub async fn list_all_builds(&self) -> Result<Vec<Build>> {
-        let build_rows = sqlx::query_as::<_, crate::database::BuildRow>(
+    pub async fn list_all_builds(&self) -> Result<Vec<BuildJob>> {
+        #[derive(sqlx::FromRow)]
+        struct Row {
+            id: i64,
+            repo_path: String,
+            commit_hash: String,
+            branch: String,
+            status: String,
+            retry_count: i64,
+            max_retries: i64,
+            created_at: String,
+            started_at: Option<String>,
+            finished_at: Option<String>,
+        }
+
+        let jobs = sqlx::query_as::<_, BuildJob>(
             r#"
             SELECT
-                b.id, b.commit_hash, b.branch, b.status,
-                b.retry_count, b.max_retries,
-                b.created_at, b.started_at, b.finished_at,
-                r.name as repo_name,
-                u.username as username
-            FROM builds b
-            JOIN repos r ON b.repo_id = r.id
-            JOIN users u ON r.user_id = u.id
-            ORDER BY b.created_at DESC
+                id, repo_path, commit_hash, branch, status,
+                retry_count, max_retries,
+                created_at, started_at, finished_at
+            FROM builds
+            ORDER BY created_at DESC
             LIMIT 100
             "#,
         )
-        .fetch_all(self.db.pool())
+        .fetch_all(&*self.db)
         .await?;
 
-        Ok(build_rows.into_iter().map(Build::from).collect())
+        Ok(jobs)
     }
 
     /// Get the latest build for a specific repository
-    pub async fn get_latest_build_for_repo(&self, repo_name: &str) -> Result<Option<Build>> {
-        let build_row = sqlx::query_as::<_, crate::database::BuildRow>(
+    /// Get the latest build for a repository prefix (matches repo_path)
+    pub async fn get_latest_build_for_repo(&self, repo_path_prefix: &str) -> Result<Option<BuildJob>> {
+
+        let job = sqlx::query_as::<_, BuildJob>(
             r#"
             SELECT
-                b.id, b.commit_hash, b.branch, b.status,
-                b.retry_count, b.max_retries,
-                b.created_at, b.started_at, b.finished_at,
-                r.name as repo_name,
-                u.username as username
-            FROM builds b
-            JOIN repos r ON b.repo_id = r.id
-            JOIN users u ON r.user_id = u.id
-            WHERE r.name = ?
-            ORDER BY b.created_at DESC
+                id, repo_path, commit_hash, branch, status,
+                retry_count, max_retries,
+                created_at, started_at, finished_at
+            FROM builds
+            WHERE repo_path LIKE ?
+            ORDER BY created_at DESC
             LIMIT 1
             "#,
         )
-        .bind(repo_name)
-        .fetch_optional(self.db.pool())
+        .bind(format!("{}%", repo_path_prefix))
+        .fetch_optional(&*self.db)
         .await?;
 
-        Ok(build_row.map(Build::from))
+        Ok(job)
     }
 
     // ========================================================================
@@ -196,7 +233,7 @@ impl JobQueue {
             "SELECT log_line FROM build_logs WHERE build_id = ? ORDER BY id"
         )
         .bind(id)
-        .fetch_all(self.db.pool())
+        .fetch_all(&*self.db)
         .await?;
 
         if log_lines.is_empty() {
@@ -214,7 +251,7 @@ impl JobQueue {
         )
         .bind(id)
         .bind(log)
-        .execute(self.db.pool())
+        .execute(&*self.db)
         .await?;
 
         Ok(())
@@ -225,7 +262,7 @@ impl JobQueue {
         // Delete existing logs
         sqlx::query("DELETE FROM build_logs WHERE build_id = ?")
             .bind(id)
-            .execute(self.db.pool())
+            .execute(&*self.db)
             .await?;
 
         // Insert new logs
@@ -235,16 +272,13 @@ impl JobQueue {
             )
             .bind(id)
             .bind(logs)
-            .execute(self.db.pool())
+            .execute(&*self.db)
             .await?;
         }
 
         Ok(())
     }
 
-    // ========================================================================
-    // Build Summaries
-    // ========================================================================
 
     /// Store structured build summary
     pub async fn set_build_summary(&self, id: i64, summary: &BuildSummary) -> Result<()> {
@@ -256,7 +290,7 @@ impl JobQueue {
         )
         .bind(id)
         .bind(&summary_json)
-        .execute(self.db.pool())
+        .execute(&*self.db)
         .await?;
 
         Ok(())
@@ -268,7 +302,7 @@ impl JobQueue {
             "SELECT summary_json FROM build_summaries WHERE build_id = ?"
         )
         .bind(id)
-        .fetch_optional(self.db.pool())
+        .fetch_optional(&*self.db)
         .await?;
 
         if let Some(json) = summary_json {
@@ -286,7 +320,7 @@ impl JobQueue {
             "SELECT COUNT(*) FROM build_summaries WHERE build_id = ?"
         )
         .bind(id)
-        .fetch_one(self.db.pool())
+        .fetch_one(&*self.db)
         .await?;
 
         Ok(count > 0)

@@ -5,6 +5,11 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
   };
 
+    nixConfig = {
+    substituters = [];
+    # post-build-hook = "${./upload-hook.sh}";
+  };
+
   outputs = { self, nixpkgs }:
     let
       system = "x86_64-linux";
@@ -23,7 +28,7 @@
         };
 
         # Another simple package for testing multiple packages
-        helper = pkgs.writeTextFile {
+        helper-package-2 = pkgs.writeTextFile {
           name = "test-helper";
           text = ''
             #!/bin/sh

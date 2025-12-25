@@ -15,8 +15,8 @@ use repo_outils::nix;
 use std::sync::Arc;
 use tracing::{error, info};
 
-use crate::builds::{Build, BuildStatus};
-use crate::config::Config;
+use crate::builds::{BuildJob, BuildStatus};
+use crate::database::BuildSummary as DbBuildSummary;
 use crate::job_queue::JobQueue;
 use nix::run_checks_with_logs;
 
@@ -106,22 +106,18 @@ impl Worker {
             match self.queue.get_pending().await {
                 Ok(Some(build)) => {
                     if let Err(e) = self.process_build(&build).await {
-                        if let WorkerError::Queue(err) = e {
+                        if let WorkerError::Queue(ref err) = e {
                             error!(
-                                build_id = build.id(),
-                                repo = build.repo_name(),
-                                branch = build.branch(),
+                                ?build,
                                 error = %err,
-                                "Build processing failed"
+                                "Build failed"
                             );
                         }
 
                         // Check if we can retry
                         if build.can_retry() {
                             info!(
-                                build_id = build.id(),
-                                attempt = build.retry_count() + 2,
-                                max_retries = build.max_retries() + 1,
+                                ?build,
                                 "Scheduling retry for build"
                             );
 
@@ -137,11 +133,9 @@ impl Worker {
                                     "Failed to increment retry count"
                                 );
                             };
-
                         } else {
                             info!(
                                 build_id = build.id(),
-                                max_retries = build.max_retries() + 1,
                                 "Build exhausted all retries, marking as failed"
                             );
                             if let Err(err) = self
@@ -171,14 +165,9 @@ impl Worker {
     }
 
     //TODO: we need to ensure that the repo has a flake.nix
-    async fn process_build(&self, build: &Build) -> Result<()> {
+    async fn process_build(&self, build: &BuildJob) -> Result<()> {
         info!(
-            build_id = build.id(),
-            repo = build.repo_name(),
-            branch = build.branch(),
-            commit = build.commit_hash(),
-            attempt = build.retry_count() + 1,
-            max_retries = build.max_retries() + 1,
+            build = ?build,
             "Starting build processing"
         );
 
@@ -187,19 +176,13 @@ impl Worker {
             .await
             .map_err(|e| WorkerError::Database(e.to_string()))?;
 
-        // Build has all the information we need - no parsing required!
-        let config = Config::init();
-        let repo_path = crate::git_manager::RepoPath::new(
-            &config.repos_base_path,
-            build.username(),
-            build.repo_name(),
-        );
-
-        let git_url = repo_path.to_nix_url_with_rev(build.commit_hash());
+        // Build has repo_path which is an identifier usable by nix (e.g. git+file://... or similar).
+        // We'll assume repo_path already encodes where to fetch the flake; append @<rev> if needed.
+        let git_url = build.git_url();
 
         info!(
             build_id = build.id(),
-            git_url = git_url.as_str(),
+            git_url,
             "Executing nix flake check"
         );
 
@@ -212,16 +195,23 @@ impl Worker {
 
         match run_checks_with_logs(&git_url).await {
             Ok(summary) => {
+                // Convert repo_outils::nix::BuildSummary into our database::BuildSummary
+                let db_summary = DbBuildSummary {
+                    total_duration_seconds: Some(summary.total_duration().as_secs() as i64),
+                    // StepTiming fields are private in repo_outils; store a minimal summary instead
+                    steps: vec![format!("{} steps", summary.steps().len())],
+                    packages_checked: summary.packages_checked().clone(),
+                    checks_run: summary.checks_run().clone(),
+                };
+
                 // Store the structured build summary
                 self.queue
-                    .set_build_summary(build.id(), &summary)
+                    .set_build_summary(build.id(), &db_summary)
                     .await
                     .map_err(|e| WorkerError::Database(e.to_string()))?;
 
                 info!(
-                    build_id = build.id(),
-                    repo = build.repo_name(),
-                    branch = build.branch(),
+                    git_url,
                     duration = ?summary.total_duration(),
                     steps_count = summary.steps().len(),
                     packages_checked = summary.packages_checked().len(),
@@ -237,8 +227,7 @@ impl Worker {
             Err(e) => {
                 error!(
                     build_id = build.id(),
-                    repo = build.repo_name(),
-                    branch = build.branch(),
+            git_url,
                     error = %e,
                     "Build failed"
                 );
