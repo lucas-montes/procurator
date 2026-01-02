@@ -18,7 +18,6 @@ use tracing::{error, info};
 use crate::builds::{BuildJob, BuildStatus};
 use crate::database::BuildSummary as DbBuildSummary;
 use crate::job_queue::JobQueue;
-use nix::run_checks_with_logs;
 
 use std::fmt;
 
@@ -67,22 +66,23 @@ impl From<Box<dyn std::error::Error + Send + Sync>> for WorkerError {
     }
 }
 
-impl From<nix::checks::ChecksError> for WorkerError {
-    fn from(err: nix::checks::ChecksError) -> Self {
+// Update this to use the new nix::Error instead of nix::LogsError
+impl From<nix::Error> for WorkerError {
+    fn from(err: nix::Error) -> Self {
         match err {
-            nix::checks::ChecksError::IoError(io_err) => WorkerError::Io(io_err),
-            nix::checks::ChecksError::ProcessFailed {
-                exit_code: _,
-                stderr,
-            } => WorkerError::Nix(stderr),
-            nix::checks::ChecksError::JsonParseError(json_err) => {
+            nix::Error::Io(io_err) => WorkerError::Io(io_err),
+            nix::Error::ProcessFailed { exit_code: _, stderr } => WorkerError::Nix(stderr),
+            nix::Error::JsonParse(json_err) => {
                 WorkerError::Process(format!("JSON parse error: {}", json_err))
             }
-            nix::checks::ChecksError::InvalidFlakePath(path) => {
+            nix::Error::InvalidFlakePath(path) => {
                 WorkerError::Nix(format!("Invalid flake path: {}", path))
             }
-            nix::checks::ChecksError::Timeout(duration) => {
-                WorkerError::Process(format!("Process timed out after {:?}", duration))
+            nix::Error::LogParsing(log_err) => {
+                WorkerError::Process(format!("Log parsing error: {}", log_err))
+            }
+            nix::Error::BuildOutputMissing => {
+                WorkerError::Process("Build output missing".to_string())
             }
         }
     }
@@ -176,8 +176,6 @@ impl Worker {
             .await
             .map_err(|e| WorkerError::Database(e.to_string()))?;
 
-        // Build has repo_path which is an identifier usable by nix (e.g. git+file://... or similar).
-        // We'll assume repo_path already encodes where to fetch the flake; append @<rev> if needed.
         let git_url = build.git_url();
 
         info!(
@@ -193,16 +191,15 @@ impl Worker {
             .await
             .map_err(|e| WorkerError::Database(e.to_string()))?;
 
-        match run_checks_with_logs(&git_url).await {
-            Ok(summary) => {
-                // Convert repo_outils::nix::BuildSummary into our database::BuildSummary
-                let db_summary = DbBuildSummary {
-                    total_duration_seconds: Some(summary.total_duration().as_secs() as i64),
-                    // StepTiming fields are private in repo_outils; store a minimal summary instead
-                    steps: vec![format!("{} steps", summary.steps().len())],
-                    packages_checked: summary.packages_checked().clone(),
-                    checks_run: summary.checks_run().clone(),
-                };
+        // Use the new flake_check function that returns CheckResult
+        match nix::flake_check(&git_url).await {
+            Ok(check_result) => {
+                // Access the summary through the accessor method
+                // let summary = check_result.summary();
+
+                // Convert repo_outils::nix::Summary into your database::BuildSummary
+                // You'll need to implement this conversion based on your DbBuildSummary structure
+                let db_summary = DbBuildSummary;
 
                 // Store the structured build summary
                 self.queue
@@ -210,24 +207,21 @@ impl Worker {
                     .await
                     .map_err(|e| WorkerError::Database(e.to_string()))?;
 
-                info!(
-                    git_url,
-                    duration = ?summary.total_duration(),
-                    steps_count = summary.steps().len(),
-                    packages_checked = summary.packages_checked().len(),
-                    checks_run = summary.checks_run().len(),
-                    "Build completed successfully"
-                );
-
                 self.queue
                     .update_status(build.id(), BuildStatus::Success)
                     .await
                     .map_err(|e| WorkerError::Database(e.to_string()))?;
+
+                // info!(
+                //     build_id = build.id(),
+                //     total_steps = summary.total_steps,
+                //     "Build completed successfully"
+                // );
             }
             Err(e) => {
                 error!(
                     build_id = build.id(),
-            git_url,
+                    git_url,
                     error = %e,
                     "Build failed"
                 );

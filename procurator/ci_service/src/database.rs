@@ -80,12 +80,7 @@ impl BuildRow {
 
 // Structured summary placeholder - stores arbitrary JSON produced by the runner
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct BuildSummary {
-    pub total_duration_seconds: Option<i64>,
-    pub steps: Vec<String>,
-    pub packages_checked: Vec<String>,
-    pub checks_run: Vec<String>,
-}
+pub struct BuildSummary;
 
 #[derive(Clone)]
 pub struct Database {

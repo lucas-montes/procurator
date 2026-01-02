@@ -1,5 +1,6 @@
 mod flake;
-pub mod checks;
+mod logs;
+mod commands;
 
-pub use flake::{FlakeMetadata, Infrastructure, };
-pub use checks::{run_checks_with_logs, BuildSummary, };
+pub use flake::{FlakeMetadata, Infrastructure};
+pub use commands::{flake_check, Error};
