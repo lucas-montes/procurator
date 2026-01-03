@@ -6,14 +6,19 @@ edition = "2024"
 [workspace.dependencies]
 capnp = "0.20.3"
 capnp-rpc = "0.20.3"
+
 tokio = { version = "1.4.0", features = ["net", "rt", "macros", "rt-multi-thread", "process", "fs"]}
 tokio-util = { version = "0.7.4", features = ["compat"] }
+
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
+
 uuid = { version = "1.17.0", features = ["v7"] }
-commands = { path = "commands" }
+
 futures = "0.3.0"
+
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite"] }
 
 axum = "0.8"
 serde = { version = "1.0", features = ["derive"] }
@@ -21,6 +26,7 @@ serde_json = "1.0"
 
 chrono = "0.4"
 
+commands = { path = "commands" }
 repo_outils = { path = "./repo_outils" }
 
 [dependencies]

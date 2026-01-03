@@ -229,11 +229,10 @@ impl Summary {
         self.total_steps
     }
 
-    pub fn duration_secs(&self) -> u64 {
+    pub fn duration(&self) -> Duration {
         self.started_at
             .duration_since(self.completed_at)
             .unwrap_or_default()
-            .as_secs()
     }
     pub fn timeline(&self) -> &[TimelineStep] {
         &self.timeline
@@ -244,7 +243,7 @@ impl Summary {
 #[derive(Serialize, Debug, Clone)]
 pub struct TimelineStep {
     text: String,
-    duration_secs: u64,
+    duration: Duration,
     children: Vec<TimelineStep>,
 }
 
@@ -253,8 +252,8 @@ impl TimelineStep {
         &self.text
     }
 
-    pub fn duration_secs(&self) -> u64 {
-        self.duration_secs
+    pub fn duration(&self) -> Duration {
+        self.duration
     }
 
     pub fn children(&self) -> &[TimelineStep] {
@@ -290,11 +289,12 @@ fn build_step_tree(
     all_steps: &[FinishedStep],
     steps_by_id: &HashMap<EntryId, &FinishedStep>,
 ) -> TimelineStep {
-    let duration_secs = step
+    let duration = step
         .completed_at
         .duration_since(step.started_at)
-        .unwrap_or_default()
-        .as_secs();
+        .unwrap_or_default();
+
+    //TODO: better formatting of durations
 
     // Find children (level 3 steps whose parent is this step's ID)
     let children: Vec<TimelineStep> = all_steps
@@ -305,7 +305,7 @@ fn build_step_tree(
 
     TimelineStep {
         text: step.text.clone(),
-        duration_secs,
+        duration,
         children,
     }
 }
@@ -483,15 +483,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_checks_detailed() {
-        let mut flake_path: String = env!("CARGO_MANIFEST_DIR").into();
-        flake_path.push('/');
-        flake_path.push_str("test-flake");
-        flake_path.push_str("nix-log");
-
         let started_at = SystemTime::now();
         let mut handler = State::default();
 
-        let stderr = File::open(flake_path).await.unwrap();
+        let stderr = File::open("test-flake/nix-log").await.unwrap();
 
         let reader = BufReader::new(stderr);
 

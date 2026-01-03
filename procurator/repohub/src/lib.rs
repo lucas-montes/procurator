@@ -1,5 +1,4 @@
-// mod api;
-// mod config;
-// mod database;
+mod config;
+mod database;
 // mod repo_manager;
-// mod web;
+mod web;

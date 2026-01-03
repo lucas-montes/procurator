@@ -411,7 +411,6 @@ dependencies = [
 name = "ci_service"
 version = "0.1.0"
 dependencies = [
- "askama",
  "axum",
  "chrono",
  "futures",
@@ -1986,6 +1985,17 @@ dependencies = [
 [[package]]
 name = "repohub"
 version = "0.1.0"
+dependencies = [
+ "askama",
+ "axum",
+ "repo_outils",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "ring"

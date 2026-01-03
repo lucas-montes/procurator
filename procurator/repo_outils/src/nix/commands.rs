@@ -1,14 +1,8 @@
-use serde::{Deserialize, Serialize};
-use std::{
-    ops::Not,
-    path::{Path, PathBuf},
-    time::SystemTime,
-};
+use serde::Serialize;
+use std::{ops::Not, path::Path, time::SystemTime};
 use tokio::{io::BufReader, process::Command};
 
-
-use super::logs::{self, Error as LogError,Parser, State, Summary};
-
+use super::logs::{Error as LogError, Parser, State, Summary};
 
 /// Errors specific to each command type
 #[derive(Debug)]
@@ -104,60 +98,6 @@ pub struct CheckResult {
     summary: Summary,
 }
 
-/// Result from `nix build`
-#[derive(Debug, Serialize)]
-pub struct BuildResult {
-    summary: Summary,
-    out_paths: Vec<PathBuf>,
-    success: bool,
-}
-
-/// Result from `nix flake show`
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct FlakeShow {
-    #[serde(default)]
-    description: Option<String>,
-
-    #[serde(default)]
-    packages: std::collections::HashMap<String, std::collections::HashMap<String, OutputInfo>>,
-
-    #[serde(default)]
-    checks: std::collections::HashMap<String, std::collections::HashMap<String, OutputInfo>>,
-
-    #[serde(default)]
-    apps: std::collections::HashMap<String, std::collections::HashMap<String, AppInfo>>,
-
-    #[serde(default, rename = "devShells")]
-    dev_shells: std::collections::HashMap<String, std::collections::HashMap<String, OutputInfo>>,
-
-    #[serde(default, rename = "nixosModules")]
-    nixos_modules: std::collections::HashMap<String, ModuleInfo>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct OutputInfo {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    description: Option<String>,
-    #[serde(default, rename = "type")]
-    output_type: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct AppInfo {
-    #[serde(default)]
-    description: Option<String>,
-    #[serde(default, rename = "type")]
-    app_type: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ModuleInfo {
-    #[serde(default, rename = "type")]
-    module_type: Option<String>,
-}
-
 /// Run `nix flake check` - returns detailed summary and success status
 pub async fn flake_check(flake_path: impl AsRef<Path>) -> Result<CheckResult> {
     let path = flake_path.as_ref();
@@ -175,126 +115,6 @@ pub async fn flake_check(flake_path: impl AsRef<Path>) -> Result<CheckResult> {
     let summary = run_command::<State>(command).await?;
 
     Ok(CheckResult { summary })
-}
-
-/// Run `nix build` - returns summary, out paths, and success status
-pub async fn build(
-    flake_path: impl AsRef<Path>,
-    output_link: Option<impl AsRef<Path>>,
-) -> Result<BuildResult> {
-    let path = flake_path.as_ref();
-    validate_path(path)?;
-
-    let mut command = Command::new("nix");
-    command
-        .arg("build")
-        .arg(path)
-        .arg("--print-build-logs")
-        .arg("--log-format")
-        .arg("internal-json")
-        .arg("--json");
-
-    if let Some(link) = output_link {
-        command.arg("--out-link").arg(link.as_ref());
-    } else {
-        command.arg("--no-link");
-    }
-
-    command.stderr(std::process::Stdio::piped());
-    command.stdout(std::process::Stdio::piped());
-
-    let mut child = command.spawn()?;
-    let started_at = std::time::SystemTime::now();
-
-    // Parse logs from stderr
-    let stderr = child.stderr.take().ok_or(Error::BuildOutputMissing)?;
-    let reader = tokio::io::BufReader::new(stderr);
-
-    let mut state = State::default();
-    state.parse_lines(reader).await;
-
-    // Wait for process and get stdout
-    let output = child.wait_with_output().await?;
-    let completed_at = std::time::SystemTime::now();
-
-    if !output.status.success() {
-        return Err(Error::ProcessFailed {
-            exit_code: output.status.code(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        });
-    }
-
-    // Parse output paths from stdout JSON
-    #[derive(Deserialize)]
-    struct BuildOutput {
-        outputs: std::collections::HashMap<String, String>,
-    }
-
-    let build_outputs: Vec<BuildOutput> = serde_json::from_slice(&output.stdout)?;
-    let out_paths: Vec<PathBuf> = build_outputs
-        .into_iter()
-        .flat_map(|bo| bo.outputs.into_values())
-        .map(PathBuf::from)
-        .collect();
-
-    let summary = state.into_output(started_at, completed_at);
-
-    Ok(BuildResult {
-        summary,
-        out_paths,
-        success: true,
-    })
-}
-
-/// Run `nix flake show` to get flake structure
-pub async fn flake_show(flake_path: impl AsRef<Path>) -> Result<FlakeShow> {
-    let path = flake_path.as_ref();
-    validate_path(path)?;
-
-    let output = Command::new("nix")
-        .arg("flake")
-        .arg("show")
-        .arg(path)
-        .arg("--json")
-        .output()
-        .await?;
-
-    if !output.status.success() {
-        return Err(Error::ProcessFailed {
-            exit_code: output.status.code(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        });
-    }
-
-    let show: FlakeShow = serde_json::from_slice(&output.stdout)?;
-    Ok(show)
-}
-
-/// Run `nix eval` to evaluate a flake attribute and return it as JSON
-pub async fn eval_json(flake_ref: impl AsRef<str>) -> Result<serde_json::Value> {
-    eval_typed(flake_ref).await
-}
-
-/// Run `nix eval` with a specific type (for when you know the structure)
-pub async fn eval_typed<T: for<'de> Deserialize<'de>>(flake_ref: impl AsRef<str>) -> Result<T> {
-    let flake_ref = flake_ref.as_ref();
-
-    let output = Command::new("nix")
-        .arg("eval")
-        .arg(flake_ref)
-        .arg("--json")
-        .output()
-        .await?;
-
-    if !output.status.success() {
-        return Err(Error::ProcessFailed {
-            exit_code: output.status.code(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        });
-    }
-
-    let value: T = serde_json::from_slice(&output.stdout)?;
-    Ok(value)
 }
 
 /// Validate that a path is reasonable for a flake

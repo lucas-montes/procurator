@@ -4,16 +4,15 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio.workspace = true
+tokio = { workspace = true, features = ["signal"] }
 tokio-stream = "0.1"
 axum.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite"] }
+sqlx.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tower-http = { version = "0.5", features = ["trace"] }
 chrono.workspace = true
 futures.workspace = true
-askama = "0.14.0"
 repo_outils.workspace = true

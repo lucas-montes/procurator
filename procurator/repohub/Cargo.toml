@@ -4,3 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+tokio = { workspace = true, features = ["signal"] }
+axum.workspace = true
+askama = "0.14.0"
+tracing.workspace = true
+tracing-subscriber.workspace = true
+repo_outils.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true

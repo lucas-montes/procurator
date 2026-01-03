@@ -1,23 +1,4 @@
-//! Configuration Management
-//!
-//! Provides application configuration as a singleton using `OnceLock`.
-//! Configuration values are read from environment variables with sensible defaults.
-//!
-//! ## Configuration Variables
-//!
-//! - `DATABASE_URL`: Path to SQLite database file (default: `../ci.db`)
-//! - `BIND_ADDRESS`: HTTP server bind address (default: `0.0.0.0:3000`)
-//! - `DOMAIN`: Domain name for Git URLs (default: `localhost`)
-//! - `REPOS_BASE_PATH`: Base path for Git repositories (default: `../repos`)
-//! - `MAX_RETRIES`: Maximum build retry attempts (default: `3`)
-//! - `WORKER_POLL_INTERVAL_MS`: Build queue poll interval in milliseconds (default: `1000`)
-
-use std::sync::OnceLock;
-
-static CONFIG: OnceLock<Config> = OnceLock::new();
-
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct Config {
     pub database_url: String,
     pub bind_address: String,
@@ -38,12 +19,4 @@ impl Default for Config {
             worker_poll_interval_ms: 1000,
         }
     }
-}
-
-impl Config {
-    /// Initialize the global config (can only be called once)
-    pub fn init() -> &'static Config {
-        CONFIG.get_or_init(|| Config::default())
-    }
-
 }

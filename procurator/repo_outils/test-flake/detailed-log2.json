@@ -1,0 +1,117 @@
+{
+  "total_steps": 128,
+  "started_at": {
+    "secs_since_epoch": 1767425355,
+    "nanos_since_epoch": 573718647
+  },
+  "completed_at": {
+    "secs_since_epoch": 1767425355,
+    "nanos_since_epoch": 578052170
+  },
+  "timeline": [
+    {
+      "text": "checking derivation packages.x86_64-linux.default",
+      "duration": {
+        "secs": 0,
+        "nanos": 2784939
+      },
+      "children": []
+    },
+    {
+      "text": "checking derivation packages.x86_64-linux.helper",
+      "duration": {
+        "secs": 0,
+        "nanos": 27608
+      },
+      "children": []
+    },
+    {
+      "text": "checking flake output 'packages'",
+      "duration": {
+        "secs": 0,
+        "nanos": 2840714
+      },
+      "children": []
+    },
+    {
+      "text": "checking derivation checks.x86_64-linux.basic-test",
+      "duration": {
+        "secs": 0,
+        "nanos": 29125
+      },
+      "children": []
+    },
+    {
+      "text": "checking derivation checks.x86_64-linux.format-check",
+      "duration": {
+        "secs": 0,
+        "nanos": 31847
+      },
+      "children": []
+    },
+    {
+      "text": "checking derivation checks.x86_64-linux.slow-test",
+      "duration": {
+        "secs": 0,
+        "nanos": 27624
+      },
+      "children": []
+    },
+    {
+      "text": "checking flake output 'checks'",
+      "duration": {
+        "secs": 0,
+        "nanos": 131658
+      },
+      "children": []
+    },
+    {
+      "text": "checking app 'apps.x86_64-linux.default'",
+      "duration": {
+        "secs": 0,
+        "nanos": 52022
+      },
+      "children": []
+    },
+    {
+      "text": "checking flake output 'apps'",
+      "duration": {
+        "secs": 0,
+        "nanos": 75892
+      },
+      "children": []
+    },
+    {
+      "text": "checking derivation devShells.x86_64-linux.default",
+      "duration": {
+        "secs": 0,
+        "nanos": 321946
+      },
+      "children": []
+    },
+    {
+      "text": "checking flake output 'devShells'",
+      "duration": {
+        "secs": 0,
+        "nanos": 351450
+      },
+      "children": []
+    },
+    {
+      "text": "evaluating flake",
+      "duration": {
+        "secs": 0,
+        "nanos": 3476068
+      },
+      "children": []
+    },
+    {
+      "text": "running 3 flake checks",
+      "duration": {
+        "secs": 0,
+        "nanos": 334664
+      },
+      "children": []
+    }
+  ]
+}

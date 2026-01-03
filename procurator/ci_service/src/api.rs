@@ -1,21 +1,18 @@
-
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    response::Sse,
     routing::{get, post},
     Json, Router,
 };
-use futures::stream::{self, Stream};
 use serde::{Deserialize, Serialize};
-use std::{convert::Infallible, sync::Arc};
-use std::path::PathBuf;
-use std::time::Duration;
+use std::sync::Arc;
+
 use tracing::info;
 
-use crate::{builds::{BuildInfo, BuildStatus}, config::Config, job_queue::JobQueue};
-
-
+use crate::{
+    builds::{BuildInfo, BuildStatus},
+    job_queue::JobQueue,
+};
 
 #[derive(Debug, Serialize)]
 pub struct BuildsListResponse {
@@ -23,7 +20,7 @@ pub struct BuildsListResponse {
     total: usize,
 }
 
-
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct BuildRequest {
     repo: String,
@@ -48,10 +45,15 @@ pub struct BuildResponse {
     status: BuildStatus,
 }
 
-
 #[derive(Clone)]
 pub struct AppState {
     queue: Arc<JobQueue>,
+}
+
+impl AppState {
+    pub fn new(queue: Arc<JobQueue>) -> Self {
+        Self { queue }
+    }
 }
 
 async fn create_build(
@@ -69,7 +71,11 @@ async fn create_build(
     //TODO: check if this works as expected. Maybe we want to use username/reponame
 
     // Enqueue build with bare repo path
-    match state.queue.enqueue(&req.bare_repo_path, &req.new_rev, branch).await {
+    match state
+        .queue
+        .enqueue(&req.bare_repo_path, &req.new_rev, branch)
+        .await
+    {
         Ok(id) => {
             info!(
                 build_id = id,
@@ -100,7 +106,6 @@ async fn create_build(
     }
 }
 
-/// List all builds
 async fn list_builds(
     State(state): State<AppState>,
 ) -> Result<Json<BuildsListResponse>, (StatusCode, String)> {
@@ -123,7 +128,6 @@ async fn list_builds(
     }
 }
 
-/// Get a specific build by ID
 async fn get_build(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -137,38 +141,6 @@ async fn get_build(
     }
 }
 
-/// Stream build events in real-time
-// async fn build_events(
-//     State(state): State<AppState>,
-// ) -> Sse<impl Stream<Item = Result<axum::response::sse::Event, Infallible>>> {
-//     let stream = stream::unfold(state, |state| async move {
-//         tokio::time::sleep(Duration::from_secs(2)).await;
-
-//         let builds = state.queue.list_all_builds().await.ok()?;
-
-//         if let Some(latest) = builds.first() {
-//             let event = BuildEvent::Updated {
-//                 build: BuildInfo::from(latest.clone()),
-//             };
-
-//             let data = serde_json::to_string(&event).ok()?;
-//             let sse_event = axum::response::sse::Event::default().data(data);
-
-//             Some((Ok(sse_event), state))
-//         } else {
-//             let sse_event = axum::response::sse::Event::default().comment("ping");
-//             Some((Ok(sse_event), state))
-//         }
-//     });
-
-//     Sse::new(stream).keep_alive(
-//         axum::response::sse::KeepAlive::new()
-//             .interval(Duration::from_secs(30))
-//             .text("keep-alive"),
-//     )
-// }
-
-/// Build the API routes
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/builds", post(create_build).get(list_builds))

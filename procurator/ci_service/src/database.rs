@@ -10,10 +10,6 @@ use std::{ops::Deref, str::FromStr};
 use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
 use tracing::info;
 
-// ============================================================================
-// Error Types
-// ============================================================================
-
 #[derive(Debug)]
 pub enum DatabaseError {
     Connection(sqlx::Error),
@@ -50,7 +46,8 @@ impl From<sqlx::Error> for DatabaseError {
 
 pub type Result<T> = std::result::Result<T, DatabaseError>;
 
-// DTO for reading builds from simplified tables
+/// DTO for reading builds from simplified tables
+/// TODO: need more separations
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct BuildRow {
     id: i64,
@@ -65,18 +62,6 @@ pub struct BuildRow {
     finished_at: Option<String>,
 }
 
-impl BuildRow {
-    pub fn id(&self) -> i64 { self.id }
-    pub fn repo_path(&self) -> &str { &self.repo_path }
-    pub fn commit_hash(&self) -> &str { &self.commit_hash }
-    pub fn branch(&self) -> &str { &self.branch }
-    pub fn status(&self) -> &str { &self.status }
-    pub fn retry_count(&self) -> i64 { self.retry_count }
-    pub fn max_retries(&self) -> i64 { self.max_retries }
-    pub fn created_at(&self) -> &str { &self.created_at }
-    pub fn started_at(&self) -> Option<&str> { self.started_at.as_deref() }
-    pub fn finished_at(&self) -> Option<&str> { self.finished_at.as_deref() }
-}
 
 // Structured summary placeholder - stores arbitrary JSON produced by the runner
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

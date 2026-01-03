@@ -71,7 +71,10 @@ impl From<nix::Error> for WorkerError {
     fn from(err: nix::Error) -> Self {
         match err {
             nix::Error::Io(io_err) => WorkerError::Io(io_err),
-            nix::Error::ProcessFailed { exit_code: _, stderr } => WorkerError::Nix(stderr),
+            nix::Error::ProcessFailed {
+                exit_code: _,
+                stderr,
+            } => WorkerError::Nix(stderr),
             nix::Error::JsonParse(json_err) => {
                 WorkerError::Process(format!("JSON parse error: {}", json_err))
             }
@@ -99,27 +102,22 @@ impl Worker {
         Self { queue }
     }
 
-    pub async fn run(&self) {
+    pub async fn run(self) {
         info!(target: "ci_service::worker", "Worker started");
 
         loop {
             match self.queue.get_pending().await {
                 Ok(Some(build)) => {
-                    if let Err(e) = self.process_build(&build).await {
-                        if let WorkerError::Queue(ref err) = e {
-                            error!(
-                                ?build,
-                                error = %err,
-                                "Build failed"
-                            );
-                        }
+                    if let Err(err) = self.process_build(&build).await {
+                        error!(
+                            ?build,
+                            %err,
+                            "Build failed"
+                        );
 
                         // Check if we can retry
                         if build.can_retry() {
-                            info!(
-                                ?build,
-                                "Scheduling retry for build"
-                            );
+                            info!(?build, "Scheduling retry for build");
 
                             if let Err(err) = self
                                 .queue
@@ -129,7 +127,7 @@ impl Worker {
                             {
                                 error!(
                                     build_id = build.id(),
-                                    error = %err,
+                                    %err,
                                     "Failed to increment retry count"
                                 );
                             };
@@ -146,7 +144,7 @@ impl Worker {
                             {
                                 error!(
                                     build_id = build.id(),
-                                    error = %err,
+                                     %err,
                                     "Failed to update build status to Failed"
                                 );
                             };
@@ -156,8 +154,8 @@ impl Worker {
                 Ok(None) => {
                     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                 }
-                Err(e) => {
-                    error!(error = %e, "Error fetching pending builds");
+                Err(err) => {
+                    error!(%err, "Error fetching pending builds");
                     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 }
             }
@@ -178,13 +176,10 @@ impl Worker {
 
         let git_url = build.git_url();
 
-        info!(
-            build_id = build.id(),
-            git_url,
-            "Executing nix flake check"
-        );
+        info!(build_id = build.id(), git_url, "Executing nix flake check");
 
         // Store the command in logs
+        // TODO: this can be a reason why we want a struct NixCommand, to store the actual command used
         let command_log = format!("$ nix flake check {} --print-build-logs\n", git_url);
         self.queue
             .set_logs(build.id(), &command_log)
