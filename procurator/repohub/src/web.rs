@@ -3,7 +3,7 @@ use axum::{
     Router,
     extract::{Path, State},
     http::StatusCode,
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{Html, IntoResponse, Response},
     routing::{get, post},
     Json,
 };
@@ -16,26 +16,16 @@ use crate::{
 
 #[derive(Clone)]
 pub struct AppState {
-    pub db: Arc<Database>,
+    pub db: Database,
 }
 
 impl AppState {
-    pub fn new(db: Arc<Database>) -> Self {
+    pub fn new(db: Database) -> Self {
         Self { db }
     }
 }
 
-// #[derive(Template)]
-// #[template(path = "repo/infrastructure.html")]
-// struct RepoInfrastructureTemplate {
-//     username: String,
-//     repo_name: String,
-//     git_url: String,
-//     active_tab: String,
-//     infrastructure: Option<Infrastructure>,
-// }
-
-#[allow(dead_code)]
+// Template rendering helper
 struct HtmlTemplate<T>(T);
 
 impl<T: Template> IntoResponse for HtmlTemplate<T> {
@@ -54,20 +44,59 @@ impl<T: Template> IntoResponse for HtmlTemplate<T> {
     }
 }
 
+// Templates
+#[derive(Template)]
+#[template(path = "index.html")]
+struct IndexTemplate {
+    users: Vec<User>,
+}
+
+#[derive(Template)]
+#[template(path = "user.html")]
+struct UserTemplate {
+    user: User,
+    projects: Vec<Project>,
+}
+
+#[derive(Template)]
+#[template(path = "project.html")]
+struct ProjectTemplate {
+    username: String,
+    project: Project,
+    repositories: Vec<Repository>,
+}
+
+#[derive(Template)]
+#[template(path = "repository.html")]
+struct RepositoryTemplate {
+    username: String,
+    project_name: String,
+    repo: Repository,
+}
+
+#[derive(Template)]
+#[template(path = "not_implemented.html")]
+struct NotImplementedTemplate {
+    feature: String,
+    description: String,
+    back_url: String,
+}
+
 /// The main page of the app. We should show a list of the users in the database
 async fn index(State(state): State<AppState>) -> impl IntoResponse {
     match state.db.list_users().await {
         Ok(users) => {
             let users: Vec<User> = users.into_iter().map(User::from).collect();
-            (StatusCode::OK, Json(users)).into_response()
+            HtmlTemplate(IndexTemplate { users }).into_response()
         }
         Err(e) => {
             tracing::error!("Failed to list users: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to list users: {}", e),
-            )
-                .into_response()
+            HtmlTemplate(NotImplementedTemplate {
+                feature: "Error".to_string(),
+                description: format!("Failed to list users: {}", e),
+                back_url: "/".to_string(),
+            })
+            .into_response()
         }
     }
 }
@@ -104,7 +133,12 @@ async fn user(State(state): State<AppState>, Path(username): Path<String>) -> im
         Ok(user) => User::from(user),
         Err(e) => {
             tracing::error!("Failed to get user '{}': {}", username, e);
-            return (StatusCode::NOT_FOUND, format!("User not found: {}", e)).into_response();
+            return HtmlTemplate(NotImplementedTemplate {
+                feature: "User Not Found".to_string(),
+                description: format!("User '{}' not found", username),
+                back_url: "/".to_string(),
+            })
+            .into_response();
         }
     };
 
@@ -112,22 +146,16 @@ async fn user(State(state): State<AppState>, Path(username): Path<String>) -> im
     match state.db.list_projects_by_owner(user.id).await {
         Ok(projects) => {
             let projects: Vec<Project> = projects.into_iter().map(Project::from).collect();
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "user": user,
-                    "projects": projects
-                })),
-            )
-                .into_response()
+            HtmlTemplate(UserTemplate { user, projects }).into_response()
         }
         Err(e) => {
             tracing::error!("Failed to list projects for user '{}': {}", username, e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to list projects: {}", e),
-            )
-                .into_response()
+            HtmlTemplate(NotImplementedTemplate {
+                feature: "Error".to_string(),
+                description: format!("Failed to list projects: {}", e),
+                back_url: "/".to_string(),
+            })
+            .into_response()
         }
     }
 }
@@ -184,7 +212,12 @@ async fn project(
     let user = match state.db.get_user_by_username(&username).await {
         Ok(user) => user,
         Err(e) => {
-            return (StatusCode::NOT_FOUND, format!("User not found: {}", e)).into_response();
+            return HtmlTemplate(NotImplementedTemplate {
+                feature: "User Not Found".to_string(),
+                description: format!("User '{}' not found", username),
+                back_url: "/".to_string(),
+            })
+            .into_response();
         }
     };
 
@@ -192,30 +225,34 @@ async fn project(
     let project = match state.db.get_project(user.id, &project_name).await {
         Ok(project) => Project::from(project),
         Err(e) => {
-            return (StatusCode::NOT_FOUND, format!("Project not found: {}", e)).into_response();
+            return HtmlTemplate(NotImplementedTemplate {
+                feature: "Project Not Found".to_string(),
+                description: format!("Project '{}' not found", project_name),
+                back_url: format!("/{}", username),
+            })
+            .into_response();
         }
     };
 
     // Get repositories for this project
     match state.db.list_repositories_by_project(project.id).await {
         Ok(repos) => {
-            let repos: Vec<Repository> = repos.into_iter().map(Repository::from).collect();
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "project": project,
-                    "repositories": repos
-                })),
-            )
-                .into_response()
+            let repositories: Vec<Repository> = repos.into_iter().map(Repository::from).collect();
+            HtmlTemplate(ProjectTemplate {
+                username,
+                project,
+                repositories,
+            })
+            .into_response()
         }
         Err(e) => {
             tracing::error!("Failed to list repositories: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to list repositories: {}", e),
-            )
-                .into_response()
+            HtmlTemplate(NotImplementedTemplate {
+                feature: "Error".to_string(),
+                description: format!("Failed to list repositories: {}", e),
+                back_url: format!("/{}", username),
+            })
+            .into_response()
         }
     }
 }
@@ -273,19 +310,50 @@ async fn create_repository(
 /// Cloning the repo would give an easy way to manage and run all the services both locally and remotely
 async fn configuration(
     State(_state): State<AppState>,
-    Path((_username, _project)): Path<(String, String)>,
+    Path((username, project)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    // TODO: Implement configuration management
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        "Configuration management not yet implemented",
-    )
+    HtmlTemplate(NotImplementedTemplate {
+        feature: "Configuration Management".to_string(),
+        description: "Manage infrastructure, external dependencies (databases, proxies), and deployment settings. This will be a Git repository that you can clone to run all services locally and remotely.".to_string(),
+        back_url: format!("/{}/{}", username, project),
+    })
 }
 
 /// A view allowing to create and define a testing strategy for the a project.
 /// NOTE: For now redirect to somewhere else, well handle this logic in a different project
-async fn testing(Path((username, project)): Path<(String, String)>) -> impl IntoResponse {
-    Redirect::to(&format!("localhost:3002/{}/{}", username, project))
+async fn testing(
+    State(_state): State<AppState>,
+    Path((username, project)): Path<(String, String)>,
+) -> impl IntoResponse {
+    HtmlTemplate(NotImplementedTemplate {
+        feature: "E2E Testing & Monitoring".to_string(),
+        description: "Define and run end-to-end tests across all services in this project. Monitor performance, measure service health, and validate integration points.".to_string(),
+        back_url: format!("/{}/{}", username, project),
+    })
+}
+
+/// The flake of the repo, with a description, information about the checks to run, dependencies and other information that could be useful
+async fn repo_flake(
+    State(_state): State<AppState>,
+    Path((username, project, repo)): Path<(String, String, String)>,
+) -> impl IntoResponse {
+    HtmlTemplate(NotImplementedTemplate {
+        feature: "Nix Flake Viewer".to_string(),
+        description: "View flake.nix configuration, dependencies, checks, and build outputs. This will parse and display flake metadata in a user-friendly format.".to_string(),
+        back_url: format!("/{}/{}/{}", username, project, repo),
+    })
+}
+
+/// The builds or actions ran by a given repo. Like github actions.
+async fn builds(
+    State(_state): State<AppState>,
+    Path((username, project, repo, _id)): Path<(String, String, String, i64)>,
+) -> impl IntoResponse {
+    HtmlTemplate(NotImplementedTemplate {
+        feature: "Build Details".to_string(),
+        description: "View build logs, status, and artifacts. This will integrate with the CI service to display build information.".to_string(),
+        back_url: format!("/{}/{}/{}", username, project, repo),
+    })
 }
 
 /// View of a given repo in a project. A regular viewer like github, gitlab or any other repo hosting provider
@@ -296,16 +364,26 @@ async fn repo(
     // Get user
     let user = match state.db.get_user_by_username(&username).await {
         Ok(user) => user,
-        Err(e) => {
-            return (StatusCode::NOT_FOUND, format!("User not found: {}", e)).into_response();
+        Err(_e) => {
+            return HtmlTemplate(NotImplementedTemplate {
+                feature: "User Not Found".to_string(),
+                description: format!("User '{}' not found", username),
+                back_url: "/".to_string(),
+            })
+            .into_response();
         }
     };
 
     // Get project
     let project = match state.db.get_project(user.id, &project_name).await {
         Ok(project) => project,
-        Err(e) => {
-            return (StatusCode::NOT_FOUND, format!("Project not found: {}", e)).into_response();
+        Err(_e) => {
+            return HtmlTemplate(NotImplementedTemplate {
+                feature: "Project Not Found".to_string(),
+                description: format!("Project '{}' not found", project_name),
+                back_url: format!("/{}", username),
+            })
+            .into_response();
         }
     };
 
@@ -313,34 +391,23 @@ async fn repo(
     match state.db.get_repository(project.id, &repo_name).await {
         Ok(repo) => {
             let repo = Repository::from(repo);
-            (StatusCode::OK, Json(repo)).into_response()
+            HtmlTemplate(RepositoryTemplate {
+                username,
+                project_name,
+                repo,
+            })
+            .into_response()
         }
-        Err(e) => {
-            tracing::error!("Failed to get repository: {}", e);
-            (StatusCode::NOT_FOUND, format!("Repository not found: {}", e)).into_response()
+        Err(_e) => {
+            tracing::error!("Failed to get repository: {}", repo_name);
+            HtmlTemplate(NotImplementedTemplate {
+                feature: "Repository Not Found".to_string(),
+                description: format!("Repository '{}' not found", repo_name),
+                back_url: format!("/{}/{}", username, project_name),
+            })
+            .into_response()
         }
     }
-}
-
-/// The flake of the repo, with a description, information about the checks to run, dependencies and other information that could be useful
-async fn repo_flake(
-    State(_state): State<AppState>,
-    Path((_username, _project, _repo)): Path<(String, String, String)>,
-) -> impl IntoResponse {
-    // TODO: Parse and display flake.nix information
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        "Flake viewer not yet implemented",
-    )
-}
-
-/// The builds or actions ran by a given repo. Like github actions.
-async fn builds(
-    State(_state): State<AppState>,
-    Path((_username, _project, _repo, _id)): Path<(String, String, String, i64)>,
-) -> impl IntoResponse {
-    // TODO: Integrate with CI service to show build information
-    (StatusCode::NOT_IMPLEMENTED, "Builds viewer not yet implemented")
 }
 
 pub fn routes() -> Router<AppState> {

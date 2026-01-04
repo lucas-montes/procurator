@@ -1,0 +1,258 @@
+{% extends "base.html" %}
+
+{% block title %}{{ user.username }} - Repohub{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="/">Users</a>
+    <span>/</span>
+    <span>{{ user.username }}</span>
+</div>
+
+<div class="card">
+    <h2>👤 {{ user.username }}</h2>
+    {% match user.email %}
+        {% when Some with (email) %}
+            <p class="meta">{{ email }}</p>
+        {% when None %}
+    {% endmatch %}
+    <p class="meta">Member since {{ user.created_at }}</p>
+</div>
+
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <div style="display: flex; align-items: center; gap: 1rem;">
+            <h2>📁 Projects</h2>
+            <span class="badge">{{ projects.len() }}</span>
+        </div>
+        <button class="btn" onclick="openProjectModal()">
+            <svg style="width: 16px; height: 16px; display: inline-block; vertical-align: middle; margin-right: 0.25rem;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            New Project
+        </button>
+    </div>
+
+    {% if projects.is_empty() %}
+        <div class="empty-state">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+            </svg>
+            <h3>No projects yet</h3>
+            <p>Create a project to organize your repositories</p>
+        </div>
+    {% else %}
+        {% for project in projects %}
+        <div class="list-item">
+            <h3>
+                <a href="/{{ user.username }}/{{ project.name }}">{{ project.name }}</a>
+            </h3>
+            {% match project.description %}
+                {% when Some with (desc) %}
+                    <p>{{ desc }}</p>
+                {% when None %}
+            {% endmatch %}
+            <p class="meta">
+                <span class="meta-item">Created {{ project.created_at }}</span>
+            </p>
+        </div>
+        {% endfor %}
+    {% endif %}
+</div>
+
+<!-- Project Creation Modal -->
+<div class="modal-overlay" id="projectModal" onclick="closeProjectModal(event)">
+    <div class="modal" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <h2>Create New Project</h2>
+            <button class="modal-close" onclick="closeProjectModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="error-message" id="projectError"></div>
+            
+            <form id="project-form" onsubmit="handleCreateProject(event)">
+                <div class="form-group">
+                    <label for="project-name">Project Name *</label>
+                    <input type="text" id="project-name" required placeholder="e.g., my-awesome-project">
+                    <small style="color: #586069; font-size: 0.8rem;">Use lowercase letters, numbers, and hyphens</small>
+                </div>
+                
+                <div class="form-group">
+                    <label for="project-description">Description</label>
+                    <textarea id="project-description" rows="3" placeholder="Describe your project..." style="width: 100%; padding: 0.625rem 0.75rem; border: 1px solid #d0d7de; border-radius: 6px; font-size: 0.95rem; font-family: inherit; resize: vertical;"></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label for="project-repos">Repository URLs (optional)</label>
+                    <textarea id="project-repos" rows="5" placeholder="Paste repository URLs, one per line:
+git@github.com:user/repo1.git
+https://github.com/user/repo2.git
+git@gitlab.com:user/repo3.git" style="width: 100%; padding: 0.625rem 0.75rem; border: 1px solid #d0d7de; border-radius: 6px; font-size: 0.95rem; font-family: monospace; resize: vertical;"></textarea>
+                    <small style="color: #586069; font-size: 0.8rem;">Leave empty to start with an empty project</small>
+                </div>
+
+                <div class="form-actions">
+                    <button type="submit" class="btn-primary" id="project-submit-btn">Create Project</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+    const username = "{{ user.username }}";
+
+    function openProjectModal() {
+        document.getElementById('projectModal').classList.add('active');
+        document.getElementById('project-name').focus();
+    }
+
+    function closeProjectModal(event) {
+        if (event && event.target !== event.currentTarget) return;
+        document.getElementById('projectModal').classList.remove('active');
+        clearProjectError();
+        document.getElementById('project-form').reset();
+    }
+
+    function showProjectError(message) {
+        const errorEl = document.getElementById('projectError');
+        errorEl.textContent = message;
+        errorEl.classList.add('active');
+    }
+
+    function clearProjectError() {
+        const errorEl = document.getElementById('projectError');
+        errorEl.textContent = '';
+        errorEl.classList.remove('active');
+    }
+
+    async function handleCreateProject(e) {
+        e.preventDefault();
+        
+        const name = document.getElementById('project-name').value.trim();
+        const description = document.getElementById('project-description').value.trim();
+        const reposText = document.getElementById('project-repos').value.trim();
+        
+        if (!name) {
+            showProjectError('Project name is required');
+            return;
+        }
+
+        // Validate project name format
+        if (!/^[a-z0-9-]+$/.test(name)) {
+            showProjectError('Project name must contain only lowercase letters, numbers, and hyphens');
+            return;
+        }
+
+        // Disable submit button
+        const submitBtn = document.getElementById('project-submit-btn');
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Creating...';
+
+        try {
+            // Step 1: Create the project
+            const projectRes = await fetch(`/${username}/projects`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    name, 
+                    description: description || null 
+                })
+            });
+
+            if (!projectRes.ok) {
+                const text = await projectRes.text();
+                throw new Error('Failed to create project: ' + text);
+            }
+
+            // Step 2: If there are repository URLs, import them
+            if (reposText) {
+                const repoUrls = reposText
+                    .split('\n')
+                    .map(url => url.trim())
+                    .filter(url => url.length > 0);
+
+                if (repoUrls.length > 0) {
+                    submitBtn.textContent = `Importing ${repoUrls.length} repositories...`;
+                    
+                    // Import repositories one by one
+                    let imported = 0;
+                    let failed = 0;
+                    
+                    for (const gitUrl of repoUrls) {
+                        try {
+                            // Extract repo name from URL
+                            const repoName = extractRepoName(gitUrl);
+                            
+                            const repoRes = await fetch(`/${username}/${name}/repositories`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ 
+                                    name: repoName,
+                                    git_url: gitUrl
+                                })
+                            });
+
+                            if (repoRes.ok) {
+                                imported++;
+                            } else {
+                                failed++;
+                                console.error(`Failed to import ${gitUrl}`);
+                            }
+                        } catch (err) {
+                            failed++;
+                            console.error(`Error importing ${gitUrl}:`, err);
+                        }
+                    }
+
+                    if (failed > 0) {
+                        showProjectError(`Project created! ${imported} repositories imported, ${failed} failed.`);
+                        setTimeout(() => {
+                            window.location.href = `/${username}/${name}`;
+                        }, 2000);
+                        return;
+                    }
+                }
+            }
+
+            // Success - redirect to project page
+            window.location.href = `/${username}/${name}`;
+        } catch (err) {
+            showProjectError(err.message);
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Create Project';
+        }
+    }
+
+    function extractRepoName(url) {
+        // Extract repository name from various URL formats
+        // git@github.com:user/repo.git -> repo
+        // https://github.com/user/repo.git -> repo
+        // https://github.com/user/repo -> repo
+        
+        let name = url;
+        
+        // Remove .git suffix
+        if (name.endsWith('.git')) {
+            name = name.slice(0, -4);
+        }
+        
+        // Extract last part after / or :
+        const parts = name.split(/[/:]/);
+        name = parts[parts.length - 1];
+        
+        // Clean up
+        name = name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+        
+        return name || 'repository';
+    }
+
+    // Close modal on Escape key
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            closeProjectModal();
+        }
+    });
+</script>
+{% endblock %}

@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}{{ repo.name }} - {{ project_name }} - {{ username }} - Repohub{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="/">Users</a>
+    <span>/</span>
+    <a href="/{{ username }}">{{ username }}</a>
+    <span>/</span>
+    <a href="/{{ username }}/{{ project_name }}">{{ project_name }}</a>
+    <span>/</span>
+    <span>{{ repo.name }}</span>
+</div>
+
+<div class="card">
+    <h2>📘 {{ repo.name }}</h2>
+    <p><code>{{ repo.git_url }}</code></p>
+    <p class="meta">
+        <span class="meta-item">Added {{ repo.created_at }}</span>
+    </p>
+</div>
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+    <a href="/{{ username }}/{{ project_name }}/{{ repo.name }}/flake" class="card" style="text-decoration: none; color: inherit;">
+        <h3>❄️ Nix Flake</h3>
+        <p class="meta">View flake configuration and dependencies</p>
+    </a>
+
+    <div class="card">
+        <h3>🔨 Builds</h3>
+        <p class="meta">No recent builds</p>
+    </div>
+</div>
+
+<div class="card">
+    <h3>Repository Actions</h3>
+    <p class="meta">Clone, build, and deploy this repository using the project's infrastructure configuration.</p>
+</div>
+{% endblock %}

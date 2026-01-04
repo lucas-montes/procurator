@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+
+{% block title %}{{ feature }} - Coming Soon - Repohub{% endblock %}
+
+{% block content %}
+<div class="card" style="text-align: center; padding: 4rem 2rem;">
+    <h2>🚧 {{ feature }}</h2>
+    <p style="margin: 1.5rem 0; color: #586069;">This feature is coming soon!</p>
+    <p class="meta">{{ description }}</p>
+    <div style="margin-top: 2rem;">
+        <a href="{{ back_url }}" class="btn">Go Back</a>
+    </div>
+</div>
+{% endblock %}

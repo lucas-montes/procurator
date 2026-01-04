@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}Users - Repohub{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>👥 Users</h2>
+
+    {% if users.is_empty() %}
+        <div class="empty-state">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                <circle cx="9" cy="7" r="4"></circle>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+            </svg>
+            <h3>No users yet</h3>
+            <p>Get started by clicking "Sign in" in the navbar</p>
+        </div>
+    {% else %}
+        {% for user in users %}
+        <div class="list-item">
+            <h3>
+                <a href="/{{ user.username }}">{{ user.username }}</a>
+            </h3>
+            {% match user.email %}
+                {% when Some with (email) %}
+                    <p>{{ email }}</p>
+                {% when None %}
+            {% endmatch %}
+            <p class="meta">
+                <span class="meta-item">Joined {{ user.created_at }}</span>
+            </p>
+        </div>
+        {% endfor %}
+    {% endif %}
+</div>
+{% endblock %}

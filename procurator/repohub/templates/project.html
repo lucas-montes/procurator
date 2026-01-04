@@ -1,0 +1,336 @@
+{% extends "base.html" %}
+
+{% block title %}{{ project.name }} - {{ username }} - Repohub{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="/">Users</a>
+    <span>/</span>
+    <a href="/{{ username }}">{{ username }}</a>
+    <span>/</span>
+    <span>{{ project.name }}</span>
+</div>
+
+<div class="card">
+    <h2>📦 {{ project.name }}</h2>
+    {% match project.description %}
+        {% when Some with (desc) %}
+            <p>{{ desc }}</p>
+        {% when None %}
+    {% endmatch %}
+    <p class="meta">
+        <span class="meta-item">Created {{ project.created_at }}</span>
+    </p>
+</div>
+
+<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem;">
+    <a href="/{{ username }}/{{ project.name }}/configuration" class="card" style="text-decoration: none; color: inherit;">
+        <h3>⚙️ Configuration</h3>
+        <p class="meta">Manage infrastructure and settings</p>
+    </a>
+
+    <a href="/{{ username }}/{{ project.name }}/testing" class="card" style="text-decoration: none; color: inherit;">
+        <h3>🧪 Testing</h3>
+        <p class="meta">E2E testing and monitoring</p>
+    </a>
+
+    <div class="card">
+        <h3>📊 Status</h3>
+        <p class="meta">{{ repositories.len() }} repositories</p>
+    </div>
+</div>
+
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <div style="display: flex; align-items: center; gap: 1rem;">
+            <h2>📚 Repositories</h2>
+            <span class="badge">{{ repositories.len() }}</span>
+        </div>
+        <button class="btn" onclick="openRepoModal()">
+            <svg style="width: 16px; height: 16px; display: inline-block; vertical-align: middle; margin-right: 0.25rem;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            New Repository
+        </button>
+    </div>
+
+    {% if repositories.is_empty() %}
+        <div class="empty-state">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path>
+            </svg>
+            <h3>No repositories yet</h3>
+            <p>Add repositories to this project to get started</p>
+        </div>
+    {% else %}
+        {% for repo in repositories %}
+        <div class="list-item">
+            <h3>
+                <a href="/{{ username }}/{{ project.name }}/{{ repo.name }}">{{ repo.name }}</a>
+            </h3>
+            <p><code>{{ repo.git_url }}</code></p>
+            <p class="meta">
+                <span class="meta-item">Added {{ repo.created_at }}</span>
+                <a href="/{{ username }}/{{ project.name }}/{{ repo.name }}/flake" style="margin-left: 1rem;">View Flake</a>
+            </p>
+        </div>
+        {% endfor %}
+    {% endif %}
+</div>
+
+<!-- Repository Creation/Import Modal -->
+<div class="modal-overlay" id="repoModal" onclick="closeRepoModal(event)">
+    <div class="modal" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <h2>Add Repository</h2>
+            <button class="modal-close" onclick="closeRepoModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="auth-tabs">
+                <button class="auth-tab active" onclick="switchRepoTab('create')">Create New</button>
+                <button class="auth-tab" onclick="switchRepoTab('import')">Import Existing</button>
+            </div>
+
+            <div class="error-message" id="repoError"></div>
+
+            <!-- Create New Repository Tab -->
+            <div class="tab-content active" id="create-tab">
+                <form id="create-repo-form" onsubmit="handleCreateRepo(event)">
+                    <div class="form-group">
+                        <label for="create-repo-name">Repository Name *</label>
+                        <input type="text" id="create-repo-name" required placeholder="e.g., my-api-service">
+                        <small style="color: #586069; font-size: 0.8rem;">Use lowercase letters, numbers, and hyphens</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="create-repo-description">Description (optional)</label>
+                        <textarea id="create-repo-description" rows="3" placeholder="What is this repository for?"></textarea>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="submit" class="btn-primary" id="create-submit-btn">Create Repository</button>
+                    </div>
+                </form>
+
+                <p class="form-note">This will create a new empty repository in this project.</p>
+            </div>
+
+            <!-- Import Existing Repositories Tab -->
+            <div class="tab-content" id="import-tab">
+                <form id="import-repo-form" onsubmit="handleImportRepos(event)">
+                    <div class="form-group">
+                        <label for="import-repo-urls">Repository URLs *</label>
+                        <textarea id="import-repo-urls" rows="8" required placeholder="Paste repository URLs, one per line:
+git@github.com:user/api-service.git
+https://github.com/user/web-frontend.git
+git@gitlab.com:user/worker-service.git" style="font-family: monospace;"></textarea>
+                        <small style="color: #586069; font-size: 0.8rem;">Repository names will be auto-detected from URLs</small>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="submit" class="btn-primary" id="import-submit-btn">Import Repositories</button>
+                    </div>
+                </form>
+
+                <p class="form-note">Import multiple repositories at once.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const username = "{{ username }}";
+    const projectName = "{{ project.name }}";
+
+    function openRepoModal() {
+        document.getElementById('repoModal').classList.add('active');
+        document.getElementById('create-repo-name').focus();
+    }
+
+    function closeRepoModal(event) {
+        if (event && event.target !== event.currentTarget) return;
+        document.getElementById('repoModal').classList.remove('active');
+        clearRepoError();
+        document.getElementById('create-repo-form').reset();
+        document.getElementById('import-repo-form').reset();
+    }
+
+    function switchRepoTab(tab) {
+        // Update tab buttons
+        document.querySelectorAll('.auth-tab').forEach(btn => {
+            btn.classList.remove('active');
+        });
+        event.target.classList.add('active');
+
+        // Update tab content
+        document.querySelectorAll('.tab-content').forEach(content => {
+            content.classList.remove('active');
+        });
+        document.getElementById(tab + '-tab').classList.add('active');
+        
+        clearRepoError();
+    }
+
+    function showRepoError(message) {
+        const errorEl = document.getElementById('repoError');
+        errorEl.textContent = message;
+        errorEl.classList.add('active');
+    }
+
+    function clearRepoError() {
+        const errorEl = document.getElementById('repoError');
+        errorEl.textContent = '';
+        errorEl.classList.remove('active');
+    }
+
+    function extractRepoName(url) {
+        // Extract repository name from various URL formats
+        let name = url;
+        
+        // Remove .git suffix
+        if (name.endsWith('.git')) {
+            name = name.slice(0, -4);
+        }
+        
+        // Extract last part after / or :
+        const parts = name.split(/[/:]/);
+        name = parts[parts.length - 1];
+        
+        // Clean up to lowercase with hyphens
+        name = name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+        
+        return name || 'repository';
+    }
+
+    async function handleCreateRepo(e) {
+        e.preventDefault();
+        
+        const name = document.getElementById('create-repo-name').value.trim();
+        const description = document.getElementById('create-repo-description').value.trim();
+        
+        if (!name) {
+            showRepoError('Repository name is required');
+            return;
+        }
+
+        // Validate repository name format
+        if (!/^[a-z0-9-]+$/.test(name)) {
+            showRepoError('Repository name must contain only lowercase letters, numbers, and hyphens');
+            return;
+        }
+
+        // Disable submit button
+        const submitBtn = document.getElementById('create-submit-btn');
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Creating...';
+
+        try {
+            // Generate a placeholder Git URL for new repositories
+            const gitUrl = `git@${window.location.hostname}:${username}/${projectName}/${name}.git`;
+            
+            const res = await fetch(`/${username}/${projectName}/repositories`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    name,
+                    git_url: gitUrl
+                })
+            });
+
+            if (!res.ok) {
+                const text = await res.text();
+                throw new Error('Failed to create repository: ' + text);
+            }
+
+            // Success - reload page
+            window.location.reload();
+        } catch (err) {
+            showRepoError(err.message);
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Create Repository';
+        }
+    }
+
+    async function handleImportRepos(e) {
+        e.preventDefault();
+        
+        const reposText = document.getElementById('import-repo-urls').value.trim();
+        
+        if (!reposText) {
+            showRepoError('Please provide at least one repository URL');
+            return;
+        }
+
+        const repoUrls = reposText
+            .split('\n')
+            .map(url => url.trim())
+            .filter(url => url.length > 0);
+
+        if (repoUrls.length === 0) {
+            showRepoError('Please provide at least one valid repository URL');
+            return;
+        }
+
+        // Disable submit button
+        const submitBtn = document.getElementById('import-submit-btn');
+        submitBtn.disabled = true;
+        submitBtn.textContent = `Importing ${repoUrls.length} repositories...`;
+
+        try {
+            let imported = 0;
+            let failed = 0;
+            const errors = [];
+            
+            for (const gitUrl of repoUrls) {
+                try {
+                    const repoName = extractRepoName(gitUrl);
+                    
+                    submitBtn.textContent = `Importing ${imported + 1}/${repoUrls.length}...`;
+                    
+                    const res = await fetch(`/${username}/${projectName}/repositories`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                            name: repoName,
+                            git_url: gitUrl
+                        })
+                    });
+
+                    if (res.ok) {
+                        imported++;
+                    } else {
+                        failed++;
+                        const text = await res.text();
+                        errors.push(`${repoName}: ${text}`);
+                    }
+                } catch (err) {
+                    failed++;
+                    errors.push(`${gitUrl}: ${err.message}`);
+                }
+            }
+
+            if (failed > 0) {
+                showRepoError(`Imported ${imported} repositories. ${failed} failed:\n${errors.slice(0, 3).join('\n')}${errors.length > 3 ? '\n...' : ''}`);
+                setTimeout(() => {
+                    window.location.reload();
+                }, 3000);
+            } else {
+                // All successful - reload page
+                window.location.reload();
+            }
+        } catch (err) {
+            showRepoError(err.message);
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Import Repositories';
+        }
+    }
+
+    // Close modal on Escape key
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            closeRepoModal();
+        }
+    });
+</script>
+{% endblock %}
