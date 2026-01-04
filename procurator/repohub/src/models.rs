@@ -3,9 +3,13 @@
 //! Business entities that represent the core domain.
 //! These are independent of the database layer.
 
+pub mod configuration;
+
 use serde::{Deserialize, Serialize};
 
 use crate::database::{ProjectRow, RepositoryRow, UserRow};
+
+pub use configuration::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {

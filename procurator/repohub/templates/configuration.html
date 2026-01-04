@@ -1,0 +1,729 @@
+{% extends "base.html" %}
+
+{% block title %}{{ project_name }} - Infrastructure Configuration{% endblock %}
+
+{% block content %}
+<style>
+    .config-container {
+        display: flex;
+        height: calc(100vh - 80px);
+        gap: 0;
+    }
+
+    .palette {
+        width: 250px;
+        background: #f6f8fa;
+        border-right: 1px solid #e1e4e8;
+        padding: 20px;
+        overflow-y: auto;
+    }
+
+    .canvas-area {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        background: #fafbfc;
+    }
+
+    .canvas-toolbar {
+        background: white;
+        border-bottom: 1px solid #e1e4e8;
+        padding: 10px 20px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .canvas-wrapper {
+        flex: 1;
+        position: relative;
+        background: white;
+    }
+
+    #cy {
+        width: 100%;
+        height: 100%;
+        background: #ffffff;
+        background-image:
+            linear-gradient(rgba(0,0,0,.03) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(0,0,0,.03) 1px, transparent 1px);
+        background-size: 20px 20px;
+    }
+
+    .properties-panel {
+        width: 350px;
+        background: white;
+        border-left: 1px solid #e1e4e8;
+        padding: 20px;
+        overflow-y: auto;
+        display: none;
+    }
+
+    .properties-panel.active {
+        display: block;
+    }
+
+    .palette-section {
+        margin-bottom: 30px;
+    }
+
+    .palette-section h3 {
+        font-size: 14px;
+        font-weight: 600;
+        margin-bottom: 10px;
+        color: #24292e;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    .palette-item {
+        background: white;
+        border: 1px solid #e1e4e8;
+        border-radius: 6px;
+        padding: 10px;
+        margin-bottom: 8px;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .palette-item:hover {
+        border-color: #0366d6;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+
+    .palette-item .icon {
+        font-size: 20px;
+    }
+
+    .palette-item .label {
+        font-size: 13px;
+        font-weight: 500;
+    }
+
+    .btn {
+        padding: 8px 16px;
+        border-radius: 6px;
+        border: 1px solid #e1e4e8;
+        background: white;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 500;
+        transition: all 0.2s;
+    }
+
+    .btn:hover {
+        background: #f6f8fa;
+    }
+
+    .btn-primary {
+        background: #0366d6;
+        color: white;
+        border-color: #0366d6;
+    }
+
+    .btn-primary:hover {
+        background: #0256c7;
+    }
+
+    .form-group {
+        margin-bottom: 15px;
+    }
+
+    .form-group label {
+        display: block;
+        font-size: 13px;
+        font-weight: 600;
+        margin-bottom: 5px;
+        color: #24292e;
+    }
+
+    .form-group input,
+    .form-group select,
+    .form-group textarea {
+        width: 100%;
+        padding: 8px;
+        border: 1px solid #e1e4e8;
+        border-radius: 6px;
+        font-size: 13px;
+    }
+
+    .form-group textarea {
+        resize: vertical;
+        min-height: 80px;
+        font-family: monospace;
+    }
+
+    .breadcrumb {
+        margin-bottom: 20px;
+    }
+
+    .breadcrumb a {
+        color: #0366d6;
+        text-decoration: none;
+    }
+
+    .breadcrumb a:hover {
+        text-decoration: underline;
+    }
+</style>
+
+<div style="max-width: 1400px; margin: 0 auto; padding: 20px;">
+    <div class="breadcrumb">
+        <a href="/{{ username }}">{{ username }}</a> /
+        <a href="/{{ username }}/{{ project_name }}">{{ project_name }}</a> /
+        <strong>Configuration</strong>
+    </div>
+
+    <h1>Infrastructure Configuration</h1>
+    <p style="color: #586069; margin-bottom: 20px;">
+        Design your deployment architecture by adding services, databases, and configuring connections.
+    </p>
+</div>
+
+<div class="config-container">
+    <!-- Left Palette -->
+    <div class="palette">
+        <div class="palette-section">
+            <h3>Services</h3>
+            <div class="palette-item" data-type="service" data-subtype="repo">
+                <span class="icon">📦</span>
+                <span class="label">Project Service</span>
+            </div>
+            <div class="palette-item" data-type="service" data-subtype="nixpkg">
+                <span class="icon">❄️</span>
+                <span class="label">Nix Package</span>
+            </div>
+        </div>
+
+        <div class="palette-section">
+            <h3>Databases</h3>
+            <div class="palette-item" data-type="database" data-dbtype="postgresql">
+                <span class="icon">🐘</span>
+                <span class="label">PostgreSQL</span>
+            </div>
+            <div class="palette-item" data-type="database" data-dbtype="mysql">
+                <span class="icon">🐬</span>
+                <span class="label">MySQL</span>
+            </div>
+            <div class="palette-item" data-type="database" data-dbtype="redis">
+                <span class="icon">🔴</span>
+                <span class="label">Redis</span>
+            </div>
+            <div class="palette-item" data-type="database" data-dbtype="mongodb">
+                <span class="icon">🍃</span>
+                <span class="label">MongoDB</span>
+            </div>
+        </div>
+
+        <div class="palette-section">
+            <h3>Infrastructure</h3>
+            <div class="palette-item" data-type="proxy" data-proxytype="nginx">
+                <span class="icon">🔀</span>
+                <span class="label">Nginx</span>
+            </div>
+            <div class="palette-item" data-type="proxy" data-proxytype="traefik">
+                <span class="icon">🔀</span>
+                <span class="label">Traefik</span>
+            </div>
+        </div>
+
+        <div class="palette-section">
+            <h3>Machines</h3>
+            <div class="palette-item" data-type="machine" data-env="development">
+                <span class="icon">💻</span>
+                <span class="label">Dev Machine</span>
+            </div>
+            <div class="palette-item" data-type="machine" data-env="staging">
+                <span class="icon">🔧</span>
+                <span class="label">Staging Machine</span>
+            </div>
+            <div class="palette-item" data-type="machine" data-env="production">
+                <span class="icon">🚀</span>
+                <span class="label">Prod Machine</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Center Canvas -->
+    <div class="canvas-area">
+        <div class="canvas-toolbar">
+            <div>
+                <button class="btn" id="btn-auto-layout">Auto Layout</button>
+                <button class="btn" id="btn-fit">Fit to Screen</button>
+                <button class="btn" id="btn-clear">Clear Canvas</button>
+            </div>
+            <div>
+                <button class="btn btn-primary" id="btn-save">💾 Save Configuration</button>
+            </div>
+        </div>
+        <div class="canvas-wrapper">
+            <div id="cy"></div>
+        </div>
+    </div>
+
+    <!-- Right Properties Panel -->
+    <div class="properties-panel" id="properties-panel">
+        <h3 id="prop-title">Properties</h3>
+        <div id="prop-content"></div>
+    </div>
+</div>
+
+<script src="https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
+<script>
+    const username = "{{ username }}";
+    const projectName = "{{ project_name }}";
+    const repositories = {{ repositories_json | safe }};
+
+    let cy;
+    let nodeCounter = 0;
+    let selectedNode = null;
+
+    // Initialize Cytoscape
+    function initCytoscape() {
+        cy = cytoscape({
+            container: document.getElementById('cy'),
+
+            style: [
+                {
+                    selector: 'node',
+                    style: {
+                        'label': 'data(label)',
+                        'text-valign': 'center',
+                        'text-halign': 'center',
+                        'background-color': 'data(color)',
+                        'width': 80,
+                        'height': 80,
+                        'font-size': '12px',
+                        'color': '#333',
+                        'text-wrap': 'wrap',
+                        'text-max-width': '70px',
+                        'border-width': 2,
+                        'border-color': '#e1e4e8'
+                    }
+                },
+                {
+                    selector: 'node:selected',
+                    style: {
+                        'border-color': '#0366d6',
+                        'border-width': 3
+                    }
+                },
+                {
+                    selector: 'edge',
+                    style: {
+                        'width': 2,
+                        'line-color': '#ccc',
+                        'target-arrow-color': '#ccc',
+                        'target-arrow-shape': 'triangle',
+                        'curve-style': 'bezier'
+                    }
+                }
+            ],
+
+            layout: {
+                name: 'preset'
+            }
+        });
+
+        // Handle node selection
+        cy.on('tap', 'node', function(evt) {
+            const node = evt.target;
+            selectNode(node);
+        });
+
+        // Handle canvas tap (deselect)
+        cy.on('tap', function(evt) {
+            if (evt.target === cy) {
+                deselectNode();
+            }
+        });
+
+        // Load existing configuration if any
+        loadConfiguration();
+    }
+
+    // Palette item click handlers
+    document.querySelectorAll('.palette-item').forEach(item => {
+        item.addEventListener('click', function() {
+            const type = this.dataset.type;
+            const subtype = this.dataset.subtype || this.dataset.dbtype || this.dataset.proxytype || this.dataset.env;
+            addNode(type, subtype);
+        });
+    });
+
+    // Add node to canvas
+    function addNode(type, subtype) {
+        nodeCounter++;
+        const id = `${type}-${nodeCounter}`;
+
+        let label, color, data;
+
+        switch(type) {
+            case 'service':
+                label = `Service ${nodeCounter}`;
+                color = '#e3f2fd';
+                data = {
+                    type: 'service',
+                    subtype: subtype,
+                    name: `service-${nodeCounter}`,
+                    ports: [],
+                    envVars: {},
+                    dependsOn: []
+                };
+                break;
+            case 'database':
+                label = subtype.toUpperCase();
+                color = '#f3e5f5';
+                data = {
+                    type: 'database',
+                    dbType: subtype,
+                    name: `${subtype}-${nodeCounter}`,
+                    port: getDefaultPort(subtype),
+                    storage: { amount: 10, unit: 'GB' }
+                };
+                break;
+            case 'proxy':
+                label = subtype;
+                color = '#fff3e0';
+                data = {
+                    type: 'proxy',
+                    proxyType: subtype,
+                    name: `${subtype}-${nodeCounter}`,
+                    routes: []
+                };
+                break;
+            case 'machine':
+                label = `${subtype} machine`;
+                color = '#e8f5e9';
+                data = {
+                    type: 'machine',
+                    environment: subtype,
+                    name: `${subtype}-${nodeCounter}`,
+                    cpu: 2.0,
+                    memory: { amount: 4, unit: 'GB' },
+                    roles: [subtype]
+                };
+                break;
+        }
+
+        cy.add({
+            group: 'nodes',
+            data: { id, label, color, ...data },
+            position: { x: 200 + Math.random() * 300, y: 200 + Math.random() * 200 }
+        });
+    }
+
+    function getDefaultPort(dbType) {
+        const ports = {
+            postgresql: 5432,
+            mysql: 3306,
+            redis: 6379,
+            mongodb: 27017
+        };
+        return ports[dbType] || 8080;
+    }
+
+    // Select node and show properties
+    function selectNode(node) {
+        selectedNode = node;
+        const panel = document.getElementById('properties-panel');
+        panel.classList.add('active');
+
+        const data = node.data();
+        document.getElementById('prop-title').textContent = `Edit: ${data.label}`;
+
+        const content = document.getElementById('prop-content');
+        content.innerHTML = generatePropertiesForm(data);
+
+        attachPropertyHandlers();
+    }
+
+    function deselectNode() {
+        selectedNode = null;
+        document.getElementById('properties-panel').classList.remove('active');
+    }
+
+    // Generate properties form based on node type
+    function generatePropertiesForm(data) {
+        let html = '';
+
+        // Common fields
+        html += `
+            <div class="form-group">
+                <label>Name</label>
+                <input type="text" id="prop-name" value="${data.name}" />
+            </div>
+        `;
+
+        if (data.type === 'service') {
+            html += `
+                <div class="form-group">
+                    <label>Source Type</label>
+                    <select id="prop-source-type">
+                        <option value="repo" ${data.subtype === 'repo' ? 'selected' : ''}>Project Repository</option>
+                        <option value="nixpkg" ${data.subtype === 'nixpkg' ? 'selected' : ''}>Nix Package</option>
+                    </select>
+                </div>
+            `;
+
+            if (data.subtype === 'repo') {
+                html += `
+                    <div class="form-group">
+                        <label>Repository</label>
+                        <select id="prop-repo">
+                            <option value="">Select a repository...</option>
+                            ${repositories.map(r => `
+                                <option value="${r.name}" ${data.repoName === r.name ? 'selected' : ''}>
+                                    ${r.name}
+                                </option>
+                            `).join('')}
+                        </select>
+                    </div>
+                `;
+            } else {
+                html += `
+                    <div class="form-group">
+                        <label>Nix Package (e.g., pkgs.nodejs)</label>
+                        <input type="text" id="prop-package" value="${data.package || ''}" />
+                    </div>
+                `;
+            }
+
+            html += `
+                <div class="form-group">
+                    <label>Ports (comma-separated)</label>
+                    <input type="text" id="prop-ports" value="${(data.ports || []).join(', ')}" placeholder="8080, 8081" />
+                </div>
+                <div class="form-group">
+                    <label>Environment Variables (JSON)</label>
+                    <textarea id="prop-envvars">${JSON.stringify(data.envVars || {}, null, 2)}</textarea>
+                </div>
+            `;
+        }
+
+        if (data.type === 'database') {
+            html += `
+                <div class="form-group">
+                    <label>Port</label>
+                    <input type="number" id="prop-port" value="${data.port}" />
+                </div>
+                <div class="form-group">
+                    <label>Storage Amount</label>
+                    <input type="number" id="prop-storage-amount" value="${data.storage.amount}" />
+                </div>
+                <div class="form-group">
+                    <label>Storage Unit</label>
+                    <select id="prop-storage-unit">
+                        <option value="GB" ${data.storage.unit === 'GB' ? 'selected' : ''}>GB</option>
+                        <option value="MB" ${data.storage.unit === 'MB' ? 'selected' : ''}>MB</option>
+                    </select>
+                </div>
+            `;
+        }
+
+        if (data.type === 'machine') {
+            html += `
+                <div class="form-group">
+                    <label>CPU Cores</label>
+                    <input type="number" step="0.5" id="prop-cpu" value="${data.cpu}" />
+                </div>
+                <div class="form-group">
+                    <label>Memory Amount</label>
+                    <input type="number" id="prop-memory-amount" value="${data.memory.amount}" />
+                </div>
+                <div class="form-group">
+                    <label>Memory Unit</label>
+                    <select id="prop-memory-unit">
+                        <option value="GB" ${data.memory.unit === 'GB' ? 'selected' : ''}>GB</option>
+                        <option value="MB" ${data.memory.unit === 'MB' ? 'selected' : ''}>MB</option>
+                    </select>
+                </div>
+            `;
+        }
+
+        html += `
+            <div class="form-group">
+                <button class="btn btn-primary" id="btn-apply-props">Apply Changes</button>
+                <button class="btn" id="btn-delete-node" style="margin-top: 10px; width: 100%; background: #d73a49; color: white; border-color: #d73a49;">Delete Node</button>
+            </div>
+        `;
+
+        return html;
+    }
+
+    // Attach handlers to property form
+    function attachPropertyHandlers() {
+        document.getElementById('btn-apply-props')?.addEventListener('click', applyProperties);
+        document.getElementById('btn-delete-node')?.addEventListener('click', deleteNode);
+    }
+
+    function applyProperties() {
+        if (!selectedNode) return;
+
+        const data = selectedNode.data();
+        const name = document.getElementById('prop-name').value;
+
+        selectedNode.data('name', name);
+        selectedNode.data('label', name);
+
+        if (data.type === 'service') {
+            const subtype = document.getElementById('prop-source-type').value;
+            selectedNode.data('subtype', subtype);
+
+            if (subtype === 'repo') {
+                const repo = document.getElementById('prop-repo').value;
+                selectedNode.data('repoName', repo);
+            } else {
+                const pkg = document.getElementById('prop-package').value;
+                selectedNode.data('package', pkg);
+            }
+
+            const ports = document.getElementById('prop-ports').value
+                .split(',')
+                .map(p => p.trim())
+                .filter(p => p)
+                .map(p => parseInt(p));
+            selectedNode.data('ports', ports);
+
+            try {
+                const envVars = JSON.parse(document.getElementById('prop-envvars').value);
+                selectedNode.data('envVars', envVars);
+            } catch (e) {
+                alert('Invalid JSON for environment variables');
+            }
+        }
+
+        if (data.type === 'database') {
+            const port = parseInt(document.getElementById('prop-port').value);
+            const storageAmount = parseFloat(document.getElementById('prop-storage-amount').value);
+            const storageUnit = document.getElementById('prop-storage-unit').value;
+
+            selectedNode.data('port', port);
+            selectedNode.data('storage', { amount: storageAmount, unit: storageUnit });
+        }
+
+        if (data.type === 'machine') {
+            const cpu = parseFloat(document.getElementById('prop-cpu').value);
+            const memAmount = parseFloat(document.getElementById('prop-memory-amount').value);
+            const memUnit = document.getElementById('prop-memory-unit').value;
+
+            selectedNode.data('cpu', cpu);
+            selectedNode.data('memory', { amount: memAmount, unit: memUnit });
+        }
+
+        alert('Properties updated!');
+    }
+
+    function deleteNode() {
+        if (!selectedNode || !confirm('Delete this node?')) return;
+
+        cy.remove(selectedNode);
+        deselectNode();
+    }
+
+    // Toolbar actions
+    document.getElementById('btn-auto-layout').addEventListener('click', () => {
+        cy.layout({ name: 'breadthfirst', directed: true, padding: 50 }).run();
+    });
+
+    document.getElementById('btn-fit').addEventListener('click', () => {
+        cy.fit(50);
+    });
+
+    document.getElementById('btn-clear').addEventListener('click', () => {
+        if (confirm('Clear the entire canvas?')) {
+            cy.elements().remove();
+            deselectNode();
+        }
+    });
+
+    document.getElementById('btn-save').addEventListener('click', saveConfiguration);
+
+    // Save configuration
+    async function saveConfiguration() {
+        const config = {
+            machines: {},
+            services: {},
+            databases: {},
+            proxies: []
+        };
+
+        cy.nodes().forEach(node => {
+            const data = node.data();
+
+            if (data.type === 'machine') {
+                config.machines[data.name] = {
+                    name: data.name,
+                    environment: data.environment,
+                    cpu: data.cpu,
+                    memory: data.memory,
+                    roles: data.roles
+                };
+            } else if (data.type === 'service') {
+                const source = data.subtype === 'repo'
+                    ? { type: 'projectrepo', repo_name: data.repoName || '', flake_output: null }
+                    : { type: 'nixpackage', package: data.package || '' };
+
+                config.services[data.name] = {
+                    name: data.name,
+                    source: source,
+                    placement: {},
+                    ports: (data.ports || []).map(p => ({
+                        internal: p,
+                        external: null,
+                        protocol: 'tcp'
+                    })),
+                    env_vars: data.envVars || {},
+                    depends_on: data.dependsOn || [],
+                    replicas: {},
+                    health_check: null
+                };
+            } else if (data.type === 'database') {
+                config.databases[data.name] = {
+                    name: data.name,
+                    db_type: data.dbType,
+                    package: `pkgs.${data.dbType}`,
+                    placement: {},
+                    storage: data.storage,
+                    port: data.port
+                };
+            } else if (data.type === 'proxy') {
+                config.proxies.push({
+                    name: data.name,
+                    package: `pkgs.${data.proxyType}`,
+                    routes: data.routes || [],
+                    tls_enabled: false
+                });
+            }
+        });
+
+        try {
+            const res = await fetch(`/${username}/${projectName}/configuration`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ configuration: config })
+            });
+
+            if (!res.ok) {
+                throw new Error('Failed to save configuration');
+            }
+
+            alert('Configuration saved successfully!');
+        } catch (err) {
+            alert('Error saving configuration: ' + err.message);
+        }
+    }
+
+    // Load existing configuration
+    function loadConfiguration() {
+        // TODO: Load from backend if exists
+        // For now, start with empty canvas
+    }
+
+    // Initialize
+    initCytoscape();
+</script>
+{% endblock %}

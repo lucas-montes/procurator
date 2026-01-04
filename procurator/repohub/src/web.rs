@@ -10,7 +10,10 @@ use axum::{
 
 use crate::{
     database::Database,
-    models::{CreateProjectRequest, CreateRepositoryRequest, CreateUserRequest, Project, Repository, User},
+    models::{
+        CreateProjectRequest, CreateRepositoryRequest, CreateUserRequest,
+        Project, Repository, User, SaveConfigurationRequest
+    },
     config::Config,
     services::RepositoryService,
 };
@@ -95,6 +98,14 @@ struct FlakeTemplate {
     project_name: String,
     repo_name: String,
     flake_metadata: Option<FlakeMetadata>,
+}
+
+#[derive(Template)]
+#[template(path = "configuration.html")]
+struct ConfigurationTemplate {
+    username: String,
+    project_name: String,
+    repositories_json: String,
 }
 
 /// The main page of the app. We should show a list of the users in the database
@@ -311,10 +322,6 @@ async fn create_repository(
         }
     };
 
-    // Best-effort: parse flake metadata and infrastructure (non-blocking)
-    state.repo_service.parse_flake_metadata(&username, &req.name);
-    state.repo_service.parse_infrastructure(&username, &req.name);
-
     // Persist repository in DB
     match state
         .db
@@ -346,14 +353,71 @@ async fn create_repository(
 /// I would like to have a separate repo, which the user doesn't need to create, that will have all the settings together, maybe even the docs.
 /// Cloning the repo would give an easy way to manage and run all the services both locally and remotely
 async fn configuration(
-    State(_state): State<AppState>,
-    Path((username, project)): Path<(String, String)>,
+    State(state): State<AppState>,
+    Path((username, project_name)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    HtmlTemplate(NotImplementedTemplate {
-        feature: "Configuration Management".to_string(),
-        description: "Manage infrastructure, external dependencies (databases, proxies), and deployment settings. This will be a Git repository that you can clone to run all services locally and remotely.".to_string(),
-        back_url: format!("/{}/{}", username, project),
+    // Get user
+    let user = match state.db.get_user_by_username(&username).await {
+        Ok(user) => user,
+        Err(_e) => {
+            return HtmlTemplate(NotImplementedTemplate {
+                feature: "User Not Found".to_string(),
+                description: format!("User '{}' not found", username),
+                back_url: "/".to_string(),
+            })
+            .into_response();
+        }
+    };
+
+    // Get project
+    let project = match state.db.get_project(user.id, &project_name).await {
+        Ok(project) => project,
+        Err(_e) => {
+            return HtmlTemplate(NotImplementedTemplate {
+                feature: "Project Not Found".to_string(),
+                description: format!("Project '{}' not found", project_name),
+                back_url: format!("/{}", username),
+            })
+            .into_response();
+        }
+    };
+
+    // Get repositories for this project
+    let repositories = match state.db.list_repositories_by_project(project.id).await {
+        Ok(repos) => repos.into_iter().map(Repository::from).collect::<Vec<_>>(),
+        Err(_e) => Vec::new(),
+    };
+
+    // Serialize repositories to JSON for JavaScript
+    let repositories_json = serde_json::to_string(&repositories).unwrap_or_else(|_| "[]".to_string());
+
+    HtmlTemplate(ConfigurationTemplate {
+        username,
+        project_name,
+        repositories_json,
     })
+    .into_response()
+}
+
+/// Save project configuration
+async fn save_configuration(
+    State(_state): State<AppState>,
+    Path((username, project_name)): Path<(String, String)>,
+    Json(req): Json<SaveConfigurationRequest>,
+) -> impl IntoResponse {
+    tracing::info!(
+        username = username,
+        project = project_name,
+        "Saving project configuration"
+    );
+
+    // TODO: Generate config.nix from req.configuration
+    // TODO: Commit to project's procurator/ folder in git
+
+    // For now, just log the configuration
+    tracing::debug!(config = ?req.configuration, "Received configuration");
+
+    (StatusCode::OK, Json(serde_json::json!({ "success": true }))).into_response()
 }
 
 /// A view allowing to create and define a testing strategy for the a project.
@@ -460,7 +524,7 @@ pub fn routes() -> Router<AppState> {
         .route("/{username}/{project}", get(project))
         .route("/{username}/{project}/repositories", post(create_repository))
         .route("/{username}/{project}/testing", get(testing))
-        .route("/{username}/{project}/configuration", get(configuration))
+        .route("/{username}/{project}/configuration", get(configuration).post(save_configuration))
         .route("/{username}/{project}/{repo}", get(repo))
         .route("/{username}/{project}/{repo}/builds/{id}", get(builds))
         .route("/{username}/{project}/{repo}/flake", get(repo_flake))
