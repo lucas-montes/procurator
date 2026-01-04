@@ -102,7 +102,7 @@
                         <input type="text" id="create-repo-name" required placeholder="e.g., my-api-service">
                         <small style="color: #586069; font-size: 0.8rem;">Use lowercase letters, numbers, and hyphens</small>
                     </div>
-                    
+
                     <div class="form-group">
                         <label for="create-repo-description">Description (optional)</label>
                         <textarea id="create-repo-description" rows="3" placeholder="What is this repository for?"></textarea>
@@ -168,7 +168,7 @@ git@gitlab.com:user/worker-service.git" style="font-family: monospace;"></textar
             content.classList.remove('active');
         });
         document.getElementById(tab + '-tab').classList.add('active');
-        
+
         clearRepoError();
     }
 
@@ -187,28 +187,28 @@ git@gitlab.com:user/worker-service.git" style="font-family: monospace;"></textar
     function extractRepoName(url) {
         // Extract repository name from various URL formats
         let name = url;
-        
+
         // Remove .git suffix
         if (name.endsWith('.git')) {
             name = name.slice(0, -4);
         }
-        
+
         // Extract last part after / or :
         const parts = name.split(/[/:]/);
         name = parts[parts.length - 1];
-        
+
         // Clean up to lowercase with hyphens
         name = name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
-        
+
         return name || 'repository';
     }
 
     async function handleCreateRepo(e) {
         e.preventDefault();
-        
+
         const name = document.getElementById('create-repo-name').value.trim();
         const description = document.getElementById('create-repo-description').value.trim();
-        
+
         if (!name) {
             showRepoError('Repository name is required');
             return;
@@ -228,11 +228,11 @@ git@gitlab.com:user/worker-service.git" style="font-family: monospace;"></textar
         try {
             // Generate a placeholder Git URL for new repositories
             const gitUrl = `git@${window.location.hostname}:${username}/${projectName}/${name}.git`;
-            
+
             const res = await fetch(`/${username}/${projectName}/repositories`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
+                body: JSON.stringify({
                     name,
                     git_url: gitUrl
                 })
@@ -254,9 +254,9 @@ git@gitlab.com:user/worker-service.git" style="font-family: monospace;"></textar
 
     async function handleImportRepos(e) {
         e.preventDefault();
-        
+
         const reposText = document.getElementById('import-repo-urls').value.trim();
-        
+
         if (!reposText) {
             showRepoError('Please provide at least one repository URL');
             return;
@@ -281,17 +281,17 @@ git@gitlab.com:user/worker-service.git" style="font-family: monospace;"></textar
             let imported = 0;
             let failed = 0;
             const errors = [];
-            
+
             for (const gitUrl of repoUrls) {
                 try {
                     const repoName = extractRepoName(gitUrl);
-                    
+
                     submitBtn.textContent = `Importing ${imported + 1}/${repoUrls.length}...`;
-                    
+
                     const res = await fetch(`/${username}/${projectName}/repositories`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ 
+                        body: JSON.stringify({
                             name: repoName,
                             git_url: gitUrl
                         })

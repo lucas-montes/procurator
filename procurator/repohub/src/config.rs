@@ -13,7 +13,7 @@ impl Default for Config {
             database_url: "../repohub.db".to_string(),
             bind_address: "0.0.0.0:3001".to_string(),
             domain: "homelab".to_string(),
-            repos_base_path: "/var/lib/git-server".to_string(),
+            repos_base_path: "git-server".to_string(),
         }
     }
 }

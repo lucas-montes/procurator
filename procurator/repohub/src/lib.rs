@@ -1,7 +1,6 @@
 mod config;
 mod database;
 mod models;
-// mod repo_manager;
 mod web;
 
 pub use config::Config;

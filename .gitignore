@@ -11,3 +11,4 @@ result
 dummyBare
 *.db
 repos/
+git-server/

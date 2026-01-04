@@ -70,14 +70,14 @@
         </div>
         <div class="modal-body">
             <div class="error-message" id="projectError"></div>
-            
+
             <form id="project-form" onsubmit="handleCreateProject(event)">
                 <div class="form-group">
                     <label for="project-name">Project Name *</label>
                     <input type="text" id="project-name" required placeholder="e.g., my-awesome-project">
                     <small style="color: #586069; font-size: 0.8rem;">Use lowercase letters, numbers, and hyphens</small>
                 </div>
-                
+
                 <div class="form-group">
                     <label for="project-description">Description</label>
                     <textarea id="project-description" rows="3" placeholder="Describe your project..." style="width: 100%; padding: 0.625rem 0.75rem; border: 1px solid #d0d7de; border-radius: 6px; font-size: 0.95rem; font-family: inherit; resize: vertical;"></textarea>
@@ -129,11 +129,11 @@ git@gitlab.com:user/repo3.git" style="width: 100%; padding: 0.625rem 0.75rem; bo
 
     async function handleCreateProject(e) {
         e.preventDefault();
-        
+
         const name = document.getElementById('project-name').value.trim();
         const description = document.getElementById('project-description').value.trim();
         const reposText = document.getElementById('project-repos').value.trim();
-        
+
         if (!name) {
             showProjectError('Project name is required');
             return;
@@ -155,9 +155,9 @@ git@gitlab.com:user/repo3.git" style="width: 100%; padding: 0.625rem 0.75rem; bo
             const projectRes = await fetch(`/${username}/projects`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    name, 
-                    description: description || null 
+                body: JSON.stringify({
+                    name,
+                    description: description || null
                 })
             });
 
@@ -175,20 +175,20 @@ git@gitlab.com:user/repo3.git" style="width: 100%; padding: 0.625rem 0.75rem; bo
 
                 if (repoUrls.length > 0) {
                     submitBtn.textContent = `Importing ${repoUrls.length} repositories...`;
-                    
+
                     // Import repositories one by one
                     let imported = 0;
                     let failed = 0;
-                    
+
                     for (const gitUrl of repoUrls) {
                         try {
                             // Extract repo name from URL
                             const repoName = extractRepoName(gitUrl);
-                            
+
                             const repoRes = await fetch(`/${username}/${name}/repositories`, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ 
+                                body: JSON.stringify({
                                     name: repoName,
                                     git_url: gitUrl
                                 })
@@ -230,21 +230,21 @@ git@gitlab.com:user/repo3.git" style="width: 100%; padding: 0.625rem 0.75rem; bo
         // git@github.com:user/repo.git -> repo
         // https://github.com/user/repo.git -> repo
         // https://github.com/user/repo -> repo
-        
+
         let name = url;
-        
+
         // Remove .git suffix
         if (name.endsWith('.git')) {
             name = name.slice(0, -4);
         }
-        
+
         // Extract last part after / or :
         const parts = name.split(/[/:]/);
         name = parts[parts.length - 1];
-        
+
         // Clean up
         name = name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
-        
+
         return name || 'repository';
     }
 
