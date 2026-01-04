@@ -25,7 +25,7 @@ async fn main() {
     let database = Database::new(&config.database_url).await.unwrap();
 
     // Initialize job queue and repository store
-    let queue = Arc::new(JobQueue::new(database));
+    let queue = JobQueue::new(database);
 
     let worker = Worker::new(queue.clone());
     let state = AppState::new(queue);

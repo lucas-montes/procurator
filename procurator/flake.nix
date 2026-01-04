@@ -74,6 +74,7 @@
         devShells.default = with pkgs;
           mkShell {
             buildInputs = [
+              cargo-watch
               pkg-config
               cargo-watch
               rust-bin-custom

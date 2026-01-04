@@ -47,11 +47,11 @@ pub struct BuildResponse {
 
 #[derive(Clone)]
 pub struct AppState {
-    queue: Arc<JobQueue>,
+    queue: JobQueue,
 }
 
 impl AppState {
-    pub fn new(queue: Arc<JobQueue>) -> Self {
+    pub fn new(queue: JobQueue) -> Self {
         Self { queue }
     }
 }

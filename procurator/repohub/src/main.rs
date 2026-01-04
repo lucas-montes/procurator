@@ -9,7 +9,6 @@
 //! - **Repositories**: Individual Git repositories within a project
 //! - **Collaboration**: Multiple users can collaborate on projects
 
-use std::sync::Arc;
 use tracing::info;
 
 #[tokio::main]
@@ -29,17 +28,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Starting Repohub service"
     );
 
-    // Initialize database
-    let database = repohub::Database::new(&config.database_url).await?;
-    let db = Arc::new(database);
-
-    // Create app state
+    let db = repohub::Database::new(&config.database_url).await?;
     let state = repohub::AppState::new(db);
-
-    // Build router
     let app = repohub::routes().with_state(state);
 
-    // Start server
     info!("Listening on {}", config.bind_address);
     let listener = tokio::net::TcpListener::bind(&config.bind_address).await?;
     axum::serve(listener, app).await?;

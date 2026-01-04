@@ -94,11 +94,11 @@ impl From<nix::Error> for WorkerError {
 type Result<T> = std::result::Result<T, WorkerError>;
 
 pub struct Worker {
-    queue: Arc<JobQueue>,
+    queue: JobQueue,
 }
 
 impl Worker {
-    pub fn new(queue: Arc<JobQueue>) -> Self {
+    pub fn new(queue: JobQueue) -> Self {
         Self { queue }
     }
 
