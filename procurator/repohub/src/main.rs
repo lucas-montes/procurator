@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let db = repohub::Database::new(&config.database_url).await?;
-    let state = repohub::AppState::new(db);
+    let state = repohub::AppState::new(db, &config);
     let app = repohub::routes().with_state(state);
 
     info!("Listening on {}", config.bind_address);

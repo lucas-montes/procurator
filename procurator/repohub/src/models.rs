@@ -84,5 +84,5 @@ pub struct CreateProjectRequest {
 #[derive(Debug, Deserialize)]
 pub struct CreateRepositoryRequest {
     pub name: String,
-    pub git_url: String,
+    pub git_url: Option<String>,
 }

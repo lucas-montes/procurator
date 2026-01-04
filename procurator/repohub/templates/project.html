@@ -23,7 +23,7 @@
     </p>
 </div>
 
-<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem;">
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem;">
     <a href="/{{ username }}/{{ project.name }}/configuration" class="card" style="text-decoration: none; color: inherit;">
         <h3>⚙️ Configuration</h3>
         <p class="meta">Manage infrastructure and settings</p>
@@ -34,10 +34,6 @@
         <p class="meta">E2E testing and monitoring</p>
     </a>
 
-    <div class="card">
-        <h3>📊 Status</h3>
-        <p class="meta">{{ repositories.len() }} repositories</p>
-    </div>
 </div>
 
 <div class="card">
@@ -226,15 +222,12 @@ git@gitlab.com:user/worker-service.git" style="font-family: monospace;"></textar
         submitBtn.textContent = 'Creating...';
 
         try {
-            // Generate a placeholder Git URL for new repositories
-            const gitUrl = `git@${window.location.hostname}:${username}/${projectName}/${name}.git`;
-
+            // For new repositories, don't send git_url - let server generate it
             const res = await fetch(`/${username}/${projectName}/repositories`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    name,
-                    git_url: gitUrl
+                    name
                 })
             });
 

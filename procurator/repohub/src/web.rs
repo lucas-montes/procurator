@@ -7,21 +7,27 @@ use axum::{
     routing::{get, post},
     Json,
 };
-use std::sync::Arc;
 
 use crate::{
     database::Database,
     models::{CreateProjectRequest, CreateRepositoryRequest, CreateUserRequest, Project, Repository, User},
+    config::Config,
+    services::RepositoryService,
 };
+use repo_outils::nix::FlakeMetadata;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: Database,
+    pub repo_service: RepositoryService,
 }
 
 impl AppState {
-    pub fn new(db: Database) -> Self {
-        Self { db }
+    pub fn new(db: Database, config: &Config) -> Self {
+        Self {
+            db,
+            repo_service: RepositoryService::new(config),
+        }
     }
 }
 
@@ -80,6 +86,15 @@ struct NotImplementedTemplate {
     feature: String,
     description: String,
     back_url: String,
+}
+
+#[derive(Template)]
+#[template(path = "flake.html")]
+struct FlakeTemplate {
+    username: String,
+    project_name: String,
+    repo_name: String,
+    flake_metadata: Option<FlakeMetadata>,
 }
 
 /// The main page of the app. We should show a list of the users in the database
@@ -279,9 +294,31 @@ async fn create_repository(
         }
     };
 
+    // Use the repository service to create or clone the repository
+    let git_url = match state.repo_service.create_or_clone_repository(
+        &username,
+        &req.name,
+        req.git_url.as_deref(),
+    ) {
+        Ok(url) => url,
+        Err(e) => {
+            tracing::error!(error = ?e, "Failed to create/clone repository");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to create repository: {}", e),
+            )
+            .into_response();
+        }
+    };
+
+    // Best-effort: parse flake metadata and infrastructure (non-blocking)
+    state.repo_service.parse_flake_metadata(&username, &req.name);
+    state.repo_service.parse_infrastructure(&username, &req.name);
+
+    // Persist repository in DB
     match state
         .db
-        .create_repository(project.id, &req.name, &req.git_url)
+        .create_repository(project.id, &req.name, &git_url)
         .await
     {
         Ok(id) => {
@@ -334,13 +371,17 @@ async fn testing(
 
 /// The flake of the repo, with a description, information about the checks to run, dependencies and other information that could be useful
 async fn repo_flake(
-    State(_state): State<AppState>,
-    Path((username, project, repo)): Path<(String, String, String)>,
+    State(state): State<AppState>,
+    Path((username, project_name, repo_name)): Path<(String, String, String)>,
 ) -> impl IntoResponse {
-    HtmlTemplate(NotImplementedTemplate {
-        feature: "Nix Flake Viewer".to_string(),
-        description: "View flake.nix configuration, dependencies, checks, and build outputs. This will parse and display flake metadata in a user-friendly format.".to_string(),
-        back_url: format!("/{}/{}/{}", username, project, repo),
+    // Parse flake metadata using the repository service
+    let flake_metadata = state.repo_service.parse_flake_metadata(&username, &repo_name);
+
+    HtmlTemplate(FlakeTemplate {
+        username,
+        project_name,
+        repo_name,
+        flake_metadata,
     })
 }
 

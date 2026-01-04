@@ -137,6 +137,26 @@ pub fn create_bare_repo(bare_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Clone a remote repository into a bare repository at the specified path
+pub fn clone_into_bare(bare_path: &Path, remote_url: &str) -> Result<()> {
+    if bare_path.exists() {
+        return Err(RepoError::AlreadyExists(bare_path.display().to_string()));
+    }
+
+    info!("Cloning remote '{}' into bare repository at: {}", remote_url, bare_path.display());
+
+    let output = Command::new("git")
+        .args(["clone", "--bare", remote_url, &bare_path.to_string_lossy()])
+        .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(RepoError::GitError(format!("Failed to clone repository: {}", stderr)));
+    }
+
+    Ok(())
+}
+
 /// Delete a Git repository (be careful!)
 pub fn delete_repo(bare_path: &Path) -> Result<()> {
     if !bare_path.exists() {

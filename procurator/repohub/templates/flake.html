@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% block title %}{{ repo_name }} - Flake Configuration{% endblock %}
+
+{% block content %}
+<div style="max-width: 1200px; margin: 0 auto; padding: 20px;">
+    <div style="margin-bottom: 20px;">
+        <a href="/{{ username }}" style="color: #0366d6; text-decoration: none;">{{ username }}</a> /
+        <a href="/{{ username }}/{{ project_name }}" style="color: #0366d6; text-decoration: none;">{{ project_name }}</a> /
+        <a href="/{{ username }}/{{ project_name }}/{{ repo_name }}" style="color: #0366d6; text-decoration: none;">{{ repo_name }}</a>
+    </div>
+
+    <h1>Nix Flake Configuration</h1>
+
+    {% match flake_metadata %}
+        {% when Some with (metadata) %}
+            <div style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px;">
+                <h2>Flake Metadata</h2>
+
+                {% if let Some(desc) = metadata.description %}
+                <div style="margin-bottom: 15px;">
+                    <strong>Description:</strong>
+                    <p style="margin: 5px 0 0 0; color: #586069;">{{ desc }}</p>
+                </div>
+                {% endif %}
+            </div>
+
+            {% if !metadata.packages.is_empty() %}
+            <div style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px;">
+                <h2>Packages ({{ metadata.packages.len() }})</h2>
+                <ul style="list-style: none; padding: 0;">
+                    {% for package in metadata.packages %}
+                    <li style="padding: 8px; border-bottom: 1px solid #e1e4e8;">
+                        <code style="color: #0366d6; font-family: monospace;">{{ package }}</code>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
+            {% if !metadata.apps.is_empty() %}
+            <div style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px;">
+                <h2>Apps ({{ metadata.apps.len() }})</h2>
+                <ul style="list-style: none; padding: 0;">
+                    {% for app in metadata.apps %}
+                    <li style="padding: 8px; border-bottom: 1px solid #e1e4e8;">
+                        <code style="color: #0366d6; font-family: monospace;">{{ app }}</code>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
+            {% if !metadata.checks.is_empty() %}
+            <div style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px;">
+                <h2>Checks ({{ metadata.checks.len() }})</h2>
+                <ul style="list-style: none; padding: 0;">
+                    {% for check in metadata.checks %}
+                    <li style="padding: 8px; border-bottom: 1px solid #e1e4e8;">
+                        <code style="color: #0366d6; font-family: monospace;">{{ check }}</code>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
+            {% if !metadata.dev_shells.is_empty() %}
+            <div style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px;">
+                <h2>Development Shells ({{ metadata.dev_shells.len() }})</h2>
+                <ul style="list-style: none; padding: 0;">
+                    {% for shell in metadata.dev_shells %}
+                    <li style="padding: 8px; border-bottom: 1px solid #e1e4e8;">
+                        <code style="color: #0366d6; font-family: monospace;">{{ shell }}</code>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
+        {% when None %}
+            <div style="background: #fff3cd; padding: 20px; border-radius: 8px; border: 1px solid #ffc107; margin-bottom: 20px;">
+                <h2 style="margin-top: 0; color: #856404;">No Flake Found</h2>
+                <p style="margin-bottom: 0; color: #856404;">
+                    This repository does not contain a valid Nix flake or the flake could not be parsed.
+                </p>
+                <p style="margin: 10px 0 0 0; color: #856404;">
+                    To add a flake, create a <code style="background: #ffeeba; padding: 2px 6px; border-radius: 3px;">flake.nix</code> file at the root of your repository.
+                </p>
+            </div>
+        {% endmatch %}
+
+    <div style="margin-top: 20px;">
+        <a href="/{{ username }}/{{ project_name }}/{{ repo_name }}" style="color: #0366d6; text-decoration: none;">← Back to Repository</a>
+    </div>
+</div>
+{% endblock %}
