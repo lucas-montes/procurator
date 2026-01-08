@@ -1,8 +1,10 @@
-mod client;
-mod commands;
-mod interactive;
+// mod client;
+// mod interactive;
+mod cli;
+mod init;
+mod autonix;
 
-use commands::Cli;
+use cli::Cli;
 
 
 #[tokio::main(flavor = "current_thread")]

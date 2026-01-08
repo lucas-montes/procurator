@@ -101,10 +101,11 @@ struct FlakeTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "configuration.html")]
+#[template(path = "configuration_v2.html")]
 struct ConfigurationTemplate {
     username: String,
     project_name: String,
+    repositories: Vec<Repository>,
     repositories_json: String,
 }
 
@@ -394,6 +395,7 @@ async fn configuration(
     HtmlTemplate(ConfigurationTemplate {
         username,
         project_name,
+        repositories: repositories.clone(),
         repositories_json,
     })
     .into_response()

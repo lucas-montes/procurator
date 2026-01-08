@@ -1,0 +1,127 @@
+# Procurator – Local Developer Platform Vision
+
+This file describes the roadmap, TODOs, and UX notes for implementing Procurator with a declarative, seamless local development experience powered by Nix.
+
+---
+
+## Core Philosophy Notes
+
+* Developers must never think about environments
+* Local, staging, and production parity is an invariant
+* The laptop is only a host that instantiates project specifications
+* All configuration lives in the PROJECT repo
+* CLI commands must never allow unspecified drift
+* Automation should remove need for docker, kubectl, asdf, nvm, manual .env files
+
+---
+
+# CLI Experience Design Goals
+
+### Golden flow
+
+A developer workspace should feel like:
+
+clone → open → init → up → code → test
+
+with no other tools.
+
+### Command expectations
+
+| Command     | Intent                            |
+| ----------- | --------------------------------- |
+| init        | prepare the workspace             |
+| stack up    | start the declared runtime        |
+| stack down  | destroy local ephemeral resources |
+| stack stop  | pause execution                   |
+| stack start | resume                            |
+| test        | run CI-parity tests               |
+| inspect     | visualize local/remote cluster    |
+
+---
+
+# Implementation Roadmap
+
+## Phase 1 – Foundations
+
+* Clone CLI into Rust crates
+* Structured logging subsystem
+* CLI to agent communication
+* Workspace detection logic
+
+---
+
+## Phase 2 – Nix Spine
+
+* Integrate with nix flakes
+* Auto-run nix develop
+* Build cache design
+
+---
+
+## Phase 3 – Declarative Services
+
+* Define project config format
+* Repo linking
+
+---
+
+## Phase 4 – Local Cluster Runtime
+
+* Embed k3s/kind equivalent
+* Manifest generation
+* Networking
+
+---
+
+## Phase 5 – VCS Integrations
+
+* Internal git server
+* Auth tokens
+
+---
+
+## Phase 6 – CI Parity
+
+* Pipeline format
+
+---
+
+## Phase 7 – Secrets Magic
+
+* Secure secrets store
+
+---
+
+# Stack Namespace Detailed TODOs
+
+### Lifecycle
+
+* stack up TUI supervisor
+* detach mode
+* graceful shutdown
+
+---
+
+### Logs Aggregation
+
+* Unified logs stream similar to Procfile
+* Prefix coloring
+* persistent log storage
+
+---
+
+### Drift Monitoring
+
+* stack check
+* stack show
+
+---
+
+# Inspect Namespace Vision
+
+* Implement TUI with ratatui
+* Read-only dashboard
+
+---
+
+End of roadmap.

@@ -4,7 +4,7 @@ use capnp_rpc::{RpcSystem, rpc_twoparty_capnp, twoparty};
 use commands::control_plane;
 use futures::AsyncReadExt;
 
-use crate::commands::CliError;
+use crate::commands::Error;
 
 pub struct Client(control_plane::Client);
 
@@ -28,7 +28,7 @@ impl Client {
         Self(client)
     }
 
-    pub async fn apply(&self, config_file: &str, name: &str) -> Result<(), CliError> {
+    pub async fn apply(&self, config_file: &str, name: &str) -> Result<(), Error> {
         let mut req = self.0.apply_request();
         req.get().set_file(config_file);
         req.get().set_name(name);
@@ -36,7 +36,7 @@ impl Client {
             .send()
             .promise
             .await
-            .map_err(|err| CliError::RequestFailed(err.to_string()))?;
+            .map_err(|err| Error::RequestFailed(err.to_string()))?;
         match response
             .get()
             .unwrap()
@@ -47,18 +47,18 @@ impl Client {
         {
             commands::apply_response::Which::Ok(()) => Ok(()),
             commands::apply_response::Which::Err(err) => {
-                Err(CliError::RequestFailed(err.unwrap().to_string().unwrap()))
+                Err(Error::RequestFailed(err.unwrap().to_string().unwrap()))
             }
         }
     }
 
-    pub async fn monitor(&self) -> Result<(), CliError> {
+    pub async fn monitor(&self) -> Result<(), Error> {
         let req = self.0.monitor_request();
         let response = req
             .send()
             .promise
             .await
-            .map_err(|err| CliError::RequestFailed(err.to_string()))?;
+            .map_err(|err| Error::RequestFailed(err.to_string()))?;
         response.get().unwrap().get_response().unwrap();
         Ok(())
     }

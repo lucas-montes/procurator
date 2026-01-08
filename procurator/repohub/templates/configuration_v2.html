@@ -1,0 +1,925 @@
+{% extends "base.html" %}
+
+{% block title %}{{ project_name }} - Infrastructure Configuration{% endblock %}
+
+{% block content %}
+<style>
+    .config-container {
+        display: flex;
+        height: calc(100vh - 80px);
+        gap: 0;
+    }
+
+    .palette {
+        width: 280px;
+        background: #f6f8fa;
+        border-right: 1px solid #e1e4e8;
+        padding: 20px;
+        overflow-y: auto;
+    }
+
+    .canvas-area {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        background: #fafbfc;
+    }
+
+    .canvas-toolbar {
+        background: white;
+        border-bottom: 1px solid #e1e4e8;
+        padding: 10px 20px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .env-toggle {
+        display: flex;
+        gap: 5px;
+        background: #f6f8fa;
+        padding: 4px;
+        border-radius: 6px;
+    }
+
+    .env-btn {
+        padding: 6px 12px;
+        border: none;
+        background: transparent;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 500;
+        transition: all 0.2s;
+    }
+
+    .env-btn:hover {
+        background: #e1e4e8;
+    }
+
+    .env-btn.active {
+        background: #0366d6;
+        color: white;
+    }
+
+    .canvas-wrapper {
+        flex: 1;
+        position: relative;
+        background: white;
+    }
+
+    #cy {
+        width: 100%;
+        height: 100%;
+        background: #ffffff;
+        background-image:
+            linear-gradient(rgba(0,0,0,.03) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(0,0,0,.03) 1px, transparent 1px);
+        background-size: 20px 20px;
+    }
+
+    .properties-panel {
+        width: 380px;
+        background: white;
+        border-left: 1px solid #e1e4e8;
+        padding: 20px;
+        overflow-y: auto;
+        display: none;
+    }
+
+    .properties-panel.active {
+        display: block;
+    }
+
+    .palette-section {
+        margin-bottom: 25px;
+    }
+
+    .palette-section h3 {
+        font-size: 13px;
+        font-weight: 600;
+        margin-bottom: 12px;
+        color: #24292e;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    .palette-item {
+        background: white;
+        border: 1px solid #e1e4e8;
+        border-radius: 6px;
+        padding: 10px 12px;
+        margin-bottom: 8px;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .palette-item:hover {
+        border-color: #0366d6;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        transform: translateX(2px);
+    }
+
+    .palette-item .icon {
+        font-size: 18px;
+    }
+
+    .palette-item .label {
+        font-size: 13px;
+        font-weight: 500;
+        flex: 1;
+    }
+
+    .palette-item .badge {
+        font-size: 11px;
+        padding: 2px 6px;
+        background: #f6f8fa;
+        border-radius: 3px;
+        color: #586069;
+    }
+
+    .btn {
+        padding: 8px 16px;
+        border-radius: 6px;
+        border: 1px solid #e1e4e8;
+        background: white;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 500;
+        transition: all 0.2s;
+    }
+
+    .btn:hover {
+        background: #f6f8fa;
+    }
+
+    .btn-primary {
+        background: #0366d6;
+        color: white;
+        border-color: #0366d6;
+    }
+
+    .btn-primary:hover {
+        background: #0256c7;
+    }
+
+    .btn-sm {
+        padding: 5px 10px;
+        font-size: 12px;
+    }
+
+    .form-group {
+        margin-bottom: 15px;
+    }
+
+    .form-group label {
+        display: block;
+        font-size: 13px;
+        font-weight: 600;
+        margin-bottom: 5px;
+        color: #24292e;
+    }
+
+    .form-group input,
+    .form-group select,
+    .form-group textarea {
+        width: 100%;
+        padding: 8px;
+        border: 1px solid #e1e4e8;
+        border-radius: 6px;
+        font-size: 13px;
+    }
+
+    .form-group textarea {
+        resize: vertical;
+        min-height: 80px;
+        font-family: monospace;
+        font-size: 12px;
+    }
+
+    .env-config-section {
+        background: #f6f8fa;
+        padding: 15px;
+        border-radius: 6px;
+        margin-bottom: 15px;
+    }
+
+    .env-config-section h4 {
+        font-size: 12px;
+        font-weight: 600;
+        margin-bottom: 10px;
+        color: #24292e;
+        text-transform: uppercase;
+    }
+
+    .breadcrumb {
+        margin-bottom: 20px;
+    }
+
+    .breadcrumb a {
+        color: #0366d6;
+        text-decoration: none;
+    }
+
+    .connection-mode {
+        position: fixed;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #0366d6;
+        color: white;
+        padding: 10px 20px;
+        border-radius: 6px;
+        font-size: 14px;
+        font-weight: 500;
+        display: none;
+        z-index: 1000;
+    }
+
+    .connection-mode.active {
+        display: block;
+    }
+</style>
+
+<div style="max-width: 1400px; margin: 0 auto; padding: 20px;">
+    <div class="breadcrumb">
+        <a href="/{{ username }}">{{ username }}</a> /
+        <a href="/{{ username }}/{{ project_name }}">{{ project_name }}</a> /
+        <strong>Configuration</strong>
+    </div>
+
+    <h1>Infrastructure Configuration</h1>
+    <p style="color: #586069; margin-bottom: 20px;">
+        Define services, dependencies, and resource requirements for each environment.
+    </p>
+</div>
+
+<div class="config-container">
+    <!-- Left Palette -->
+    <div class="palette">
+        <div class="palette-section">
+            <h3>📦 Project Services</h3>
+            {% for repo in repositories %}
+            <div class="palette-item" data-type="service" data-subtype="repo" data-repo="{{ repo.name }}">
+                <span class="icon">📦</span>
+                <span class="label">{{ repo.name }}</span>
+                <span class="badge">repo</span>
+            </div>
+            {% endfor %}
+        </div>
+        <div class="palette-section">
+            <h3>🗄️ Databases</h3>
+            <div class="palette-item" data-type="service" data-svc-type="database" data-pkg="pkgs.postgresql_16">
+                <span class="icon">🐘</span>
+                <span class="label">PostgreSQL</span>
+            </div>
+            <div class="palette-item" data-type="service" data-svc-type="database" data-pkg="pkgs.mysql80">
+                <span class="icon">🐬</span>
+                <span class="label">MySQL</span>
+            </div>
+            <div class="palette-item" data-type="service" data-svc-type="cache" data-pkg="pkgs.redis">
+                <span class="icon">🔴</span>
+                <span class="label">Redis</span>
+            </div>
+            <div class="palette-item" data-type="service" data-svc-type="database" data-pkg="pkgs.mongodb">
+                <span class="icon">🍃</span>
+                <span class="label">MongoDB</span>
+            </div>
+        </div>
+
+        <div class="palette-section">
+            <h3>🔀 Infrastructure</h3>
+            <div class="palette-item" data-type="service" data-svc-type="proxy" data-pkg="pkgs.nginx">
+                <span class="icon">🔀</span>
+                <span class="label">Nginx</span>
+            </div>
+            <div class="palette-item" data-type="service" data-svc-type="proxy" data-pkg="pkgs.traefik">
+                <span class="icon">🔀</span>
+                <span class="label">Traefik</span>
+            </div>
+            <div class="palette-item" data-type="service" data-svc-type="queue" data-pkg="pkgs.rabbitmq-server">
+                <span class="icon">📨</span>
+                <span class="label">RabbitMQ</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Center Canvas -->
+    <div class="canvas-area">
+        <div class="canvas-toolbar">
+            <div class="env-toggle">
+                <button class="env-btn active" data-env="development">Development</button>
+                <button class="env-btn" data-env="staging">Staging</button>
+                <button class="env-btn" data-env="production">Production</button>
+            </div>
+
+            <div style="flex: 1;"></div>
+
+            <button class="btn btn-sm" id="btn-connect-mode">🔗 Connect Services</button>
+            <button class="btn btn-sm" id="btn-auto-layout">Auto Layout</button>
+            <button class="btn btn-sm" id="btn-fit">Fit</button>
+            <button class="btn btn-primary" id="btn-save">💾 Save</button>
+        </div>
+        <div class="canvas-wrapper">
+            <div id="cy"></div>
+        </div>
+    </div>
+
+    <!-- Right Properties Panel -->
+    <div class="properties-panel" id="properties-panel">
+        <h3 id="prop-title">Properties</h3>
+        <div id="prop-content"></div>
+    </div>
+</div>
+
+<div class="connection-mode" id="connection-mode">
+    Click source service, then click target service to create a connection
+</div>
+
+<script src="https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
+<script>
+    const username = "{{ username }}";
+    const projectName = "{{ project_name }}";
+    const repositoriesData = {{ repositories_json | safe }};
+
+    let cy;
+    let nodeCounter = 0;
+    let selectedNode = null;
+    let currentEnvironment = 'development';
+    let connectionMode = false;
+    let connectionSource = null;
+
+    // Initialize Cytoscape
+    function initCytoscape() {
+        cy = cytoscape({
+            container: document.getElementById('cy'),
+
+            style: [
+                {
+                    selector: 'node',
+                    style: {
+                        'label': 'data(label)',
+                        'text-valign': 'center',
+                        'text-halign': 'center',
+                        'background-color': 'data(color)',
+                        'width': '90px',
+                        'height': '90px',
+                        'font-size': '11px',
+                        'color': '#333',
+                        'text-wrap': 'wrap',
+                        'text-max-width': '75px',
+                        'border-width': 2,
+                        'border-color': '#e1e4e8',
+                        'shape': 'roundrectangle'
+                    }
+                },
+                {
+                    selector: 'node:selected',
+                    style: {
+                        'border-color': '#0366d6',
+                        'border-width': 3
+                    }
+                },
+                {
+                    selector: 'node.connection-source',
+                    style: {
+                        'border-color': '#28a745',
+                        'border-width': 3
+                    }
+                },
+                {
+                    selector: 'edge',
+                    style: {
+                        'width': 3,
+                        'line-color': 'data(color)',
+                        'target-arrow-color': 'data(color)',
+                        'target-arrow-shape': 'triangle',
+                        'curve-style': 'bezier',
+                        'label': 'data(label)',
+                        'font-size': '10px',
+                        'text-rotation': 'autorotate',
+                        'text-margin-y': -10
+                    }
+                },
+                {
+                    selector: 'edge:selected',
+                    style: {
+                        'line-color': '#0366d6',
+                        'target-arrow-color': '#0366d6',
+                        'width': 4
+                    }
+                }
+            ],
+
+            layout: {
+                name: 'preset'
+            }
+        });
+
+        // Handle node clicks
+        cy.on('tap', 'node', function(evt) {
+            const node = evt.target;
+
+            if (connectionMode) {
+                handleConnectionClick(node);
+            } else {
+                selectNode(node);
+            }
+        });
+
+        // Handle edge clicks
+        cy.on('tap', 'edge', function(evt) {
+            const edge = evt.target;
+            selectEdge(edge);
+        });
+
+        // Handle canvas tap (deselect)
+        cy.on('tap', function(evt) {
+            if (evt.target === cy) {
+                deselectAll();
+            }
+        });
+    }
+
+    // Environment toggle
+    document.querySelectorAll('.env-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            document.querySelectorAll('.env-btn').forEach(b => b.classList.remove('active'));
+            this.classList.add('active');
+            currentEnvironment = this.dataset.env;
+            updateCanvasForEnvironment();
+        });
+    });
+
+    function updateCanvasForEnvironment() {
+        // Update node opacity based on whether service is enabled in current environment
+        cy.nodes().forEach(node => {
+            const envConfig = node.data('environments')?.[currentEnvironment];
+            if (envConfig && !envConfig.enabled) {
+                node.style('opacity', 0.3);
+            } else {
+                node.style('opacity', 1);
+            }
+        });
+    }
+
+    // Palette item click handlers
+    document.querySelectorAll('.palette-item').forEach(item => {
+        item.addEventListener('click', function() {
+            const type = this.dataset.type;
+            const subtype = this.dataset.subtype;
+            const svcType = this.dataset.svcType;
+            const pkg = this.dataset.pkg;
+            const repo = this.dataset.repo;
+
+            addNode(type, { subtype, svcType, pkg, repo });
+        });
+    });
+
+    // Add node to canvas
+    function addNode(type, opts) {
+        nodeCounter++;
+        const id = `node-${nodeCounter}`;
+
+        let label, color, serviceType, source, defaultPort;
+
+        if (opts.subtype === 'repo') {
+            // Project repository service
+            label = opts.repo;
+            color = '#e3f2fd';
+            serviceType = 'application';
+            source = {
+                type: 'projectrepo',
+                repo_name: opts.repo,
+                flake_output: null
+            };
+            defaultPort = 8080;
+        } else {
+            // Infrastructure service from nixpkgs
+            const pkgName = opts.pkg.replace('pkgs.', '');
+            label = pkgName;
+            serviceType = opts.svcType || 'other';
+            source = {
+                type: 'nixpackage',
+                package: opts.pkg
+            };
+
+            // Service type specific config
+            switch (serviceType) {
+                case 'database':
+                    color = '#f3e5f5';
+                    defaultPort = pkgName.includes('postgres') ? 5432 : pkgName.includes('mysql') ? 3306 : pkgName.includes('mongo') ? 27017 : 5432;
+                    break;
+                case 'cache':
+                    color = '#ffebee';
+                    defaultPort = 6379;
+                    break;
+                case 'proxy':
+                    color = '#fff3e0';
+                    defaultPort = 80;
+                    break;
+                case 'queue':
+                    color = '#e8f5e9';
+                    defaultPort = 5672;
+                    break;
+                default:
+                    color = '#f5f5f5';
+                    defaultPort = 8080;
+            }
+        }
+
+        // Default environment configurations
+        const environments = {
+            development: {
+                enabled: true,
+                resources: { cpu: 1.0, memory: { amount: 1, unit: 'GB' }, storage: null },
+                replicas: 1,
+                env_vars: {}
+            },
+            staging: {
+                enabled: true,
+                resources: { cpu: 2.0, memory: { amount: 2, unit: 'GB' }, storage: null },
+                replicas: 1,
+                env_vars: {}
+            },
+            production: {
+                enabled: false,
+                resources: { cpu: 4.0, memory: { amount: 4, unit: 'GB' }, storage: null },
+                replicas: 2,
+                env_vars: {}
+            }
+        };
+
+        cy.add({
+            group: 'nodes',
+            data: {
+                id,
+                label,
+                color,
+                name: label,
+                serviceType,
+                source,
+                ports: [{ internal: defaultPort, external: null, protocol: 'tcp' }],
+                env_vars: {},
+                environments,
+                health_check: null
+            },
+            position: { x: 250 + Math.random() * 400, y: 150 + Math.random() * 300 }
+        });
+
+        updateCanvasForEnvironment();
+    }
+
+    // Connection mode
+    document.getElementById('btn-connect-mode').addEventListener('click', () => {
+        connectionMode = !connectionMode;
+        document.getElementById('connection-mode').classList.toggle('active', connectionMode);
+        document.getElementById('btn-connect-mode').textContent = connectionMode ? '✖️ Cancel' : '🔗 Connect Services';
+
+        if (!connectionMode) {
+            connectionSource = null;
+            cy.nodes().removeClass('connection-source');
+        }
+    });
+
+    function handleConnectionClick(node) {
+        if (!connectionSource) {
+            connectionSource = node;
+            cy.nodes().removeClass('connection-source');
+            node.addClass('connection-source');
+        } else {
+            // Create edge
+            if (connectionSource.id() !== node.id()) {
+                createConnection(connectionSource, node);
+            }
+            connectionSource.removeClass('connection-source');
+            connectionSource = null;
+            connectionMode = false;
+            document.getElementById('connection-mode').classList.remove('active');
+            document.getElementById('btn-connect-mode').textContent = '🔗 Connect Services';
+        }
+    }
+
+    function createConnection(source, target) {
+        const sourceType = source.data('serviceType');
+        const targetType = target.data('serviceType');
+
+        // Determine connection type based on service types
+        let connType = 'http';
+        let color = '#999';
+
+        if (targetType === 'database') {
+            connType = 'database';
+            color = '#9c27b0';
+        } else if (targetType === 'cache') {
+            connType = 'cache';
+            color = '#f44336';
+        } else if (targetType === 'queue') {
+            connType = 'queue';
+            color = '#4caf50';
+        } else if (targetType === 'proxy') {
+            connType = 'http';
+            color = '#ff9800';
+        }
+
+        const edgeId = `edge-${source.id()}-${target.id()}`;
+
+        cy.add({
+            group: 'edges',
+            data: {
+                id: edgeId,
+                source: source.id(),
+                target: target.id(),
+                label: connType,
+                color: color,
+                connectionType: connType,
+                config: {
+                    port: target.data('ports')[0]?.internal,
+                    protocol: null,
+                    endpoint: null,
+                    env_var_name: `${target.data('name').toUpperCase()}_URL`
+                }
+            }
+        });
+    }
+
+    // Select node and show properties
+    function selectNode(node) {
+        deselectAll();
+        selectedNode = node;
+        const panel = document.getElementById('properties-panel');
+        panel.classList.add('active');
+
+        const data = node.data();
+        document.getElementById('prop-title').textContent = `Configure: ${data.label}`;
+
+        document.getElementById('prop-content').innerHTML = generateNodePropertiesForm(data);
+        attachPropertyHandlers();
+    }
+
+    // Select edge and show properties
+    function selectEdge(edge) {
+        deselectAll();
+        const panel = document.getElementById('properties-panel');
+        panel.classList.add('active');
+
+        const data = edge.data();
+        const sourceNode = cy.getElementById(data.source);
+        const targetNode = cy.getElementById(data.target);
+
+        document.getElementById('prop-title').textContent = 'Connection Properties';
+        document.getElementById('prop-content').innerHTML = generateEdgePropertiesForm(data, sourceNode, targetNode);
+
+        document.getElementById('btn-delete-edge')?.addEventListener('click', () => {
+            if (confirm('Delete this connection?')) {
+                edge.remove();
+                deselectAll();
+            }
+        });
+    }
+
+    function deselectAll() {
+        selectedNode = null;
+        document.getElementById('properties-panel').classList.remove('active');
+    }
+
+    // Generate properties form for nodes
+    function generateNodePropertiesForm(data) {
+        let html = `
+            <div class="form-group">
+                <label>Service Name</label>
+                <input type="text" id="prop-name" value="${data.name}" />
+            </div>
+        `;
+
+        // Show source info (read-only)
+        if (data.source.type === 'projectrepo') {
+            html += `
+                <div class="form-group">
+                    <label>Source</label>
+                    <input type="text" value="Project: ${data.source.repo_name}" disabled />
+                </div>
+            `;
+        } else {
+            html += `
+                <div class="form-group">
+                    <label>Nix Package</label>
+                    <input type="text" id="prop-package" value="${data.source.package}" />
+                </div>
+            `;
+        }
+
+        // Ports
+        html += `
+            <div class="form-group">
+                <label>Internal Port</label>
+                <input type="number" id="prop-port" value="${data.ports[0]?.internal || 8080}" />
+            </div>
+        `;
+
+        // Environment-specific configuration
+        ['development', 'staging', 'production'].forEach(env => {
+            const envConfig = data.environments[env];
+            const isActive = env === currentEnvironment;
+
+            html += `
+                <div class="env-config-section" style="${isActive ? '' : 'opacity: 0.6;'}">
+                    <h4>${env.charAt(0).toUpperCase() + env.slice(1)}</h4>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="prop-env-${env}-enabled"
+                                ${envConfig.enabled ? 'checked' : ''} />
+                            Enabled
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>CPU Cores</label>
+                        <input type="number" step="0.5" id="prop-env-${env}-cpu"
+                            value="${envConfig.resources.cpu}" />
+                    </div>
+                    <div class="form-group">
+                        <label>Memory (GB)</label>
+                        <input type="number" id="prop-env-${env}-memory"
+                            value="${envConfig.resources.memory.amount}" />
+                    </div>
+                    <div class="form-group">
+                        <label>Replicas</label>
+                        <input type="number" min="1" id="prop-env-${env}-replicas"
+                            value="${envConfig.replicas}" />
+                    </div>
+                </div>
+            `;
+        });
+
+        html += `
+            <div class="form-group" style="margin-top: 20px;">
+                <button class="btn btn-primary" id="btn-apply-props" style="width: 100%;">Apply Changes</button>
+                <button class="btn" id="btn-delete-node" style="margin-top: 10px; width: 100%; background: #d73a49; color: white; border-color: #d73a49;">Delete Service</button>
+            </div>
+        `;
+
+        return html;
+    }
+
+    // Generate properties form for edges
+    function generateEdgePropertiesForm(data, sourceNode, targetNode) {
+        return `
+            <p><strong>From:</strong> ${sourceNode.data('name')}</p>
+            <p><strong>To:</strong> ${targetNode.data('name')}</p>
+
+            <div class="form-group">
+                <label>Connection Type</label>
+                <select id="prop-conn-type">
+                    <option value="http" ${data.connectionType === 'http' ? 'selected' : ''}>HTTP</option>
+                    <option value="database" ${data.connectionType === 'database' ? 'selected' : ''}>Database</option>
+                    <option value="cache" ${data.connectionType === 'cache' ? 'selected' : ''}>Cache</option>
+                    <option value="queue" ${data.connectionType === 'queue' ? 'selected' : ''}>Queue</option>
+                    <option value="grpc" ${data.connectionType === 'grpc' ? 'selected' : ''}>gRPC</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Target Port</label>
+                <input type="number" id="prop-conn-port" value="${data.config.port || ''}" />
+            </div>
+
+            <div class="form-group">
+                <label>Environment Variable Name</label>
+                <input type="text" id="prop-conn-envvar" value="${data.config.env_var_name || ''}"
+                    placeholder="e.g., DATABASE_URL" />
+            </div>
+
+            <div class="form-group">
+                <button class="btn" id="btn-delete-edge" style="width: 100%; background: #d73a49; color: white; border-color: #d73a49;">Delete Connection</button>
+            </div>
+        `;
+    }
+
+    // Attach handlers to property form
+    function attachPropertyHandlers() {
+        document.getElementById('btn-apply-props')?.addEventListener('click', applyNodeProperties);
+        document.getElementById('btn-delete-node')?.addEventListener('click', deleteNode);
+    }
+
+    function applyNodeProperties() {
+        if (!selectedNode) return;
+
+        const name = document.getElementById('prop-name').value;
+        selectedNode.data('name', name);
+        selectedNode.data('label', name);
+
+        if (selectedNode.data('source').type === 'nixpackage') {
+            const pkg = document.getElementById('prop-package').value;
+            selectedNode.data('source', { ...selectedNode.data('source'), package: pkg });
+        }
+
+        const port = parseInt(document.getElementById('prop-port').value);
+        selectedNode.data('ports', [{ internal: port, external: null, protocol: 'tcp' }]);
+
+        // Update environment configs
+        const environments = {};
+        ['development', 'staging', 'production'].forEach(env => {
+            environments[env] = {
+                enabled: document.getElementById(`prop-env-${env}-enabled`).checked,
+                resources: {
+                    cpu: parseFloat(document.getElementById(`prop-env-${env}-cpu`).value),
+                    memory: {
+                        amount: parseFloat(document.getElementById(`prop-env-${env}-memory`).value),
+                        unit: 'GB'
+                    },
+                    storage: null
+                },
+                replicas: parseInt(document.getElementById(`prop-env-${env}-replicas`).value),
+                env_vars: {}
+            };
+        });
+
+        selectedNode.data('environments', environments);
+        updateCanvasForEnvironment();
+
+        alert('Properties updated!');
+    }
+
+    function deleteNode() {
+        if (!selectedNode || !confirm('Delete this service?')) return;
+
+        cy.remove(selectedNode);
+        deselectAll();
+    }
+
+    // Toolbar actions
+    document.getElementById('btn-auto-layout').addEventListener('click', () => {
+        cy.layout({
+            name: 'breadthfirst',
+            directed: true,
+            padding: 50,
+            spacingFactor: 1.5
+        }).run();
+    });
+
+    document.getElementById('btn-fit').addEventListener('click', () => {
+        cy.fit(50);
+    });
+
+    document.getElementById('btn-save').addEventListener('click', saveConfiguration);
+
+    // Save configuration
+    async function saveConfiguration() {
+        const config = {
+            services: {},
+            dependencies: []
+        };
+
+        // Collect all services
+        cy.nodes().forEach(node => {
+            const data = node.data();
+            config.services[data.name] = {
+                name: data.name,
+                source: data.source,
+                service_type: data.serviceType,
+                environments: data.environments,
+                ports: data.ports,
+                env_vars: data.env_vars,
+                health_check: data.health_check
+            };
+        });
+
+        // Collect all dependencies
+        cy.edges().forEach(edge => {
+            const data = edge.data();
+            const sourceNode = cy.getElementById(data.source);
+            const targetNode = cy.getElementById(data.target);
+
+            config.dependencies.push({
+                from: sourceNode.data('name'),
+                to: targetNode.data('name'),
+                connection_type: data.connectionType,
+                config: data.config
+            });
+        });
+
+        try {
+            const res = await fetch(`/${username}/${projectName}/configuration`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ configuration: config })
+            });
+
+            if (!res.ok) {
+                throw new Error('Failed to save configuration');
+            }
+
+            alert('Configuration saved successfully! 🎉');
+        } catch (err) {
+            alert('Error saving configuration: ' + err.message);
+        }
+    }
+
+    // Initialize
+    initCytoscape();
+</script>
+{% endblock %}

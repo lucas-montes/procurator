@@ -41,7 +41,7 @@
             cargoBuildFlags = ["-p" pname];
             cargoInstallFlags = ["-p" pname];
 
-            nativeBuildInputs = [pkgs.pkg-config];
+            nativeBuildInputs = [pkgs.pkg-config pkgs.capnproto];
             buildInputs = [pkgs.openssl];
             doCheck = false;
           };
@@ -53,22 +53,15 @@
         worker = mkRustPackage "worker";
         control_plane = mkRustPackage "control_plane";
 
-        procfile = pkgs.writeTextFile {
-          name = "Procfile";
-          text = ''
-            cache: ${cache}/bin/cache
-            ci_service: ${ci_service}/bin/ci_service
-          '';
-        };
+        cli = mkRustPackage "cli";
 
-        github = pkgs.writeShellScriptBin "github" ''
-          cd $(mktemp -d)
-          cp ${procfile} Procfile
-          ${pkgs.overmind}/bin/overmind start
+        pcr-dev = pkgs.writeShellScriptBin "pcr" ''
+          exec ${pkgs.cargo}/bin/cargo run --manifest-path="$CARGO_MANIFEST_DIR/procurator/Cargo.toml" -p cli -- "$@"
         '';
+
       in {
         packages = {
-          inherit cache worker ci_service control_plane github;
+          inherit cache worker ci_service control_plane cli;
         };
 
         devShells.default = with pkgs;
@@ -79,7 +72,13 @@
               cargo-watch
               rust-bin-custom
               capnproto
+
+              pcr-dev
             ];
+
+            shellHook = ''
+              export CARGO_MANIFEST_DIR="$PWD"
+            '';
           };
       }
     );
