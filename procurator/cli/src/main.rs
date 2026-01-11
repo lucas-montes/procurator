@@ -9,8 +9,11 @@ use cli::Cli;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    tracing_subscriber::fmt()
+    .with_env_filter("info")
+    .init();
     Cli::handle().await.unwrap_or_else(|err| {
-        eprintln!("Error: {:?}", err);
+        tracing::error!(?err, "Error");
         std::process::exit(1);
     });
 }

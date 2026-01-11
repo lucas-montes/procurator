@@ -1,6 +1,5 @@
 // Enums mapping from files to their respective types in the Autonix system.
 
-
 /// Manifest files declare dependencies and project metadata
 /// These are the primary files that tell us what a project needs
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -102,7 +101,7 @@ impl TryFrom<&str> for ManifestFile {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum LockFile {
     // Rust
     CargoLock,
@@ -175,8 +174,8 @@ impl TryFrom<&str> for LockFile {
     }
 }
 
-impl From<ManifestFile> for Language {
-    fn from(file: ManifestFile) -> Self {
+impl From<&ManifestFile> for Language {
+    fn from(file: &ManifestFile) -> Self {
         match file {
             // Rust
             ManifestFile::CargoToml => Self::Rust,
@@ -216,8 +215,8 @@ impl From<ManifestFile> for Language {
     }
 }
 
-impl From<LockFile> for Language {
-    fn from(file: LockFile) -> Self {
+impl From<&LockFile> for Language {
+    fn from(file: &LockFile) -> Self {
         match file {
             // Rust
             LockFile::CargoLock => Self::Rust,
@@ -251,7 +250,7 @@ impl From<LockFile> for Language {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Language {
     Rust,
     JavaScript,
@@ -261,11 +260,31 @@ pub enum Language {
     CSharp,
     Ruby,
     PHP,
+    C,
+    Bash,
+}
+
+impl Language {
+    pub fn from_extension(s: &str) -> Option<Self> {
+        match s {
+            "rs" => Some(Self::Rust),
+            "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs" => Some(Self::JavaScript),
+            "py" => Some(Self::Python),
+            "go" => Some(Self::Go),
+            "java" | "jar" | "class" => Some(Self::Java),
+            "cs" | "fs" | "vb" => Some(Self::CSharp),
+            "rb" => Some(Self::Ruby),
+            "php" => Some(Self::PHP),
+            "c" => Some(Self::C),
+            "sh" => Some(Self::Bash),
+            _ => None,
+        }
+    }
 }
 
 /// Package managers that can be detected from lock files or manifest configuration
 /// Used to determine the correct build and dependency installation commands
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, serde::Serialize, serde::Deserialize)]
 pub enum PackageManager {
     // Rust
     Cargo,
@@ -302,8 +321,8 @@ pub enum PackageManager {
     Composer,
 }
 
-impl From<PackageManager> for Language {
-    fn from(pm: PackageManager) -> Self {
+impl From<&PackageManager> for Language {
+    fn from(pm: &PackageManager) -> Self {
         match pm {
             PackageManager::Cargo => Language::Rust,
             PackageManager::Npm
@@ -370,8 +389,8 @@ impl TryFrom<&str> for PackageManager {
 }
 
 /// Infer package manager from a lock file
-impl From<LockFile> for PackageManager {
-    fn from(file: LockFile) -> Self {
+impl From<&LockFile> for PackageManager {
+    fn from(file: &LockFile) -> Self {
         match file {
             // Rust
             LockFile::CargoLock => Self::Cargo,
@@ -407,10 +426,10 @@ impl From<LockFile> for PackageManager {
 }
 
 /// Infer package manager from a manifest file
-impl TryFrom<ManifestFile> for PackageManager {
+impl TryFrom<&ManifestFile> for PackageManager {
     type Error = ();
 
-    fn try_from(file: ManifestFile) -> Result<Self, Self::Error> {
+    fn try_from(file: &ManifestFile) -> Result<Self, Self::Error> {
         match file {
             // Rust
             ManifestFile::CargoToml => Ok(Self::Cargo),

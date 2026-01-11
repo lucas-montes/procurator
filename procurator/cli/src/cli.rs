@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Debug)]
@@ -36,8 +38,8 @@ impl Cli {
         let cli = Self::parse();
 
         match cli.command {
-            Commands::Init => {
-                super::init::init();
+            Commands::Init(args) => {
+                super::init::init(args.path);
             }
 
             Commands::Stack(stack) => match stack.command {
@@ -84,7 +86,7 @@ enum Commands {
     /// - configures local machine
     /// - pulls build cache
     /// - prepares agent
-    Init,
+    Init(InitArgs),
 
     /// Control local project stack lifecycle
     Stack(StackArgs),
@@ -97,6 +99,14 @@ enum Commands {
 
     /// Inspect local or remote cluster via TUI
     Inspect,
+}
+
+/// Arguments for init command
+#[derive(Debug, Args)]
+struct InitArgs {
+    /// Path to repository (defaults to current directory)
+    #[arg(short, long)]
+    path: Option<PathBuf>,
 }
 
 /// Arguments for stack namespace

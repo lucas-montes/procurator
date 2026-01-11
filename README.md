@@ -13,6 +13,17 @@ check how to use nixos [vms](https://github.com/ghostty-org/ghostty/tree/main/ni
 how to use [jepsen](https://github.com/aphyr/distsys-class)
 learn about [distributed](https://github.com/jepsen-io/maelstrom)
 
+
+more things to check:
+
+https://github.com/DarthSim/overmind
+https://github.com/ddollar/foreman
+https://github.com/juspay/superposition
+https://github.com/juspay/services-flake
+https://github.com/juspay/omnix
+https://github.com/hercules-ci/flake-parts
+https://github.com/Platonic-Systems/process-compose-flake/blob/main/example/flake.nix
+
 Does not evaluates the file it only serialize the derivation
 ```bash
 nix-instantiate --eval --json cluster.nix > cluster-state.json

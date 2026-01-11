@@ -1,177 +1,192 @@
-use std::{
-    collections::{HashMap, VecDeque},
-    ops::Not,
-    path::{Path, PathBuf},
-};
+use std::path::Path;
 
-use crate::autonix::mapping::{Language, LockFile, ManifestFile};
+/// Marker trait for all parser states
+pub trait ParserState: Sized {}
 
-const IGNORED_DIR_BASENAMES: [&str; 32] = [
-    // VCS
-    ".git",
-    ".hg",
-    ".svn",
-    // JavaScript
-    "node_modules",
-    ".yarn",
-    ".pnpm-store",
-    ".turbo",
-    ".nx",
-    ".next",
-    ".nuxt",
-    ".svelte-kit",
-    ".parcel-cache",
-    // Rust
-    "target",
-    // Python
-    ".venv",
-    "venv",
-    "env",
-    "__pycache__",
-    ".tox",
-    ".nox",
-    ".pytest_cache",
-    ".mypy_cache",
-    ".ruff_cache",
-    // General build/artifacts
-    "dist",
-    "build",
-    "out",
-    "coverage",
-    ".cache",
-    ".direnv",
-    ".idea",
-    ".vscode",
-    "vendor",
-    ".terraform",
-];
+/// Trait for states that can advance to the next stage
+pub trait Advance: ParserState {
+    type Next: ParserState;
 
-
-struct FilePath<T>{
-    kind: T,
-    path: PathBuf,
+    fn advance(self) -> Self::Next;
 }
 
-struct FirstPass {
-    /// All manifest files found in the repository that can tell us what dependencies are needed
-    manifest_files: Vec<FilePath<ManifestFile>>,
-    /// All lockfiles found in the repository that cann tell use what dependencies to use and what packages
-    lockfiles: Vec<FilePath<LockFile>>,
-    /// All buildfiles found in the repository that can tell us how to build the project
-    buildfiles: Vec<BuildFile>,
-    /// CI/CD files found in the repository that can tell us how the project is deployed/tested or even built
-    cicd_files: Vec<CiCdFile>,
-    /// The number of files with the extension of each language found in the repository
-    file_per_language: HashMap<Language, u16>, // NOTE: maybe if we found one file of a lanauge, like python, it's just a script to build or execute some tests, we might want to know that we need the interpreter installed?
+/// Trait for terminal states - no more advancement possible
+pub trait Terminal: ParserState {}
+
+/// Trait for states that can be cached
+pub trait Cacheable: ParserState {
+    fn save(&self, path: &Path) -> std::io::Result<()>;
+    fn load(path: &Path) -> std::io::Result<Self>;
 }
 
-struct BuildFile(PathBuf);
-
-impl TryFrom<PathBuf> for BuildFile {
-    type Error = ();
-    fn try_from(path: PathBuf) -> Result<Self, Self::Error> {
-        path.ends_with(child)
-        let Some(filename) = path.file_name().and_then(|n| n.to_str()) else {
-            return Err(());
-        };
-        if Language::from_buildfile_filename(filename).is_some() {
-            Ok(BuildFile)
-        } else {
-            Err(())
-        }
-    }
+/// Trait for states that can be displayed
+pub trait Printable: ParserState {
+    fn print(&self);
 }
 
-struct CiCdFile(PathBuf);
+/// Trait for initial states - can start a pipeline
+pub trait Initial: ParserState {}
 
-
-enum FileType {
-    Manifest(FilePath<ManifestFile>),
-    Lockfile(FilePath<LockFile>),
-    Buildfile(PathBuf),
-    CicdFile(PathBuf),
-    Regular(Language),
-    Unknown(PathBuf)
+/// Core Parser trait - all parsers must implement this
+pub trait Parser<S: ParserState>: Sized + From<S> {
+    /// Get a reference to the current state
+    fn state(&self) -> &S;
 }
 
-impl From<PathBuf> for FileType {
-    fn from(path: PathBuf) -> Self {
-        let Some(filename) = path.file_name().and_then(|n| n.to_str()) else {
-            return Self::Unknown(path)
-        }
-            if let Some(manifest_kind) = ManifestFile::from_filename(filename) {
-                return FileType::Manifest(FilePath {
-                    kind: manifest_kind,
-                    path,
-                });
-            }
-            if let Some(lockfile_kind) = LockFile::from_filename(filename) {
-                return FileType::Lockfile(FilePath {
-                    kind: lockfile_kind,
-                    path,
-                });
-            }
-            if let Some(buildfile_kind) = Language::from_buildfile_filename(filename) {
-                return FileType::Buildfile(path);
-            }
-            if CicdFile::is_cicd_file(filename) {
-                return FileType::CicdFile(path);
-            }
-            if let Some(language) = Language::from_extension(Path::new(filename).extension().and_then(|e| e.to_str()).unwrap_or("")) {
-                return FileType::Regular(language);
-            }
-        }
 
-
+/// Pipeline wrapper that tracks the stage and parser type
+#[derive(Debug)]
+pub struct Pipeline<P, S, Stage>
+where
+    S: ParserState,
+    P: Parser<S>,
+    Stage: PipelineStage,
+{
+    parser: P,
+    _state: std::marker::PhantomData<S>,
+    _stage: std::marker::PhantomData<Stage>,
 }
 
-struct SecondPass {
-    languages: Vec<String>,
-}
-
-pub struct Parser;
-
-impl Parser {
-    pub fn new(path: PathBuf) -> Self {
-        println!("Parsing repository: {path:?}");
-        Self
-    }
-}
-
-struct DirectoryIterator {
-    queue: VecDeque<PathBuf>,
-    root: PathBuf,
-}
-
-impl From<PathBuf> for DirectoryIterator {
-    fn from(root: PathBuf) -> Self {
+impl<P, S, Stage> Pipeline<P, S, Stage>
+where
+    S: ParserState,
+    P: Parser<S>,
+    Stage: PipelineStage,
+{
+    pub fn new(parser: P) -> Self {
         Self {
-            queue: VecDeque::from([root.clone()]),
-            root,
+            parser,
+            _state: std::marker::PhantomData,
+            _stage: std::marker::PhantomData,
         }
     }
-}
 
-impl DirectoryIterator {
-    fn should_ignore_dir(path: &Path) -> bool {
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .map(|name| IGNORED_DIR_BASENAMES.contains(&name))
-            .unwrap_or(false)
+    pub fn state(&self) -> &S {
+        self.parser.state()
+    }
+
+    pub fn into_parser(self) -> P {
+        self.parser
     }
 }
 
-impl Iterator for DirectoryIterator {
-    type Item = PathBuf;
-    fn next(&mut self) -> Option<Self::Item> {
-        self.queue.pop_front().inspect(|p| {
-            if p.is_dir() && Self::should_ignore_dir(p).not() {
-                if let Ok(entries) = std::fs::read_dir(p) {
-                    for entry in entries.flatten() {
-                        self.queue.push_back(entry.path());
-                    }
-                }
-            }
-        })
+/// Stage marker traits - define the pipeline phases
+pub trait PipelineStage: sealed::Sealed {}
+
+mod sealed {
+    pub trait Sealed {}
+}
+
+/// Discovery stage - initial file/data discovery
+pub struct Discovery;
+impl sealed::Sealed for Discovery {}
+impl PipelineStage for Discovery {}
+
+/// Analysis stage - analyzing discovered data
+pub struct Analysis;
+impl sealed::Sealed for Analysis {}
+impl PipelineStage for Analysis {}
+
+/// Transformation stage - transforming into final representation
+pub struct Transformation;
+impl sealed::Sealed for Transformation {}
+impl PipelineStage for Transformation {}
+
+/// Completion stage - final terminal state
+pub struct Completion;
+impl sealed::Sealed for Completion {}
+impl PipelineStage for Completion {}
+
+/// Advance from Discovery to Analysis
+impl<P, S> Pipeline<P, S, Discovery>
+where
+    S: Advance + From<P>,
+    P: Parser<S>,
+{
+    pub fn analyze<NextP>(self) -> Pipeline<NextP, S::Next, Analysis>
+    where
+        NextP: Parser<S::Next>,
+        S::Next: Into<Analysis>,
+    {
+        let next_state = Into::<S>::into(self.parser).advance();
+        Pipeline::new(NextP::from(next_state))
     }
 }
+
+/// Advance from Analysis to Transformation
+impl<P, S> Pipeline<P, S, Analysis>
+where
+    S: Advance + From<P>,
+    P: Parser<S>,
+{
+    pub fn transform<NextP>(self) -> Pipeline<NextP, S::Next, Transformation>
+    where
+        NextP: Parser<S::Next>,
+        S::Next: Into<Transformation>,
+    {
+        let next_state = Into::<S>::into(self.parser).advance();
+        Pipeline::new(NextP::from(next_state))
+    }
+}
+
+/// Advance from Transformation to Completion
+impl<P, S> Pipeline<P, S, Transformation>
+where
+    S: Advance + From<P>,
+    P: Parser<S>,
+{
+    pub fn complete<NextP>(self) -> Pipeline<NextP, S::Next, Completion>
+    where
+        NextP: Parser<S::Next>,
+        S::Next: Terminal + Into<Completion>,
+    {
+        let next_state = Into::<S>::into(self.parser).advance();
+        Pipeline::new(NextP::from(next_state))
+    }
+}
+
+
+/// Convenience methods for Printable states (available at any stage)
+impl<P, S, Stage> Pipeline<P, S, Stage>
+where
+    S: Printable,
+    P: Parser<S>,
+    Stage: PipelineStage,
+{
+    pub fn print(&self) {
+        self.state().print()
+    }
+}
+
+/// Convenience methods for Cacheable states (available at any stage)
+impl<P, S, Stage> Pipeline<P, S, Stage>
+where
+    S: Cacheable,
+    P: Parser<S>,
+    Stage: PipelineStage,
+{
+    pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        self.state().save(path)
+    }
+
+    pub fn load(path: &Path) -> std::io::Result<Self>
+    where
+        P: Parser<S>,
+    {
+        S::load(path).map(P::from).map(Pipeline::new)
+    }
+}
+
+/// Helper trait to create initial pipelines
+pub trait BeginPipeline: Initial + ParserState + Sized {
+    fn begin<P, Stage>(self) -> Pipeline<P, Self, Stage>
+    where
+        P: Parser<Self>,
+        Stage: PipelineStage,
+        Self: Into<Stage>,
+    {
+        Pipeline::new(P::from(self))
+    }
+}
+
+impl<T: Initial + ParserState> BeginPipeline for T {}
