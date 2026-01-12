@@ -4,4 +4,9 @@
 // projects which are a collection of repos.
 
 mod parser;
-mod detection;
+mod scan;
+mod analysis;
+mod ir;
+mod generation;
+
+pub use parser::Parser;

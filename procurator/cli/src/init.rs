@@ -19,14 +19,14 @@ pub fn init(path: Option<PathBuf>) {
         return;
     };
 
-    let parser = Parser::from(path).advance().advance().advance();
+    // let parser = Parser::from(path).advance().advance().advance();
 
-    println!("Generated configuration:");
-    parser.print();
+    // println!("Generated configuration:");
+    // parser.print();
 
-    parser
-        .save(&config_path)
-        .expect("Failed to save configuration");
+    // parser
+    //     .save(&config_path)
+    //     .expect("Failed to save configuration");
 
     tracing::info!("Configuration saved to {}", config_path.display());
 }

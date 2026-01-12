@@ -1,3 +1,9 @@
+use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
+
+use crate::autonix::mapping::{Language, PackageManager};
+
 
 
 /// Second pass: Project structure detection
@@ -11,7 +17,7 @@
 /// This pass groups manifests by directory, identifies workspace roots, and classifies
 /// the repository structure without parsing file contents yet.
 #[derive(Debug)]
-pub struct SecondPass {
+pub struct Analysis {
     /// All detected projects in the repository
     /// Each project represents a buildable unit with its own language and dependencies
     projects: Vec<DetectedProject>,
@@ -100,7 +106,7 @@ enum ProjectType {
 /// - We can cache IntermediateRepresentation results and only re-run when manifests change
 /// - Makes it easy to compare configurations for drift detection
 #[derive(Debug, Serialize, Deserialize)]
-pub struct IntermediateRepresentation {
+struct IntermediateRepresentation {
     /// Complete configuration for each project in the repository
     /// This is what we'll use to generate flake.nix
     projects: Vec<ProjectConfiguration>,
@@ -114,35 +120,35 @@ pub struct IntermediateRepresentation {
 /// 3. Is language-agnostic (works for any language we support)
 /// 4. Can be compared with previous versions to detect changes
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ProjectConfiguration {
+struct ProjectConfiguration {
     /// Human-readable project name (from manifest)
-    pub name: String,
+    name: String,
 
     /// Path from repository root to this project
-    pub path: PathBuf,
+    path: PathBuf,
 
     /// Language toolchain requirements (compiler, version, package manager)
-    pub toolchain: Toolchain,
+    toolchain: Toolchain,
 
     /// Build system tools needed beyond the language toolchain
-    pub build_system: BuildSystem,
+    build_system: BuildSystem,
 
     /// Language-level dependencies (managed by package manager)
     /// We don't store all deps, just metadata and hints about system requirements
-    pub language_dependencies: LanguageDependencies,
+    language_dependencies: LanguageDependencies,
 
     /// System-level dependencies that Nix must provide
     /// These are the packages we'll add to buildInputs in Nix
-    pub system_dependencies: SystemDependencies,
+    system_dependencies: SystemDependencies,
 
     /// How to build this project
-    pub build_config: BuildConfiguration,
+    build_config: BuildConfiguration,
 
     /// How to test this project (optional)
-    pub test_config: Option<TestConfiguration>,
+    test_config: Option<TestConfiguration>,
 
     /// Additional metadata from the manifest
-    pub metadata: ProjectMetadata,
+    metadata: ProjectMetadata,
 }
 
 /// Language toolchain specification
@@ -151,21 +157,21 @@ pub struct ProjectConfiguration {
 /// Example: { language: Rust, version: "1.75", package_manager: Cargo }
 ///       → Use rustc 1.75 and cargo in the build environment
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Toolchain {
+struct Toolchain {
     /// Programming language
-    pub language: Language,
+    language: Language,
 
     /// Version constraint if specified in manifest
     /// Example: "rust-version = 1.70" in Cargo.toml
     ///       or "engines.node = >=18" in package.json
-    pub version: Option<String>,
+    version: Option<String>,
 
     /// Package manager (cargo, npm, yarn, poetry, etc.)
-    pub package_manager: PackageManager,
+    package_manager: PackageManager,
 
     /// Package manager version if locked
     /// Some manifests specify this (packageManager in package.json)
-    pub package_manager_version: Option<String>,
+    package_manager_version: Option<String>,
 }
 
 /// Build system tools required
@@ -173,7 +179,7 @@ pub struct Toolchain {
 /// Beyond the language toolchain, what other build tools are needed?
 /// Example: A Rust project with a build.rs might need cmake or protobuf
 #[derive(Debug, Serialize, Deserialize)]
-pub struct BuildSystem {
+struct BuildSystem {
     /// Primary build tool (cargo, npm, go, mvn, etc.)
     /// This is usually the package manager's build command
     primary: String,
@@ -191,7 +197,7 @@ pub struct BuildSystem {
 /// Why? Because we only care about dependencies that require system packages from Nix.
 /// Example: openssl-sys in Rust → need openssl from nixpkgs
 #[derive(Debug, Serialize, Deserialize)]
-pub struct LanguageDependencies {
+struct LanguageDependencies {
     /// Whether the project has runtime dependencies
     has_dependencies: bool,
 
@@ -217,7 +223,7 @@ pub struct LanguageDependencies {
 /// - Build files (CMakeLists.txt mentions libfoo)
 /// - Common patterns (node-gyp always needs python3)
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SystemDependencies {
+struct SystemDependencies {
     /// Libraries needed at build time
     /// Example: openssl, sqlite (for linking)
     build_inputs: Vec<NixPackage>,
@@ -236,7 +242,7 @@ pub struct SystemDependencies {
 /// We track why we think each package is needed and how confident we are.
 /// This allows users to review and override our inferences.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct NixPackage {
+struct NixPackage {
     /// Package name in nixpkgs (e.g., "openssl", "pkg-config")
     name: String,
 
@@ -256,7 +262,7 @@ pub struct NixPackage {
 /// Provides transparency in our detection logic.
 /// Users can see "I need openssl because of openssl-sys crate"
 #[derive(Debug, Serialize, Deserialize)]
-pub enum DependencyReason {
+enum DependencyReason {
     /// Found a -sys crate in Cargo.toml
     SysCrate(String),
 
@@ -278,7 +284,7 @@ pub enum DependencyReason {
 /// 2. Package.json scripts
 /// 3. Standard conventions (cargo build, npm run build, etc.)
 #[derive(Debug, Serialize, Deserialize)]
-pub struct BuildConfiguration {
+struct BuildConfiguration {
     /// Build command to run
     /// Example: "cargo build --release"
     command: Option<String>,
@@ -297,7 +303,7 @@ pub struct BuildConfiguration {
 /// Tells Nix what to install and where to put it.
 /// Example: Binary "my-app" → install to $out/bin/my-app
 #[derive(Debug, Serialize, Deserialize)]
-pub struct BuildOutput {
+struct BuildOutput {
     /// What kind of output
     kind: OutputKind,
 
@@ -310,7 +316,7 @@ pub struct BuildOutput {
 
 /// Type of build output
 #[derive(Debug, Serialize, Deserialize)]
-pub enum OutputKind {
+enum OutputKind {
     /// Executable binary
     Binary,
 
@@ -326,7 +332,7 @@ pub enum OutputKind {
 /// How to run tests for this project.
 /// We extract this from package.json scripts, CI files, etc.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct TestConfiguration {
+struct TestConfiguration {
     /// Command to run tests
     /// Example: "cargo test", "npm test"
     command: String,
@@ -345,7 +351,7 @@ pub struct TestConfiguration {
 /// Additional information from manifests that we might want to include
 /// in the generated Nix file (meta.description, meta.license, etc.)
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ProjectMetadata {
+struct ProjectMetadata {
     /// Project version
     version: Option<String>,
 
