@@ -18,14 +18,8 @@ tokio.workspace = true
 tokio-util.workspace = true
 uuid.workspace = true
 commands.workspace = true
+autonix.workspace = true
 futures.workspace = true
 ratatui = { version = "0.29.0", features = ["all-widgets", "crossterm"] }
 rand = "0.9.1"
 crossterm = "0.29"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-askama = { version = "0.14.0", default-features = false, features = ["derive"] }
-
-# We could use those two to read/write Nix code directly
-# ser_nix = "0.1.2"
-# tvix_serde = { git = "https://github.com/tvlfyi/tvix", branch = "canon", package = "tvix-serde" }

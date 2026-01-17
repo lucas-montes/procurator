@@ -2,7 +2,7 @@
 // railpack and direnv.
 use std::path::PathBuf;
 
-use crate::autonix::repo::{analysis::Analysis, scan::Scan};
+use super::{analysis::Analysis, scan::Scan};
 
 #[derive(Debug)]
 pub struct Parser<T = PathBuf>(T);

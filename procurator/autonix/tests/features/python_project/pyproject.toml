@@ -1,0 +1,9 @@
+[tool.poetry]
+name = "pyproj"
+version = "0.1.0"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+[tool.poetry.dev-dependencies]
+pytest = "^7.0"

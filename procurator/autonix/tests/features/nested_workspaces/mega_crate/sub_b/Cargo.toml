@@ -1,0 +1,10 @@
+[package]
+name = "sub_b"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+sub_a = { path = "../sub_a" }

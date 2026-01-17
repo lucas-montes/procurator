@@ -1,0 +1,2 @@
+[workspace]
+members = ["crates/crate_a", "crates/crate_b"]

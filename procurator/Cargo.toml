@@ -28,6 +28,7 @@ chrono = "0.4"
 
 commands = { path = "commands" }
 repo_outils = { path = "./repo_outils" }
+autonix = { path = "autonix" }
 
 [dependencies]
 tracing.workspace = true
@@ -42,4 +43,4 @@ control_plane = { path = "control_plane" }
 
 
 [workspace]
-members = ["cli", "commands", "control_plane", "worker", "ci_service", "cache", "repo_outils", "repohub"]
+members = ["cli", "commands", "control_plane", "worker", "ci_service", "cache", "repo_outils", "repohub", "autonix"]

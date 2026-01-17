@@ -1,0 +1,7 @@
+{
+  "name": "@mono/web",
+  "version": "1.0.0",
+  "dependencies": {
+    "@mono/shared": "workspace:*
+  "}
+}

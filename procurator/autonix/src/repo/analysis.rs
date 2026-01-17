@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::autonix::mapping::{Language, PackageManager};
+use crate::mapping::{Language, PackageManager};
 
 
 

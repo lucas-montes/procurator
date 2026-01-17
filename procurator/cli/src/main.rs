@@ -2,7 +2,6 @@
 // mod interactive;
 mod cli;
 mod init;
-mod autonix;
 
 use cli::Cli;
 

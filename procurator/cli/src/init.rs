@@ -2,7 +2,7 @@
 // TODO: We want to leverage direnv also so we need to check if .envrc exists and if it's configured
 use std::{env, path::PathBuf};
 
-use crate::autonix::Parser;
+use autonix::Parser;
 
 pub fn init(path: Option<PathBuf>) {
     tracing::info!("Running autonix");
