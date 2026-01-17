@@ -409,30 +409,6 @@ mod tests {
                     },
                     children: vec![
                         ScanNode {
-                            path: crate_a_path.clone(),
-                            files: DirectoryScan {
-                                manifest_files: vec![FilePath {
-                                    kind: ManifestFile::CargoToml,
-                                    path: crate_a_path.join("Cargo.toml"),
-                                }],
-                                lockfiles: vec![],
-                                buildfiles: vec![],
-                                cicd_files: vec![],
-                                file_per_language: HashMap::new(),
-                            },
-                            children: vec![ScanNode {
-                                path: crate_a_path.join("src"),
-                                files: DirectoryScan {
-                                    manifest_files: vec![],
-                                    lockfiles: vec![],
-                                    buildfiles: vec![],
-                                    cicd_files: vec![],
-                                    file_per_language: HashMap::from([(Language::Rust, 1)]),
-                                },
-                                children: vec![],
-                            }],
-                        },
-                        ScanNode {
                             path: crate_b_path.clone(),
                             files: DirectoryScan {
                                 manifest_files: vec![FilePath {
@@ -446,6 +422,30 @@ mod tests {
                             },
                             children: vec![ScanNode {
                                 path: crate_b_path.join("src"),
+                                files: DirectoryScan {
+                                    manifest_files: vec![],
+                                    lockfiles: vec![],
+                                    buildfiles: vec![],
+                                    cicd_files: vec![],
+                                    file_per_language: HashMap::from([(Language::Rust, 1)]),
+                                },
+                                children: vec![],
+                            }],
+                        },
+                        ScanNode {
+                            path: crate_a_path.clone(),
+                            files: DirectoryScan {
+                                manifest_files: vec![FilePath {
+                                    kind: ManifestFile::CargoToml,
+                                    path: crate_a_path.join("Cargo.toml"),
+                                }],
+                                lockfiles: vec![],
+                                buildfiles: vec![],
+                                cicd_files: vec![],
+                                file_per_language: HashMap::new(),
+                            },
+                            children: vec![ScanNode {
+                                path: crate_a_path.join("src"),
                                 files: DirectoryScan {
                                     manifest_files: vec![],
                                     lockfiles: vec![],
@@ -561,7 +561,10 @@ mod tests {
                         kind: ManifestFile::PyprojectToml,
                         path: path.join("pyproject.toml"),
                     }],
-                    lockfiles: vec![],
+                    lockfiles: vec![FilePath {
+                        kind: LockFile::PoetryLock,
+                        path: path.join("poetry.lock"),
+                    }],
                     buildfiles: vec![],
                     cicd_files: vec![],
                     file_per_language: HashMap::new(),
@@ -631,11 +634,11 @@ mod tests {
                 },
                 children: vec![
                     ScanNode {
-                        path: backend_path.clone(),
+                        path: shared_path.clone(),
                         files: DirectoryScan {
                             manifest_files: vec![FilePath {
                                 kind: ManifestFile::GoMod,
-                                path: backend_path.join("go.mod"),
+                                path: shared_path.join("go.mod"),
                             }],
                             lockfiles: vec![],
                             buildfiles: vec![],
@@ -645,11 +648,11 @@ mod tests {
                         children: vec![],
                     },
                     ScanNode {
-                        path: shared_path.clone(),
+                        path: backend_path.clone(),
                         files: DirectoryScan {
                             manifest_files: vec![FilePath {
                                 kind: ManifestFile::GoMod,
-                                path: shared_path.join("go.mod"),
+                                path: backend_path.join("go.mod"),
                             }],
                             lockfiles: vec![],
                             buildfiles: vec![],
@@ -678,12 +681,12 @@ mod tests {
                 files: DirectoryScan {
                     manifest_files: vec![
                         FilePath {
-                            kind: ManifestFile::CargoToml,
-                            path: path.join("Cargo.toml"),
-                        },
-                        FilePath {
                             kind: ManifestFile::PackageJson,
                             path: path.join("package.json"),
+                        },
+                        FilePath {
+                            kind: ManifestFile::CargoToml,
+                            path: path.join("Cargo.toml"),
                         },
                     ],
                     lockfiles: vec![],
@@ -731,6 +734,20 @@ mod tests {
                 },
                 children: vec![
                     ScanNode {
+                        path: scripts_path.clone(),
+                        files: DirectoryScan {
+                            manifest_files: vec![FilePath {
+                                kind: ManifestFile::RequirementsTxt,
+                                path: scripts_path.join("requirements.txt"),
+                            }],
+                            lockfiles: vec![],
+                            buildfiles: vec![],
+                            cicd_files: vec![],
+                            file_per_language: HashMap::from([(Language::Python, 1)]),
+                        },
+                        children: vec![],
+                    },
+                    ScanNode {
                         path: backend_path.clone(),
                         files: DirectoryScan {
                             manifest_files: vec![FilePath {
@@ -761,7 +778,10 @@ mod tests {
                                 kind: ManifestFile::PackageJson,
                                 path: frontend_path.join("package.json"),
                             }],
-                            lockfiles: vec![],
+                            lockfiles: vec![FilePath {
+                                kind: LockFile::PackageLockJson,
+                                path: frontend_path.join("package-lock.json"),
+                            }],
                             buildfiles: vec![],
                             cicd_files: vec![],
                             file_per_language: HashMap::new(),
@@ -777,20 +797,6 @@ mod tests {
                             },
                             children: vec![],
                         }],
-                    },
-                    ScanNode {
-                        path: scripts_path.clone(),
-                        files: DirectoryScan {
-                            manifest_files: vec![FilePath {
-                                kind: ManifestFile::RequirementsTxt,
-                                path: scripts_path.join("requirements.txt"),
-                            }],
-                            lockfiles: vec![],
-                            buildfiles: vec![],
-                            cicd_files: vec![],
-                            file_per_language: HashMap::from([(Language::Python, 1)]),
-                        },
-                        children: vec![],
                     },
                 ],
             },
