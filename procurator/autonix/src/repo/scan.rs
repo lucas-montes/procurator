@@ -3,10 +3,11 @@
 use std::{
     collections::HashMap,
     ffi::OsStr,
+    ops::AddAssign,
     path::{Path, PathBuf},
 };
 
-use crate::mapping::{Language, LockFile, ManifestFile};
+use crate::mapping::{BuildFile, CiCdFile, Language, LockFile, ManifestFile};
 
 const IGNORED_DIR_BASENAMES: [&str; 32] = [
     // VCS
@@ -55,10 +56,55 @@ fn should_ignore_dir(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+pub struct Repo {
+    /// Path to this directory
+    path: PathBuf,
+
+    /// Files found in this directory
+    files: DirectoryScan,
+}
+
+impl Repo {
+    pub fn new(path: PathBuf, files: DirectoryScan) -> Self {
+        Self { path, files }
+    }
+}
+
 /// A tree representation of the scanned repository
 #[derive(Debug, PartialEq)]
 pub struct Scan {
     root: ScanNode,
+}
+
+impl IntoIterator for Scan {
+    type Item = <Self::IntoIter as Iterator>::Item;
+    type IntoIter = ScanIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        ScanIter(vec![self.root])
+    }
+}
+
+pub struct ScanIter(Vec<ScanNode>);
+
+impl Iterator for ScanIter {
+    type Item = Repo;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(node) = self.0.pop() {
+            let has_interesting_files = node.has_interesting_files();
+            let ScanNode {
+                path,
+                files,
+                children,
+            } = node;
+            self.0.extend(children.into_iter().rev());
+            if has_interesting_files {
+                return Some(Repo::new(path, files));
+            }
+        }
+        None
+    }
 }
 
 impl From<PathBuf> for Scan {
@@ -70,6 +116,7 @@ impl From<PathBuf> for Scan {
 /// A node in the scan tree representing a directory
 #[derive(Debug, PartialEq)]
 pub struct ScanNode {
+    //TODO: use the repo struct
     /// Path to this directory
     path: PathBuf,
 
@@ -81,11 +128,12 @@ pub struct ScanNode {
 }
 
 impl From<PathBuf> for ScanNode {
+    //TODO: maybe this would be better as a TryFrom
     fn from(path: PathBuf) -> Self {
         let mut files = DirectoryScan::default();
-        let mut children = Vec::new();
+        let mut children: Vec<ScanNode> = Vec::new();
 
-        // Read this directory
+        // Read this directory and we ignore errors
         if let Ok(entries) = std::fs::read_dir(&path) {
             for entry in entries.flatten() {
                 let entry_path = entry.path();
@@ -97,19 +145,49 @@ impl From<PathBuf> for ScanNode {
                     }
 
                     // Recurse into subdirectory
-                    children.push(entry_path.into());
+                    let child: ScanNode = entry_path.into();
+
+                    // Decide immediately: keep or merge?
+                    if child.is_interesting() {
+                        children.push(child);
+                    } else {
+                        // Pure source directory - merge into this node
+                        files += child.files;
+                    }
                 } else {
                     // Classify and add file to this node
-                    files.add_file(entry_path);
+                    files += entry_path;
                 }
             }
         }
 
-        ScanNode {
+        Self {
             path,
             files,
             children,
         }
+    }
+}
+
+impl ScanNode {
+    /// A node is interesting if it has manifests, lockfiles, buildfiles, CI/CD files,
+    /// or has interesting children. Pure source directories are not interesting.
+    fn is_interesting(&self) -> bool {
+        self.has_interesting_files() || self.has_interesting_children()
+        // Empty directory or only source files -> not interesting
+    }
+
+    fn has_interesting_files(&self) -> bool {
+        // Has any project-relevant files?
+        !self.files.manifest_files.is_empty()
+            || !self.files.lockfiles.is_empty()
+            || !self.files.buildfiles.is_empty()
+            || !self.files.cicd_files.is_empty()
+        //NOTE: maybe build and cicd files aren't that important and we could merge them
+    }
+
+    fn has_interesting_children(&self) -> bool {
+        self.children.iter().any(|c| c.is_interesting())
     }
 }
 
@@ -120,25 +198,37 @@ pub struct DirectoryScan {
     /// All lockfiles found in the repository that cann tell use what dependencies to use and what packages
     lockfiles: Vec<FilePath<LockFile>>,
     /// All buildfiles found in the repository that can tell us how to build the project
-    buildfiles: Vec<BuildFile>,
+    buildfiles: Vec<FilePath<BuildFile>>,
     /// CI/CD files found in the repository that can tell us how the project is deployed/tested or even built
-    cicd_files: Vec<CiCdFile>,
+    cicd_files: Vec<FilePath<CiCdFile>>,
     /// The number of files with the extension of each language found in the repository
     file_per_language: HashMap<Language, u16>, // NOTE: maybe if we found one file of a lanauge, like python, it's just a script to build or execute some tests, we might want to know that we need the interpreter installed?
 }
 
-impl DirectoryScan {
-    fn add_file(&mut self, path: PathBuf) {
+impl AddAssign<PathBuf> for DirectoryScan {
+    fn add_assign(&mut self, path: PathBuf) {
         match FileType::from(path) {
             FileType::Manifest(m) => self.manifest_files.push(m),
             FileType::Lockfile(l) => self.lockfiles.push(l),
-            FileType::Buildfile(p) => self.buildfiles.push(BuildFile(p)),
-            FileType::CicdFile(p) => self.cicd_files.push(CiCdFile(p)),
+            FileType::Buildfile(p) => self.buildfiles.push(p),
+            FileType::CicdFile(p) => self.cicd_files.push(p),
             FileType::Regular(lang) => {
                 *self.file_per_language.entry(lang).or_insert(0) += 1;
             }
             FileType::Unknown => {}
         }
+    }
+}
+
+impl AddAssign<DirectoryScan> for DirectoryScan {
+    fn add_assign(&mut self, other: DirectoryScan) {
+        // Merge language file counts
+        for (lang, count) in other.file_per_language {
+            *self.file_per_language.entry(lang).or_insert(0) += count;
+        }
+
+        // Note: We don't merge manifests, lockfiles, buildfiles, or cicd_files
+        // because the directory merged shouldn't have any of them, otherwise it would be "interesting"
     }
 }
 
@@ -148,144 +238,11 @@ struct FilePath<T> {
     path: PathBuf,
 }
 
-#[derive(Debug, PartialEq)]
-pub struct BuildFile(PathBuf);
-
-impl BuildFile {
-    fn is_buildfile(filename: &str) -> bool {
-        matches!(
-            filename,
-            "Makefile"
-                | "GNUmakefile"
-                | "makefile"
-                | "CMakeLists.txt"
-                | "meson.build"
-                | "BUILD"
-                | "BUILD.bazel"
-                | "WORKSPACE"
-                | "Rakefile"
-                | "build.xml"
-                | "build.zig"
-                | "justfile"
-                | "Taskfile.yml"
-        )
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub struct CiCdFile(PathBuf);
-
-impl CiCdFile {
-    fn is_cicd_file(path: &str) -> bool {
-        // GitHub Actions - .github/workflows/*.yml or *.yaml
-        if path.contains(".github/workflows/")
-            && (path.ends_with(".yml") || path.ends_with(".yaml"))
-        {
-            return true;
-        }
-
-        // GitLab CI
-        if path.ends_with(".gitlab-ci.yml") || path.ends_with(".gitlab-ci.yaml") {
-            return true;
-        }
-
-        // CircleCI - .circleci/config.yml or any yml in .circleci/
-        if path.contains(".circleci/") && (path.ends_with(".yml") || path.ends_with(".yaml")) {
-            return true;
-        }
-
-        // Travis CI
-        if path.ends_with(".travis.yml") {
-            return true;
-        }
-
-        // Jenkins
-        if path.ends_with("Jenkinsfile") || path.contains("Jenkinsfile") {
-            return true;
-        }
-
-        // Azure Pipelines
-        if path.ends_with("azure-pipelines.yml") || path.ends_with("azure-pipelines.yaml") {
-            return true;
-        }
-
-        // Bitbucket Pipelines
-        if path.ends_with("bitbucket-pipelines.yml") {
-            return true;
-        }
-
-        // Drone CI
-        if path.ends_with(".drone.yml") || path.ends_with(".drone.yaml") {
-            return true;
-        }
-
-        // Buildkite
-        if path.contains(".buildkite/") && (path.ends_with(".yml") || path.ends_with(".yaml")) {
-            return true;
-        }
-        if path.ends_with("buildkite.yml") || path.ends_with("buildkite.yaml") {
-            return true;
-        }
-
-        // AppVeyor
-        if path.ends_with("appveyor.yml") || path.ends_with(".appveyor.yml") {
-            return true;
-        }
-
-        // Wercker
-        if path.ends_with("wercker.yml") {
-            return true;
-        }
-
-        // Woodpecker CI
-        if path.contains(".woodpecker/") && (path.ends_with(".yml") || path.ends_with(".yaml")) {
-            return true;
-        }
-
-        // Concourse CI
-        if path.ends_with("pipeline.yml") && path.contains("ci/") {
-            return true;
-        }
-
-        // TeamCity
-        if path.contains(".teamcity/") {
-            return true;
-        }
-
-        // Codefresh
-        if path.ends_with("codefresh.yml") {
-            return true;
-        }
-
-        // Semaphore CI
-        if path.contains(".semaphore/") && (path.ends_with(".yml") || path.ends_with(".yaml")) {
-            return true;
-        }
-
-        // Buddy
-        if path.ends_with("buddy.yml") {
-            return true;
-        }
-
-        // Shippable
-        if path.ends_with("shippable.yml") {
-            return true;
-        }
-
-        // CodeShip
-        if path.contains("codeship-") && (path.ends_with(".yml") || path.ends_with(".yaml")) {
-            return true;
-        }
-
-        false
-    }
-}
-
 enum FileType {
     Manifest(FilePath<ManifestFile>),
     Lockfile(FilePath<LockFile>),
-    Buildfile(PathBuf),
-    CicdFile(PathBuf),
+    Buildfile(FilePath<BuildFile>),
+    CicdFile(FilePath<CiCdFile>),
     Regular(Language),
     Unknown,
 }
@@ -310,12 +267,18 @@ impl From<PathBuf> for FileType {
             });
         }
 
-        if path.to_str().is_some_and(CiCdFile::is_cicd_file) {
-            return Self::CicdFile(path);
+        if let Ok(buildfile) = BuildFile::try_from(filename) {
+            return Self::Buildfile(FilePath {
+                kind: buildfile,
+                path,
+            });
         }
 
-        if BuildFile::is_buildfile(filename) {
-            return Self::Buildfile(path);
+        if let Ok(cicd) = CiCdFile::try_from(filename) {
+            return Self::CicdFile(FilePath {
+                kind: cicd,
+                path,
+            });
         }
 
         if let Some(language) = path
@@ -329,7 +292,6 @@ impl From<PathBuf> for FileType {
         Self::Unknown
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -357,19 +319,9 @@ mod tests {
                     lockfiles: vec![],
                     buildfiles: vec![],
                     cicd_files: vec![],
-                    file_per_language: HashMap::new(),
+                    file_per_language: HashMap::from([(Language::Rust, 1)]),
                 },
-                children: vec![ScanNode {
-                    path: path.join("src"),
-                    files: DirectoryScan {
-                        manifest_files: vec![],
-                        lockfiles: vec![],
-                        buildfiles: vec![],
-                        cicd_files: vec![],
-                        file_per_language: HashMap::from([(Language::Rust, 1)]),
-                    },
-                    children: vec![],
-                }],
+                children: vec![],
             },
         };
 
@@ -418,19 +370,9 @@ mod tests {
                                 lockfiles: vec![],
                                 buildfiles: vec![],
                                 cicd_files: vec![],
-                                file_per_language: HashMap::new(),
+                                file_per_language: HashMap::from([(Language::Rust, 1)]),
                             },
-                            children: vec![ScanNode {
-                                path: crate_b_path.join("src"),
-                                files: DirectoryScan {
-                                    manifest_files: vec![],
-                                    lockfiles: vec![],
-                                    buildfiles: vec![],
-                                    cicd_files: vec![],
-                                    file_per_language: HashMap::from([(Language::Rust, 1)]),
-                                },
-                                children: vec![],
-                            }],
+                            children: vec![],
                         },
                         ScanNode {
                             path: crate_a_path.clone(),
@@ -442,19 +384,9 @@ mod tests {
                                 lockfiles: vec![],
                                 buildfiles: vec![],
                                 cicd_files: vec![],
-                                file_per_language: HashMap::new(),
+                                file_per_language: HashMap::from([(Language::Rust, 1)]),
                             },
-                            children: vec![ScanNode {
-                                path: crate_a_path.join("src"),
-                                files: DirectoryScan {
-                                    manifest_files: vec![],
-                                    lockfiles: vec![],
-                                    buildfiles: vec![],
-                                    cicd_files: vec![],
-                                    file_per_language: HashMap::from([(Language::Rust, 1)]),
-                                },
-                                children: vec![],
-                            }],
+                            children: vec![],
                         },
                     ],
                 }],
@@ -472,7 +404,6 @@ mod tests {
         let packages_path = path.join("packages");
         let shared_path = packages_path.join("shared");
         let web_path = packages_path.join("web");
-        let web_src_path = web_path.join("src");
 
         let expected = Scan {
             root: ScanNode {
@@ -524,19 +455,9 @@ mod tests {
                                 lockfiles: vec![],
                                 buildfiles: vec![],
                                 cicd_files: vec![],
-                                file_per_language: HashMap::new(),
+                                file_per_language: HashMap::from([(Language::JavaScript, 1)]),
                             },
-                            children: vec![ScanNode {
-                                path: web_src_path.clone(),
-                                files: DirectoryScan {
-                                    manifest_files: vec![],
-                                    lockfiles: vec![],
-                                    buildfiles: vec![],
-                                    cicd_files: vec![],
-                                    file_per_language: HashMap::from([(Language::JavaScript, 1)]),
-                                },
-                                children: vec![],
-                            }],
+                            children: vec![],
                         },
                     ],
                 }],
@@ -550,8 +471,6 @@ mod tests {
     fn test_python_project() {
         let path = test_features_path().join("python_project");
         let scan = Scan::from(path.clone());
-
-        let src_path = path.join("src");
 
         let expected = Scan {
             root: ScanNode {
@@ -567,19 +486,9 @@ mod tests {
                     }],
                     buildfiles: vec![],
                     cicd_files: vec![],
-                    file_per_language: HashMap::new(),
+                    file_per_language: HashMap::from([(Language::Python, 1)]),
                 },
-                children: vec![ScanNode {
-                    path: src_path.clone(),
-                    files: DirectoryScan {
-                        manifest_files: vec![],
-                        lockfiles: vec![],
-                        buildfiles: vec![],
-                        cicd_files: vec![],
-                        file_per_language: HashMap::from([(Language::Python, 1)]),
-                    },
-                    children: vec![],
-                }],
+                children: vec![],
             },
         };
 
@@ -673,8 +582,6 @@ mod tests {
         let path = test_features_path().join("mixed_language");
         let scan = Scan::from(path.clone());
 
-        let src_path = path.join("src");
-
         let expected = Scan {
             root: ScanNode {
                 path: path.clone(),
@@ -692,19 +599,12 @@ mod tests {
                     lockfiles: vec![],
                     buildfiles: vec![],
                     cicd_files: vec![],
-                    file_per_language: HashMap::from([(Language::JavaScript, 1)]),
+                    file_per_language: HashMap::from([
+                        (Language::JavaScript, 1),
+                        (Language::Rust, 1),
+                    ]),
                 },
-                children: vec![ScanNode {
-                    path: src_path.clone(),
-                    files: DirectoryScan {
-                        manifest_files: vec![],
-                        lockfiles: vec![],
-                        buildfiles: vec![],
-                        cicd_files: vec![],
-                        file_per_language: HashMap::from([(Language::Rust, 1)]),
-                    },
-                    children: vec![],
-                }],
+                children: vec![],
             },
         };
 
@@ -717,9 +617,7 @@ mod tests {
         let scan = Scan::from(path.clone());
 
         let backend_path = path.join("backend");
-        let backend_src_path = backend_path.join("src");
         let frontend_path = path.join("frontend");
-        let frontend_src_path = frontend_path.join("src");
         let scripts_path = path.join("scripts");
 
         let expected = Scan {
@@ -757,19 +655,9 @@ mod tests {
                             lockfiles: vec![],
                             buildfiles: vec![],
                             cicd_files: vec![],
-                            file_per_language: HashMap::new(),
+                            file_per_language: HashMap::from([(Language::Rust, 1)]),
                         },
-                        children: vec![ScanNode {
-                            path: backend_src_path.clone(),
-                            files: DirectoryScan {
-                                manifest_files: vec![],
-                                lockfiles: vec![],
-                                buildfiles: vec![],
-                                cicd_files: vec![],
-                                file_per_language: HashMap::from([(Language::Rust, 1)]),
-                            },
-                            children: vec![],
-                        }],
+                        children: vec![],
                     },
                     ScanNode {
                         path: frontend_path.clone(),
@@ -784,19 +672,9 @@ mod tests {
                             }],
                             buildfiles: vec![],
                             cicd_files: vec![],
-                            file_per_language: HashMap::new(),
+                            file_per_language: HashMap::from([(Language::JavaScript, 1)]),
                         },
-                        children: vec![ScanNode {
-                            path: frontend_src_path.clone(),
-                            files: DirectoryScan {
-                                manifest_files: vec![],
-                                lockfiles: vec![],
-                                buildfiles: vec![],
-                                cicd_files: vec![],
-                                file_per_language: HashMap::from([(Language::JavaScript, 1)]),
-                            },
-                            children: vec![],
-                        }],
+                        children: vec![],
                     },
                 ],
             },
@@ -812,12 +690,7 @@ mod tests {
 
         let mega_crate_path = path.join("mega_crate");
         let sub_a_path = mega_crate_path.join("sub_a");
-        let sub_a_src_path = sub_a_path.join("src");
-        let sub_a_some_path = sub_a_src_path.join("some");
-        let sub_a_nested_some_path = sub_a_some_path.join("nested_some");
-        let sub_a_something_path = sub_a_src_path.join("something");
         let sub_b_path = mega_crate_path.join("sub_b");
-        let sub_b_src_path = sub_b_path.join("src");
         let project_path = path.join("project");
         let tools_path = project_path.join("tools");
         let converter_path = tools_path.join("converter");
@@ -893,52 +766,9 @@ mod tests {
                                     lockfiles: vec![],
                                     buildfiles: vec![],
                                     cicd_files: vec![],
-                                    file_per_language: HashMap::new(),
+                                    file_per_language: HashMap::from([(Language::Rust, 5)]),
                                 },
-                                children: vec![ScanNode {
-                                    path: sub_a_src_path.clone(),
-                                    files: DirectoryScan {
-                                        manifest_files: vec![],
-                                        lockfiles: vec![],
-                                        buildfiles: vec![],
-                                        cicd_files: vec![],
-                                        file_per_language: HashMap::from([(Language::Rust, 1)]),
-                                    },
-                                    children: vec![
-                                        ScanNode {
-                                            path: sub_a_some_path.clone(),
-                                            files: DirectoryScan {
-                                                manifest_files: vec![],
-                                                lockfiles: vec![],
-                                                buildfiles: vec![],
-                                                cicd_files: vec![],
-                                                file_per_language: HashMap::from([(Language::Rust, 1)]),
-                                            },
-                                            children: vec![ScanNode {
-                                                path: sub_a_nested_some_path.clone(),
-                                                files: DirectoryScan {
-                                                    manifest_files: vec![],
-                                                    lockfiles: vec![],
-                                                    buildfiles: vec![],
-                                                    cicd_files: vec![],
-                                                    file_per_language: HashMap::from([(Language::Rust, 2)]),
-                                                },
-                                                children: vec![],
-                                            }],
-                                        },
-                                        ScanNode {
-                                            path: sub_a_something_path.clone(),
-                                            files: DirectoryScan {
-                                                manifest_files: vec![],
-                                                lockfiles: vec![],
-                                                buildfiles: vec![],
-                                                cicd_files: vec![],
-                                                file_per_language: HashMap::from([(Language::Rust, 1)]),
-                                            },
-                                            children: vec![],
-                                        },
-                                    ],
-                                }],
+                                children: vec![],
                             },
                             ScanNode {
                                 path: sub_b_path.clone(),
@@ -950,19 +780,9 @@ mod tests {
                                     lockfiles: vec![],
                                     buildfiles: vec![],
                                     cicd_files: vec![],
-                                    file_per_language: HashMap::new(),
+                                    file_per_language: HashMap::from([(Language::Rust, 1)]),
                                 },
-                                children: vec![ScanNode {
-                                    path: sub_b_src_path.clone(),
-                                    files: DirectoryScan {
-                                        manifest_files: vec![],
-                                        lockfiles: vec![],
-                                        buildfiles: vec![],
-                                        cicd_files: vec![],
-                                        file_per_language: HashMap::from([(Language::Rust, 1)]),
-                                    },
-                                    children: vec![],
-                                }],
+                                children: vec![],
                             },
                         ],
                     },
@@ -979,15 +799,9 @@ mod tests {
         let scan = Scan::from(path.clone());
 
         let crate_a_path = path.join("crate_a");
-        let crate_a_src_path = crate_a_path.join("src");
         let mega_crate_path = path.join("mega_crate");
         let sub_a_path = mega_crate_path.join("sub_a");
-        let sub_a_src_path = sub_a_path.join("src");
-        let sub_a_some_path = sub_a_src_path.join("some");
-        let sub_a_nested_some_path = sub_a_some_path.join("nested_some");
-        let sub_a_something_path = sub_a_src_path.join("something");
         let sub_b_path = mega_crate_path.join("sub_b");
-        let sub_b_src_path = sub_b_path.join("src");
 
         let expected = Scan {
             root: ScanNode {
@@ -1013,19 +827,9 @@ mod tests {
                             lockfiles: vec![],
                             buildfiles: vec![],
                             cicd_files: vec![],
-                            file_per_language: HashMap::new(),
+                            file_per_language: HashMap::from([(Language::Rust, 1)]),
                         },
-                        children: vec![ScanNode {
-                            path: crate_a_src_path.clone(),
-                            files: DirectoryScan {
-                                manifest_files: vec![],
-                                lockfiles: vec![],
-                                buildfiles: vec![],
-                                cicd_files: vec![],
-                                file_per_language: HashMap::from([(Language::Rust, 1)]),
-                            },
-                            children: vec![],
-                        }],
+                        children: vec![],
                     },
                     ScanNode {
                         path: mega_crate_path.clone(),
@@ -1050,52 +854,9 @@ mod tests {
                                     lockfiles: vec![],
                                     buildfiles: vec![],
                                     cicd_files: vec![],
-                                    file_per_language: HashMap::new(),
+                                    file_per_language: HashMap::from([(Language::Rust, 5)]),
                                 },
-                                children: vec![ScanNode {
-                                    path: sub_a_src_path.clone(),
-                                    files: DirectoryScan {
-                                        manifest_files: vec![],
-                                        lockfiles: vec![],
-                                        buildfiles: vec![],
-                                        cicd_files: vec![],
-                                        file_per_language: HashMap::from([(Language::Rust, 1)]),
-                                    },
-                                    children: vec![
-                                        ScanNode {
-                                            path: sub_a_some_path.clone(),
-                                            files: DirectoryScan {
-                                                manifest_files: vec![],
-                                                lockfiles: vec![],
-                                                buildfiles: vec![],
-                                                cicd_files: vec![],
-                                                file_per_language: HashMap::from([(Language::Rust, 1)]),
-                                            },
-                                            children: vec![ScanNode {
-                                                path: sub_a_nested_some_path.clone(),
-                                                files: DirectoryScan {
-                                                    manifest_files: vec![],
-                                                    lockfiles: vec![],
-                                                    buildfiles: vec![],
-                                                    cicd_files: vec![],
-                                                    file_per_language: HashMap::from([(Language::Rust, 2)]),
-                                                },
-                                                children: vec![],
-                                            }],
-                                        },
-                                        ScanNode {
-                                            path: sub_a_something_path.clone(),
-                                            files: DirectoryScan {
-                                                manifest_files: vec![],
-                                                lockfiles: vec![],
-                                                buildfiles: vec![],
-                                                cicd_files: vec![],
-                                                file_per_language: HashMap::from([(Language::Rust, 1)]),
-                                            },
-                                            children: vec![],
-                                        },
-                                    ],
-                                }],
+                                children: vec![],
                             },
                             ScanNode {
                                 path: sub_b_path.clone(),
@@ -1107,19 +868,9 @@ mod tests {
                                     lockfiles: vec![],
                                     buildfiles: vec![],
                                     cicd_files: vec![],
-                                    file_per_language: HashMap::new(),
+                                    file_per_language: HashMap::from([(Language::Rust, 1)]),
                                 },
-                                children: vec![ScanNode {
-                                    path: sub_b_src_path.clone(),
-                                    files: DirectoryScan {
-                                        manifest_files: vec![],
-                                        lockfiles: vec![],
-                                        buildfiles: vec![],
-                                        cicd_files: vec![],
-                                        file_per_language: HashMap::from([(Language::Rust, 1)]),
-                                    },
-                                    children: vec![],
-                                }],
+                                children: vec![],
                             },
                         ],
                     },

@@ -20,11 +20,9 @@ impl Parser<PathBuf> {
     }
 }
 
-struct Configuration;
-
 impl Parser<Scan> {
     fn analyse(self) -> Parser<Analysis> {
-        todo!()
+        Parser(Analysis::from(self.0.into_iter()))
     }
 
     //     pub fn save(&self, path: &Path) -> std::io::Result<()> {
@@ -54,6 +52,8 @@ impl Parser<Scan> {
     //         Ok(Parser(ir))
     //     }
 }
+
+struct Configuration;
 
 impl Parser<Analysis> {
     fn represent(self) -> Parser<Configuration> {

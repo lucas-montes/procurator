@@ -6,7 +6,6 @@
 mod parser;
 mod scan;
 mod analysis;
-mod ir;
-mod generation;
+
 
 pub use parser::Parser;
