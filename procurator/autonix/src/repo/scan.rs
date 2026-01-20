@@ -68,6 +68,26 @@ impl Repo {
     pub fn new(path: PathBuf, files: DirectoryScan) -> Self {
         Self { path, files }
     }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn manifest_files(&self) -> &Vec<FilePath<ManifestFile>> {
+        &self.files.manifest_files
+    }
+    pub fn lockfiles(&self) -> &Vec<FilePath<LockFile>> {
+        &self.files.lockfiles
+    }
+    pub fn buildfiles(&self) -> &Vec<FilePath<BuildFile>> {
+        &self.files.buildfiles
+    }
+    pub fn cicd_files(&self) -> &Vec<FilePath<CiCdFile>> {
+        &self.files.cicd_files
+    }
+    pub fn file_per_language(&self) -> &HashMap<Language, u16> {
+        &self.files.file_per_language
+    }
 }
 
 /// A tree representation of the scanned repository
@@ -233,9 +253,18 @@ impl AddAssign<DirectoryScan> for DirectoryScan {
 }
 
 #[derive(Debug, PartialEq)]
-struct FilePath<T> {
+pub struct FilePath<T> {
     kind: T,
     path: PathBuf,
+}
+
+impl<T> FilePath<T> {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+    pub fn kind(&self) -> &T {
+        &self.kind
+    }
 }
 
 enum FileType {
@@ -275,10 +304,7 @@ impl From<PathBuf> for FileType {
         }
 
         if let Ok(cicd) = CiCdFile::try_from(filename) {
-            return Self::CicdFile(FilePath {
-                kind: cicd,
-                path,
-            });
+            return Self::CicdFile(FilePath { kind: cicd, path });
         }
 
         if let Some(language) = path

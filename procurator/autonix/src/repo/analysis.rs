@@ -34,10 +34,7 @@ struct RepoConfiguration {
 
     /// Packages produced by this repo
     /// One repo can have multiple packages (workspace members, monorepo apps)
-    packages: Vec<Package>,
-
-    /// Toolchain shared across all packages in this repo
-    toolchain: Toolchain,
+    packages: Packages,
 
     /// Dependencies needed for the repo to build and run
     dependencies: Dependencies,
@@ -46,7 +43,7 @@ struct RepoConfiguration {
     dev_tools: DevTools,
 
     /// Check operations (tests, lints, formatting, etc.)
-    checks: Vec<Check>,
+    checks: Checks,
 
     /// Runtime configuration (how to run the built app)
     /// None for libraries that don't produce runnable artifacts
@@ -58,9 +55,19 @@ struct RepoConfiguration {
 
 impl From<Repo> for RepoConfiguration {
     fn from(repo: Repo) -> Self {
+        let manifest_files = repo.manifest_files();
+        let lockfiles = repo.lockfiles();
+
+        let buildfiles = repo.buildfiles();
+        let cicd_files = repo.cicd_files();
+        let file_per_language = repo.file_per_language();
+
         todo!()
     }
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Packages(Vec<Package>);
 
 /// A package that can be built from this repo
 /// Examples: a binary crate in Cargo workspace, an app in npm workspace
@@ -71,7 +78,7 @@ struct Package {
 
     /// Path relative to repo root
     path: PathBuf,
-
+    toolchain: Toolchain,
     /// Custom build command if needed
     /// Example: "cargo build -p api", "npm run build --workspace apps/web"
     /// None means use default build for the package manager
@@ -120,6 +127,9 @@ struct DevTools {
     shell_hook: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct Checks(Vec<Check>);
+
 /// A check operation (test, lint, format check, etc.)
 /// Maps to checks.<system>.<name> in flake.nix
 #[derive(Debug, Serialize, Deserialize)]
@@ -130,9 +140,8 @@ struct Check {
     /// Command to run (e.g., "cargo test", "eslint .")
     command: String,
 
-    /// Override toolchain for this specific check
-    /// None means use the repo's main toolchain
-    toolchain: Option<Toolchain>,
+    /// toolchain for this specific check
+    toolchain: Toolchain,
 
     /// Services needed for this check (e.g., postgresql for integration tests)
     services: Vec<Service>,
@@ -190,7 +199,7 @@ struct Version(Option<String>);
 #[derive(Debug, Serialize, Deserialize)]
 struct Metadata {
     /// Package version
-    version: Option<String>,
+    version: Version,
 
     /// Description
     description: Option<String>,
