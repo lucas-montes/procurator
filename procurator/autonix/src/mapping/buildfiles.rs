@@ -2,121 +2,6 @@ use std::path::Path;
 
 use crate::mapping::{ParseError, Parseable};
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, serde::Serialize, serde::Deserialize)]
-pub enum Language {
-    Rust,
-    JavaScript,
-    Python,
-    Go,
-    Java,
-    CSharp,
-    Ruby,
-    PHP,
-    C,
-    Bash,
-}
-
-impl Language {
-    pub fn from_extension(s: &str) -> Option<Self> {
-        match s {
-            "rs" => Some(Self::Rust),
-            "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs" => Some(Self::JavaScript),
-            "py" => Some(Self::Python),
-            "go" => Some(Self::Go),
-            "java" | "jar" | "class" => Some(Self::Java),
-            "cs" | "fs" | "vb" => Some(Self::CSharp),
-            "rb" => Some(Self::Ruby),
-            "php" => Some(Self::PHP),
-            "c" => Some(Self::C),
-            "sh" => Some(Self::Bash),
-            _ => None,
-        }
-    }
-}
-
-/// Package managers that can be detected from lock files or manifest configuration
-/// Used to determine the correct build and dependency installation commands
-#[derive(Debug, PartialEq, Eq, Hash, Clone, serde::Serialize, serde::Deserialize)]
-pub enum PackageManager {
-    // Rust
-    Cargo,
-
-    // JavaScript/TypeScript
-    Npm,
-    Yarn,
-    Pnpm,
-    Bun,
-
-    // Python
-    Pip,
-    Pipenv,
-    Poetry,
-    Pdm,
-    Uv,
-    Conda,
-
-    // Go
-    GoModules,
-
-    // Java/JVM
-    Maven,
-    Gradle,
-    Sbt,
-
-    // .NET/C#
-    Nuget,
-
-    // Ruby
-    Bundler,
-
-    // PHP
-    Composer,
-}
-
-impl TryFrom<&str> for PackageManager {
-    type Error = ();
-
-    fn try_from(s: &str) -> Result<Self, Self::Error> {
-        match s {
-            // Rust
-            "cargo" => Ok(Self::Cargo),
-
-            // JavaScript/TypeScript
-            "npm" => Ok(Self::Npm),
-            "yarn" => Ok(Self::Yarn),
-            "pnpm" => Ok(Self::Pnpm),
-            "bun" => Ok(Self::Bun),
-
-            // Python
-            "pip" => Ok(Self::Pip),
-            "pipenv" => Ok(Self::Pipenv),
-            "poetry" => Ok(Self::Poetry),
-            "pdm" => Ok(Self::Pdm),
-            "uv" => Ok(Self::Uv),
-            "conda" => Ok(Self::Conda),
-
-            // Go
-            "go" | "go-modules" | "gomod" => Ok(Self::GoModules),
-
-            // Java/JVM
-            "maven" | "mvn" => Ok(Self::Maven),
-            "gradle" => Ok(Self::Gradle),
-            "sbt" => Ok(Self::Sbt),
-
-            // .NET/C#
-            "nuget" => Ok(Self::Nuget),
-
-            // Ruby
-            "bundler" | "bundle" => Ok(Self::Bundler),
-
-            // PHP
-            "composer" => Ok(Self::Composer),
-
-            _ => Err(()),
-        }
-    }
-}
-
 /// Build system files that describe how to build a project
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub enum BuildFile {
@@ -150,13 +35,125 @@ pub enum BuildFile {
     Taskfile,
 }
 
-pub struct ParsedBuildFile;
+/// Build system types that can be auto-detected
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BuildSystem {
+    Make,
+    CMake,
+    Meson,
+    Bazel,
+    Just,
+    Zig,
+    Rake,
+    Ant,
+    Task,
+}
 
+/// Parsed build file information
+#[derive(Debug, Clone, Default)]
+pub struct ParsedBuildFile {
+    /// Type of build system
+    pub build_system: Option<BuildSystem>,
+
+    /// Build targets found (e.g., "all", "test", "clean")
+    pub targets: Vec<String>,
+
+    /// System dependencies mentioned (e.g., "pkg-config", "openssl")
+    pub system_deps: Vec<String>,
+}
+
+//TODO: use the extractors from autonix <https://github.com/davidabram/autonix/blob/main/src/detection/task_runner.rs>
 impl Parseable for BuildFile {
     type Output = ParsedBuildFile;
 
     fn parse(&self, path: &Path) -> Result<Self::Output, ParseError> {
-        Ok(ParsedBuildFile)
+        let content = std::fs::read_to_string(path)?;
+
+        let build_system = match self {
+            Self::Makefile | Self::GNUmakefile => Some(BuildSystem::Make),
+            Self::CMakeLists => Some(BuildSystem::CMake),
+            Self::MesonBuild => Some(BuildSystem::Meson),
+            Self::BazelBuild | Self::BazelWorkspace => Some(BuildSystem::Bazel),
+            Self::Justfile => Some(BuildSystem::Just),
+            Self::BuildZig => Some(BuildSystem::Zig),
+            Self::Rakefile => Some(BuildSystem::Rake),
+            Self::AntBuildXml => Some(BuildSystem::Ant),
+            Self::Taskfile => Some(BuildSystem::Task),
+        };
+
+        let mut result = ParsedBuildFile {
+            build_system,
+            targets: Vec::new(),
+            system_deps: Vec::new(),
+        };
+
+        // Extract targets and dependencies based on build system
+        match self {
+            Self::Makefile | Self::GNUmakefile => {
+                parse_makefile(&content, &mut result);
+            }
+            Self::CMakeLists => {
+                parse_cmake(&content, &mut result);
+            }
+            _ => {
+                // For other build systems, just return the type
+            }
+        }
+
+        Ok(result)
+    }
+}
+
+/// Parse Makefile to extract targets and system deps
+fn parse_makefile(content: &str, result: &mut ParsedBuildFile) {
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        // Skip comments and empty lines
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        // Extract targets (lines ending with ':')
+        if let Some(target_part) = trimmed.split(':').next() {
+            if !target_part.contains('=') && !target_part.contains('$') {
+                let target = target_part.trim();
+                if !target.is_empty() && !target.starts_with('.') {
+                    result.targets.push(target.to_string());
+                }
+            }
+        }
+
+        // Extract common system dependencies from variable assignments or commands
+        for dep in ["pkg-config", "openssl", "curl", "postgresql", "sqlite", "zlib"] {
+            if trimmed.to_lowercase().contains(dep) {
+                if !result.system_deps.contains(&dep.to_string()) {
+                    result.system_deps.push(dep.to_string());
+                }
+            }
+        }
+    }
+}
+
+/// Parse CMakeLists.txt to extract find_package calls
+fn parse_cmake(content: &str, result: &mut ParsedBuildFile) {
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        // Extract find_package() calls
+        if let Some(pkg_start) = trimmed.find("find_package(") {
+            let rest = &trimmed[pkg_start + 13..];
+            if let Some(pkg_end) = rest.find(')') {
+                let pkg_content = &rest[..pkg_end];
+                // Take first word (package name), handle REQUIRED/COMPONENTS
+                if let Some(pkg_name) = pkg_content.split_whitespace().next() {
+                    let pkg_lower = pkg_name.to_lowercase();
+                    if !result.system_deps.contains(&pkg_lower) {
+                        result.system_deps.push(pkg_lower);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -176,117 +173,6 @@ impl TryFrom<&str> for BuildFile {
             "build.zig" => Ok(Self::BuildZig),
             "justfile" => Ok(Self::Justfile),
             "Taskfile.yml" | "Taskfile.yaml" => Ok(Self::Taskfile),
-            _ => Err(()),
-        }
-    }
-}
-
-/// CI/CD configuration files
-#[derive(Debug, PartialEq, Eq, Hash)]
-pub enum CiCdFile {
-    // GitHub Actions
-    GitHubActions,
-
-    // GitLab CI
-    GitLabCI,
-
-    // CircleCI
-    CircleCI,
-
-    // Travis CI
-    TravisCI,
-
-    // Jenkins
-    Jenkinsfile,
-
-    // Azure Pipelines
-    AzurePipelines,
-
-    // Bitbucket Pipelines
-    BitbucketPipelines,
-
-    // Drone CI
-    DroneCI,
-
-    // Buildkite
-    Buildkite,
-
-    // AppVeyor
-    AppVeyor,
-
-    // Wercker
-    Wercker,
-}
-
-pub struct ParsedCiCdFile;
-
-impl Parseable for CiCdFile {
-    type Output = ParsedCiCdFile;
-
-    fn parse(&self, path: &Path) -> Result<Self::Output, ParseError> {
-        Ok(ParsedCiCdFile)
-    }
-}
-
-impl TryFrom<&str> for CiCdFile {
-    type Error = ();
-
-    fn try_from(path: &str) -> Result<Self, Self::Error> {
-        let is_yaml = path.ends_with(".yml") || path.ends_with(".yaml");
-        // GitHub Actions - .github/workflows/*.yml or *.yaml
-        if path.contains(".github/workflows/") && is_yaml {
-            return Ok(Self::GitHubActions);
-        }
-
-        // CircleCI - .circleci/config.yml or any yml in .circleci/
-        if path.contains(".circleci/") && is_yaml {
-            return Ok(Self::CircleCI);
-        }
-
-        // Buildkite - .buildkite/ directory
-        if path.contains(".buildkite/") && is_yaml {
-            return Ok(Self::Buildkite);
-        }
-
-        // Jenkins - contains Jenkinsfile anywhere in path
-        if path.contains("Jenkinsfile") {
-            return Ok(Self::Jenkinsfile);
-        }
-
-        // Simple filename/path suffix matches
-        match path {
-            // Exact filename matches
-            ".gitlab-ci.yml" | ".gitlab-ci.yaml" => Ok(Self::GitLabCI),
-            ".travis.yml" => Ok(Self::TravisCI),
-            "Jenkinsfile" => Ok(Self::Jenkinsfile),
-            "azure-pipelines.yml" | "azure-pipelines.yaml" => Ok(Self::AzurePipelines),
-            "bitbucket-pipelines.yml" => Ok(Self::BitbucketPipelines),
-            ".drone.yml" | ".drone.yaml" => Ok(Self::DroneCI),
-            "buildkite.yml" | "buildkite.yaml" => Ok(Self::Buildkite),
-            "appveyor.yml" | ".appveyor.yml" => Ok(Self::AppVeyor),
-            "wercker.yml" => Ok(Self::Wercker),
-
-            // Path suffix matches
-            _ if path.ends_with(".gitlab-ci.yml") || path.ends_with(".gitlab-ci.yaml") => {
-                Ok(Self::GitLabCI)
-            }
-            _ if path.ends_with(".travis.yml") => Ok(Self::TravisCI),
-            _ if path.ends_with("azure-pipelines.yml")
-                || path.ends_with("azure-pipelines.yaml") =>
-            {
-                Ok(Self::AzurePipelines)
-            }
-            _ if path.ends_with("bitbucket-pipelines.yml") => Ok(Self::BitbucketPipelines),
-            _ if path.ends_with(".drone.yml") || path.ends_with(".drone.yaml") => Ok(Self::DroneCI),
-            _ if path.ends_with("buildkite.yml") || path.ends_with("buildkite.yaml") => {
-                Ok(Self::Buildkite)
-            }
-            _ if path.ends_with("appveyor.yml") || path.ends_with(".appveyor.yml") => {
-                Ok(Self::AppVeyor)
-            }
-            _ if path.ends_with("wercker.yml") => Ok(Self::Wercker),
-            _ if path.ends_with("Jenkinsfile") => Ok(Self::Jenkinsfile),
-
             _ => Err(()),
         }
     }

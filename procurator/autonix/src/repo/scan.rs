@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::mapping::{
-    BuildFile, CiCdFile, Language, LockFile, ManifestFile, ParseError, Parseable,
+    BuildFile, CiCdFile, ContainerFile, Language, LockFile, ManifestFile, ParseError, Parseable
 };
 
 const IGNORED_DIR_BASENAMES: [&str; 32] = [
@@ -205,7 +205,8 @@ impl ScanNode {
             || !self.files.lockfiles.is_empty()
             || !self.files.buildfiles.is_empty()
             || !self.files.cicd_files.is_empty()
-        //NOTE: maybe build and cicd files aren't that important and we could merge them
+            || !self.files.container_files.is_empty()
+        //NOTE: maybe build, cicd or containers files aren't that important and we could merge them
     }
 
     fn has_interesting_children(&self) -> bool {
@@ -225,6 +226,10 @@ pub struct DirectoryScan {
     cicd_files: Vec<FilePath<CiCdFile>>,
     /// The number of files with the extension of each language found in the repository
     file_per_language: HashMap<Language, u16>, // NOTE: maybe if we found one file of a lanauge, like python, it's just a script to build or execute some tests, we might want to know that we need the interpreter installed?
+    /// Container files are meant to build containers to deploy an application
+    container_files: Vec<FilePath<ContainerFile>>,
+    //TODO: maybe scan secrets too?
+    //TODO: get or check for infra files
 }
 
 impl AddAssign<PathBuf> for DirectoryScan {
@@ -234,6 +239,7 @@ impl AddAssign<PathBuf> for DirectoryScan {
             FileType::Lockfile(l) => self.lockfiles.push(l),
             FileType::Buildfile(p) => self.buildfiles.push(p),
             FileType::CicdFile(p) => self.cicd_files.push(p),
+            FileType::ContainerFile(p) => self.container_files.push(p),
             FileType::Regular(lang) => {
                 *self.file_per_language.entry(lang).or_insert(0) += 1;
             }
@@ -271,6 +277,7 @@ enum FileType {
     Lockfile(FilePath<LockFile>),
     Buildfile(FilePath<BuildFile>),
     CicdFile(FilePath<CiCdFile>),
+    ContainerFile(FilePath<ContainerFile>),
     Regular(Language),
     Unknown,
 }
@@ -281,29 +288,20 @@ impl From<PathBuf> for FileType {
             return Self::Unknown;
         };
 
-        if let Ok(manifest) = ManifestFile::try_from(filename) {
-            return Self::Manifest(FilePath {
-                kind: manifest,
-                path,
-            });
+        if let Ok(kind) = ManifestFile::try_from(filename) {
+            return Self::Manifest(FilePath { kind, path });
         }
 
-        if let Ok(lockfile) = LockFile::try_from(filename) {
-            return Self::Lockfile(FilePath {
-                kind: lockfile,
-                path,
-            });
+        if let Ok(kind) = LockFile::try_from(filename) {
+            return Self::Lockfile(FilePath { kind, path });
         }
 
-        if let Ok(buildfile) = BuildFile::try_from(filename) {
-            return Self::Buildfile(FilePath {
-                kind: buildfile,
-                path,
-            });
+        if let Ok(kind) = BuildFile::try_from(filename) {
+            return Self::Buildfile(FilePath { kind, path });
         }
 
-        if let Ok(cicd) = CiCdFile::try_from(filename) {
-            return Self::CicdFile(FilePath { kind: cicd, path });
+        if let Ok(kind) = CiCdFile::try_from(filename) {
+            return Self::CicdFile(FilePath { kind, path });
         }
 
         if let Some(language) = path
@@ -345,6 +343,7 @@ mod tests {
                     lockfiles: vec![],
                     buildfiles: vec![],
                     cicd_files: vec![],
+                    container_files: vec![],
                     file_per_language: HashMap::from([(Language::Rust, 1)]),
                 },
                 children: vec![],
@@ -374,6 +373,7 @@ mod tests {
                     lockfiles: vec![],
                     buildfiles: vec![],
                     cicd_files: vec![],
+                    container_files: vec![],
                     file_per_language: HashMap::new(),
                 },
                 children: vec![ScanNode {
@@ -383,6 +383,7 @@ mod tests {
                         lockfiles: vec![],
                         buildfiles: vec![],
                         cicd_files: vec![],
+                        container_files: vec![],
                         file_per_language: HashMap::new(),
                     },
                     children: vec![
@@ -396,6 +397,7 @@ mod tests {
                                 lockfiles: vec![],
                                 buildfiles: vec![],
                                 cicd_files: vec![],
+                                container_files: vec![],
                                 file_per_language: HashMap::from([(Language::Rust, 1)]),
                             },
                             children: vec![],
@@ -410,6 +412,7 @@ mod tests {
                                 lockfiles: vec![],
                                 buildfiles: vec![],
                                 cicd_files: vec![],
+                                container_files: vec![],
                                 file_per_language: HashMap::from([(Language::Rust, 1)]),
                             },
                             children: vec![],
@@ -445,6 +448,7 @@ mod tests {
                     }],
                     buildfiles: vec![],
                     cicd_files: vec![],
+                    container_files: vec![],
                     file_per_language: HashMap::new(),
                 },
                 children: vec![ScanNode {
@@ -454,6 +458,7 @@ mod tests {
                         lockfiles: vec![],
                         buildfiles: vec![],
                         cicd_files: vec![],
+                        container_files: vec![],
                         file_per_language: HashMap::new(),
                     },
                     children: vec![
@@ -467,6 +472,7 @@ mod tests {
                                 lockfiles: vec![],
                                 buildfiles: vec![],
                                 cicd_files: vec![],
+                                container_files: vec![],
                                 file_per_language: HashMap::from([(Language::JavaScript, 1)]),
                             },
                             children: vec![],
@@ -481,6 +487,7 @@ mod tests {
                                 lockfiles: vec![],
                                 buildfiles: vec![],
                                 cicd_files: vec![],
+                                container_files: vec![],
                                 file_per_language: HashMap::from([(Language::JavaScript, 1)]),
                             },
                             children: vec![],
@@ -512,6 +519,7 @@ mod tests {
                     }],
                     buildfiles: vec![],
                     cicd_files: vec![],
+                    container_files: vec![],
                     file_per_language: HashMap::from([(Language::Python, 1)]),
                 },
                 children: vec![],
@@ -540,6 +548,7 @@ mod tests {
                     }],
                     buildfiles: vec![],
                     cicd_files: vec![],
+                    container_files: vec![],
                     file_per_language: HashMap::from([(Language::Go, 1)]),
                 },
                 children: vec![],
@@ -565,6 +574,7 @@ mod tests {
                     lockfiles: vec![],
                     buildfiles: vec![],
                     cicd_files: vec![],
+                    container_files: vec![],
                     file_per_language: HashMap::new(),
                 },
                 children: vec![
@@ -578,6 +588,7 @@ mod tests {
                             lockfiles: vec![],
                             buildfiles: vec![],
                             cicd_files: vec![],
+                            container_files: vec![],
                             file_per_language: HashMap::from([(Language::Go, 1)]),
                         },
                         children: vec![],
@@ -592,6 +603,7 @@ mod tests {
                             lockfiles: vec![],
                             buildfiles: vec![],
                             cicd_files: vec![],
+                            container_files: vec![],
                             file_per_language: HashMap::from([(Language::Go, 1)]),
                         },
                         children: vec![],
@@ -625,6 +637,7 @@ mod tests {
                     lockfiles: vec![],
                     buildfiles: vec![],
                     cicd_files: vec![],
+                    container_files: vec![],
                     file_per_language: HashMap::from([
                         (Language::JavaScript, 1),
                         (Language::Rust, 1),
@@ -654,6 +667,7 @@ mod tests {
                     lockfiles: vec![],
                     buildfiles: vec![],
                     cicd_files: vec![],
+                    container_files: vec![],
                     file_per_language: HashMap::new(),
                 },
                 children: vec![
@@ -667,6 +681,7 @@ mod tests {
                             lockfiles: vec![],
                             buildfiles: vec![],
                             cicd_files: vec![],
+                            container_files: vec![],
                             file_per_language: HashMap::from([(Language::Python, 1)]),
                         },
                         children: vec![],
@@ -681,6 +696,7 @@ mod tests {
                             lockfiles: vec![],
                             buildfiles: vec![],
                             cicd_files: vec![],
+                            container_files: vec![],
                             file_per_language: HashMap::from([(Language::Rust, 1)]),
                         },
                         children: vec![],
@@ -698,6 +714,7 @@ mod tests {
                             }],
                             buildfiles: vec![],
                             cicd_files: vec![],
+                            container_files: vec![],
                             file_per_language: HashMap::from([(Language::JavaScript, 1)]),
                         },
                         children: vec![],
@@ -729,6 +746,7 @@ mod tests {
                     lockfiles: vec![],
                     buildfiles: vec![],
                     cicd_files: vec![],
+                    container_files: vec![],
                     file_per_language: HashMap::new(),
                 },
                 children: vec![
@@ -742,6 +760,7 @@ mod tests {
                             lockfiles: vec![],
                             buildfiles: vec![],
                             cicd_files: vec![],
+                            container_files: vec![],
                             file_per_language: HashMap::from([(Language::Go, 1)]),
                         },
                         children: vec![ScanNode {
@@ -751,6 +770,7 @@ mod tests {
                                 lockfiles: vec![],
                                 buildfiles: vec![],
                                 cicd_files: vec![],
+                                container_files: vec![],
                                 file_per_language: HashMap::new(),
                             },
                             children: vec![ScanNode {
@@ -763,6 +783,7 @@ mod tests {
                                     lockfiles: vec![],
                                     buildfiles: vec![],
                                     cicd_files: vec![],
+                                    container_files: vec![],
                                     file_per_language: HashMap::from([(Language::JavaScript, 1)]),
                                 },
                                 children: vec![],
@@ -779,6 +800,7 @@ mod tests {
                             lockfiles: vec![],
                             buildfiles: vec![],
                             cicd_files: vec![],
+                            container_files: vec![],
                             file_per_language: HashMap::new(),
                         },
                         children: vec![
@@ -792,6 +814,7 @@ mod tests {
                                     lockfiles: vec![],
                                     buildfiles: vec![],
                                     cicd_files: vec![],
+                                    container_files: vec![],
                                     file_per_language: HashMap::from([(Language::Rust, 5)]),
                                 },
                                 children: vec![],
@@ -806,6 +829,7 @@ mod tests {
                                     lockfiles: vec![],
                                     buildfiles: vec![],
                                     cicd_files: vec![],
+                                    container_files: vec![],
                                     file_per_language: HashMap::from([(Language::Rust, 1)]),
                                 },
                                 children: vec![],
@@ -840,6 +864,7 @@ mod tests {
                     lockfiles: vec![],
                     buildfiles: vec![],
                     cicd_files: vec![],
+                    container_files: vec![],
                     file_per_language: HashMap::new(),
                 },
                 children: vec![
@@ -853,6 +878,7 @@ mod tests {
                             lockfiles: vec![],
                             buildfiles: vec![],
                             cicd_files: vec![],
+                            container_files: vec![],
                             file_per_language: HashMap::from([(Language::Rust, 1)]),
                         },
                         children: vec![],
@@ -867,6 +893,7 @@ mod tests {
                             lockfiles: vec![],
                             buildfiles: vec![],
                             cicd_files: vec![],
+                            container_files: vec![],
                             file_per_language: HashMap::new(),
                         },
                         children: vec![
@@ -880,6 +907,7 @@ mod tests {
                                     lockfiles: vec![],
                                     buildfiles: vec![],
                                     cicd_files: vec![],
+                                    container_files: vec![],
                                     file_per_language: HashMap::from([(Language::Rust, 5)]),
                                 },
                                 children: vec![],
@@ -894,6 +922,7 @@ mod tests {
                                     lockfiles: vec![],
                                     buildfiles: vec![],
                                     cicd_files: vec![],
+                                    container_files: vec![],
                                     file_per_language: HashMap::from([(Language::Rust, 1)]),
                                 },
                                 children: vec![],

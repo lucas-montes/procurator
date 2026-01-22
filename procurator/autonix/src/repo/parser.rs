@@ -15,13 +15,13 @@ impl From<PathBuf> for Parser {
 }
 
 impl Parser<PathBuf> {
-    fn scan(self) -> Parser<Scan> {
+    pub fn scan(self) -> Parser<Scan> {
         Parser(Scan::from(self.0))
     }
 }
 
 impl Parser<Scan> {
-    fn analyse(self) -> Parser<Analysis> {
+    pub fn analyse(self) -> Parser<Analysis> {
         Parser(Analysis::from(self.0.into_iter()))
     }
 

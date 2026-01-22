@@ -11,11 +11,11 @@ use crate::{
 /// Complete configuration for each repo in the repository
 /// This is what we'll use to generate flake.nix
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Analysis(Vec<RepoConfiguration>);
+pub struct Analysis(Vec<RepoAnalysis>);
 
 impl From<ScanIter> for Analysis {
     fn from(scan: ScanIter) -> Self {
-        Self(Vec::from_iter(scan.map(RepoConfiguration::from)))
+        Self(Vec::from_iter(scan.map(RepoAnalysis::from)))
     }
 }
 
@@ -25,7 +25,7 @@ impl From<ScanIter> for Analysis {
 /// This is the key intermediate representation that contains everything needed
 /// to generate Nix expressions and can be compared with previous versions to detect changes
 #[derive(Debug, Serialize, Deserialize)]
-struct RepoConfiguration {
+struct RepoAnalysis {
     /// Human-readable repo name (from manifest)
     name: String,
 
@@ -53,7 +53,7 @@ struct RepoConfiguration {
     metadata: Metadata,
 }
 
-impl From<Repo> for RepoConfiguration {
+impl From<Repo> for RepoAnalysis {
     fn from(repo: Repo) -> Self {
         // Parse all manifest files
         let parsed_manifests: Vec<_> = repo
@@ -96,12 +96,11 @@ impl From<Repo> for RepoConfiguration {
 
         // TODO: Implement full parsing logic
         // - Extract packages from workspace members
-        // - Parse lockfiles for dependencies
         // - Infer toolchain from manifests
         // - Discover checks from CI/CD files
         // - Detect runtime configuration
 
-        RepoConfiguration {
+        RepoAnalysis {
             name,
             path: repo.path().to_path_buf(),
             packages: Packages(Vec::new()),
