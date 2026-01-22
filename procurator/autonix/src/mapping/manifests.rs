@@ -426,3 +426,226 @@ fn parse_go_mod(content: &str) -> Result<ParsedManifest, ParseError> {
         toolchain_version,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn fixtures_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("manifests")
+    }
+
+    #[test]
+    fn test_parse_cargo_toml() {
+        let path = fixtures_path().join("Cargo.toml");
+        let manifest = ManifestFile::CargoToml;
+        let result = manifest.parse(&path).expect("Failed to parse Cargo.toml");
+
+        assert_eq!(result.names, vec!["test-rust-project"]);
+        assert_eq!(result.version, Some("0.1.0".to_string()));
+        assert_eq!(result.toolchain_version, Some("2021".to_string()));
+        assert_eq!(
+            result.metadata.description,
+            Some("A test Rust project".to_string())
+        );
+        assert_eq!(result.metadata.authors.len(), 2);
+        assert!(result.metadata.authors.contains(&"Alice <alice@example.com>".to_string()));
+        assert!(result.metadata.authors.contains(&"Bob <bob@example.com>".to_string()));
+        assert_eq!(result.metadata.license, Some("MIT".to_string()));
+        assert_eq!(result.entry_points.len(), 2);
+        assert!(result.entry_points.contains(&"test-binary".to_string()));
+        assert!(result.entry_points.contains(&"another-binary".to_string()));
+        assert!(result.workspace_members.is_empty());
+    }
+
+    #[test]
+    fn test_parse_cargo_workspace() {
+        let path = fixtures_path().join("Cargo-workspace.toml");
+        let manifest = ManifestFile::CargoToml;
+        let result = manifest.parse(&path).expect("Failed to parse Cargo workspace");
+
+        assert!(result.names.is_empty());
+        assert!(result.version.is_none());
+        assert_eq!(result.workspace_members.len(), 2);
+        assert!(result.workspace_members.contains(&"crates/*".to_string()));
+        assert!(result.workspace_members.contains(&"tools/cli".to_string()));
+    }
+
+    #[test]
+    fn test_parse_package_json() {
+        let path = fixtures_path().join("package.json");
+        let manifest = ManifestFile::PackageJson;
+        let result = manifest.parse(&path).expect("Failed to parse package.json");
+
+        assert_eq!(result.names, vec!["test-js-project"]);
+        assert_eq!(result.version, Some("2.1.0".to_string()));
+        assert_eq!(
+            result.metadata.description,
+            Some("A test JavaScript project".to_string())
+        );
+        assert_eq!(result.metadata.authors, vec!["Charlie <charlie@example.com>"]);
+        assert_eq!(result.metadata.license, Some("Apache-2.0".to_string()));
+        assert_eq!(result.toolchain_version, Some(">=18.0.0".to_string()));
+
+        // Check scripts
+        assert_eq!(result.scripts.len(), 4);
+        assert_eq!(result.scripts.get("test"), Some(&"jest".to_string()));
+        assert_eq!(result.scripts.get("lint"), Some(&"eslint .".to_string()));
+        assert_eq!(result.scripts.get("build"), Some(&"webpack".to_string()));
+        assert_eq!(result.scripts.get("start"), Some(&"node index.js".to_string()));
+
+        // Check entry points (bin)
+        assert_eq!(result.entry_points.len(), 2);
+        assert!(result.entry_points.contains(&"test-cli".to_string()));
+        assert!(result.entry_points.contains(&"another-tool".to_string()));
+
+        assert!(result.workspace_members.is_empty());
+    }
+
+    #[test]
+    fn test_parse_package_json_workspace_array() {
+        let path = fixtures_path().join("package-workspace.json");
+        let manifest = ManifestFile::PackageJson;
+        let result = manifest.parse(&path).expect("Failed to parse package workspace");
+
+        assert_eq!(result.names, vec!["test-monorepo"]);
+        assert_eq!(result.workspace_members.len(), 2);
+        assert!(result.workspace_members.contains(&"packages/*".to_string()));
+        assert!(result.workspace_members.contains(&"apps/*".to_string()));
+        assert_eq!(result.scripts.get("test"), Some(&"npm run test --workspaces".to_string()));
+    }
+
+    #[test]
+    fn test_parse_package_json_workspace_object() {
+        let path = fixtures_path().join("package-workspace-object.json");
+        let manifest = ManifestFile::PackageJson;
+        let result = manifest.parse(&path).expect("Failed to parse package workspace object");
+
+        assert_eq!(result.names, vec!["test-monorepo-obj"]);
+        assert_eq!(result.workspace_members.len(), 2);
+        assert!(result.workspace_members.contains(&"libs/*".to_string()));
+        assert!(result.workspace_members.contains(&"services/*".to_string()));
+    }
+
+    #[test]
+    fn test_parse_pyproject_toml() {
+        let path = fixtures_path().join("pyproject.toml");
+        let manifest = ManifestFile::PyprojectToml;
+        let result = manifest.parse(&path).expect("Failed to parse pyproject.toml");
+
+        assert_eq!(result.names, vec!["test-python-project"]);
+        assert_eq!(result.version, Some("3.2.1".to_string()));
+        assert_eq!(
+            result.metadata.description,
+            Some("A test Python project".to_string())
+        );
+        assert_eq!(result.metadata.authors.len(), 2);
+        assert!(result.metadata.authors.contains(&"David".to_string()));
+        assert!(result.metadata.authors.contains(&"Eve".to_string()));
+        assert_eq!(result.metadata.license, Some("MIT".to_string()));
+        assert_eq!(result.toolchain_version, Some(">=3.9".to_string()));
+
+        // Check entry points (scripts)
+        assert_eq!(result.entry_points.len(), 2);
+        assert!(result.entry_points.contains(&"test-cli".to_string()));
+        assert!(result.entry_points.contains(&"another-tool".to_string()));
+
+        assert_eq!(result.scripts.len(), 2);
+        assert_eq!(
+            result.scripts.get("test-cli"),
+            Some(&"test_package.main:cli".to_string())
+        );
+        assert_eq!(
+            result.scripts.get("another-tool"),
+            Some(&"test_package.tools:main".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_pyproject_toml_simple() {
+        let path = fixtures_path().join("pyproject-simple.toml");
+        let manifest = ManifestFile::PyprojectToml;
+        let result = manifest.parse(&path).expect("Failed to parse simple pyproject.toml");
+
+        assert_eq!(result.names, vec!["simple-python-app"]);
+        assert_eq!(result.version, Some("1.0.0".to_string()));
+        assert_eq!(result.metadata.authors, vec!["Frank"]);
+        assert_eq!(result.metadata.license, Some("BSD-3-Clause".to_string()));
+        assert_eq!(result.toolchain_version, Some(">=3.11".to_string()));
+        assert!(result.entry_points.is_empty());
+        assert!(result.scripts.is_empty());
+    }
+
+    #[test]
+    fn test_parse_go_mod() {
+        let path = fixtures_path().join("go.mod");
+        let manifest = ManifestFile::GoMod;
+        let result = manifest.parse(&path).expect("Failed to parse go.mod");
+
+        assert_eq!(result.names, vec!["github.com/example/test-go-project"]);
+        assert!(result.version.is_none());
+        assert_eq!(result.toolchain_version, Some("1.21".to_string()));
+        assert!(result.workspace_members.is_empty());
+        assert!(result.entry_points.is_empty());
+        assert!(result.scripts.is_empty());
+    }
+
+    #[test]
+    fn test_parse_python_version() {
+        let path = fixtures_path().join(".python-version");
+        let manifest = ManifestFile::PythonVersion;
+        let result = manifest.parse(&path).expect("Failed to parse .python-version");
+
+        assert!(result.names.is_empty());
+        assert!(result.version.is_none());
+        assert_eq!(result.toolchain_version, Some("3.11.5".to_string()));
+        assert!(result.workspace_members.is_empty());
+        assert!(result.entry_points.is_empty());
+        assert!(result.scripts.is_empty());
+    }
+
+    #[test]
+    fn test_parse_runtime_txt() {
+        let path = fixtures_path().join("runtime.txt");
+        let manifest = ManifestFile::RuntimeTxt;
+        let result = manifest.parse(&path).expect("Failed to parse runtime.txt");
+
+        assert!(result.names.is_empty());
+        assert!(result.version.is_none());
+        assert_eq!(result.toolchain_version, Some("python-3.10.12".to_string()));
+        assert!(result.workspace_members.is_empty());
+        assert!(result.entry_points.is_empty());
+        assert!(result.scripts.is_empty());
+    }
+
+    #[test]
+    fn test_parse_package_json_single_bin() {
+        let path = fixtures_path().join("package-single-bin.json");
+        let manifest = ManifestFile::PackageJson;
+        let result = manifest.parse(&path).expect("Failed to parse package.json with single bin");
+
+        assert_eq!(result.names, vec!["simple-cli"]);
+        assert_eq!(result.entry_points.len(), 1);
+        assert_eq!(result.entry_points[0], "./cli.js");
+    }
+
+    #[test]
+    fn test_parse_cargo_minimal() {
+        let path = fixtures_path().join("Cargo-minimal.toml");
+        let manifest = ManifestFile::CargoToml;
+        let result = manifest.parse(&path).expect("Failed to parse minimal Cargo.toml");
+
+        assert_eq!(result.names, vec!["minimal-crate"]);
+        assert_eq!(result.version, Some("0.1.0".to_string()));
+        assert_eq!(result.toolchain_version, Some("2021".to_string()));
+        assert!(result.metadata.description.is_none());
+        assert!(result.metadata.authors.is_empty());
+        assert!(result.metadata.license.is_none());
+        assert!(result.entry_points.is_empty());
+    }
+
+}

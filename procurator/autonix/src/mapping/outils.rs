@@ -13,7 +13,7 @@ pub enum ParseError {
     Io(std::io::Error),
     Toml(toml::de::Error),
     Json(serde_json::Error),
-    Yaml(serde_yaml::Error),
+    Yaml(serde_yaml_ng::Error),
     InvalidFormat(String),
 }
 
@@ -35,8 +35,8 @@ impl From<serde_json::Error> for ParseError {
     }
 }
 
-impl From<serde_yaml::Error> for ParseError {
-    fn from(err: serde_yaml::Error) -> Self {
+impl From<serde_yaml_ng::Error> for ParseError {
+    fn from(err: serde_yaml_ng::Error) -> Self {
         Self::Yaml(err)
     }
 }

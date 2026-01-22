@@ -1,0 +1,6 @@
+[project]
+name = "simple-python-app"
+version = "1.0.0"
+authors = ["Frank"]
+license = "BSD-3-Clause"
+requires-python = ">=3.11"

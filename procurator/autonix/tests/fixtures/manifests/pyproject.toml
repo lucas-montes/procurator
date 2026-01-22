@@ -1,0 +1,18 @@
+[project]
+name = "test-python-project"
+version = "3.2.1"
+description = "A test Python project"
+authors = [
+    {name = "David", email = "david@example.com"},
+    {name = "Eve"}
+]
+license = {text = "MIT"}
+requires-python = ">=3.9"
+
+[project.scripts]
+test-cli = "test_package.main:cli"
+another-tool = "test_package.tools:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"

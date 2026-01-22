@@ -1,0 +1,16 @@
+[package]
+name = "test-rust-project"
+version = "0.1.0"
+edition = "2021"
+description = "A test Rust project"
+authors = ["Alice <alice@example.com>", "Bob <bob@example.com>"]
+license = "MIT"
+
+[[bin]]
+name = "test-binary"
+
+[[bin]]
+name = "another-binary"
+
+[dependencies]
+serde = "1.0"

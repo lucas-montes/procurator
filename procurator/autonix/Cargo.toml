@@ -10,7 +10,7 @@ tracing-appender.workspace = true
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.8"
-serde_yaml = "0.9"
+serde_yaml_ng = "0.10"
 askama = { version = "0.14.0", default-features = false, features = ["derive"] }
 
 # We could use those two to read/write Nix code directly

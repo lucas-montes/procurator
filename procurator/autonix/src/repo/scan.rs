@@ -325,7 +325,8 @@ mod tests {
     fn test_features_path() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
-            .join("features")
+            .join("fixtures")
+            .join("scan")
     }
 
     #[test]
