@@ -55,14 +55,69 @@ struct RepoConfiguration {
 
 impl From<Repo> for RepoConfiguration {
     fn from(repo: Repo) -> Self {
-        let manifest_files = repo.manifest_files();
-        let lockfiles = repo.lockfiles();
+        // Parse all manifest files
+        let parsed_manifests: Vec<_> = repo
+            .manifest_files()
+            .iter()
+            .filter_map(|manifest_file| manifest_file.parse().ok())
+            .collect();
 
-        let buildfiles = repo.buildfiles();
-        let cicd_files = repo.cicd_files();
-        let file_per_language = repo.file_per_language();
+        // Get primary manifest or use defaults
+        let primary_manifest = parsed_manifests.first();
 
-        todo!()
+        // Extract name from primary manifest or directory
+        let name = primary_manifest
+            .and_then(|m| m.names.first())
+            .cloned()
+            .unwrap_or_else(|| {
+                repo.path()
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown")
+                    .to_string()
+            });
+
+        // Extract metadata from primary manifest
+        let metadata = if let Some(manifest) = primary_manifest {
+            Metadata {
+                version: Version(manifest.version.clone()),
+                description: manifest.metadata.description.clone(),
+                authors: manifest.metadata.authors.clone(),
+                license: manifest.metadata.license.clone(),
+            }
+        } else {
+            Metadata {
+                version: Version(None),
+                description: None,
+                authors: Vec::new(),
+                license: None,
+            }
+        };
+
+        // TODO: Implement full parsing logic
+        // - Extract packages from workspace members
+        // - Parse lockfiles for dependencies
+        // - Infer toolchain from manifests
+        // - Discover checks from CI/CD files
+        // - Detect runtime configuration
+
+        RepoConfiguration {
+            name,
+            path: repo.path().to_path_buf(),
+            packages: Packages(Vec::new()),
+            dependencies: Dependencies {
+                nix_packages: Vec::new(),
+                language_deps: HashMap::new(),
+            },
+            dev_tools: DevTools {
+                tools: Vec::new(),
+                env: HashMap::new(),
+                shell_hook: None,
+            },
+            checks: Checks(Vec::new()),
+            runtime: None,
+            metadata,
+        }
     }
 }
 

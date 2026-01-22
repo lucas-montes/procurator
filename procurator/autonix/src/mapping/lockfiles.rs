@@ -1,3 +1,7 @@
+use std::path::Path;
+
+use crate::mapping::{ParseError, Parseable};
+
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum LockFile {
     // Rust
@@ -29,6 +33,16 @@ pub enum LockFile {
 
     // PHP
     ComposerLock,
+}
+
+pub struct ParsedLockFile;
+
+impl Parseable for LockFile {
+    type Output = ParsedLockFile;
+
+    fn parse(&self, path: &Path) -> Result<Self::Output, ParseError> {
+        Ok(ParsedLockFile)
+    }
 }
 
 impl TryFrom<&str> for LockFile {

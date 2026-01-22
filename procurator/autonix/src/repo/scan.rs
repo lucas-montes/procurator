@@ -7,7 +7,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::mapping::{BuildFile, CiCdFile, Language, LockFile, ManifestFile};
+use crate::mapping::{
+    BuildFile, CiCdFile, Language, LockFile, ManifestFile, ParseError, Parseable,
+};
 
 const IGNORED_DIR_BASENAMES: [&str; 32] = [
     // VCS
@@ -253,17 +255,14 @@ impl AddAssign<DirectoryScan> for DirectoryScan {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct FilePath<T> {
+pub struct FilePath<T: Parseable> {
     kind: T,
     path: PathBuf,
 }
 
-impl<T> FilePath<T> {
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-    pub fn kind(&self) -> &T {
-        &self.kind
+impl<T: Parseable> FilePath<T> {
+    pub fn parse(&self) -> Result<T::Output, ParseError> {
+        self.kind.parse(&self.path)
     }
 }
 
