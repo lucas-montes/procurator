@@ -40,3 +40,19 @@ impl From<serde_yaml_ng::Error> for ParseError {
         Self::Yaml(err)
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct Version(pub Option<String>);
+
+
+impl From<Option<&str>> for Version {
+    fn from(s: Option<&str>) -> Self {
+        Self(s.map(|s| s.to_string()))
+    }
+}
+
+impl Default for Version {
+    fn default() -> Self {
+        Self(None)
+    }
+}

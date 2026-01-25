@@ -40,7 +40,7 @@ pub struct ParsedLockFile;
 impl Parseable for LockFile {
     type Output = ParsedLockFile;
 
-    fn parse(&self, path: &Path) -> Result<Self::Output, ParseError> {
+    fn parse(&self, _path: &Path) -> Result<Self::Output, ParseError> {
         Ok(ParsedLockFile)
     }
 }

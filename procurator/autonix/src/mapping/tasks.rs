@@ -4,7 +4,7 @@ use crate::mapping::{ParseError, Parseable};
 
 /// Build system files that describe how to build a project
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub enum BuildFile {
+pub enum TaskFile {
     // Make-based
     Makefile,
     GNUmakefile,
@@ -51,7 +51,7 @@ pub enum BuildSystem {
 
 /// Parsed build file information
 #[derive(Debug, Clone, Default)]
-pub struct ParsedBuildFile {
+pub struct ParsedTaskFile {
     /// Type of build system
     pub build_system: Option<BuildSystem>,
 
@@ -63,8 +63,8 @@ pub struct ParsedBuildFile {
 }
 
 //TODO: use the extractors from autonix <https://github.com/davidabram/autonix/blob/main/src/detection/task_runner.rs>
-impl Parseable for BuildFile {
-    type Output = ParsedBuildFile;
+impl Parseable for TaskFile {
+    type Output = ParsedTaskFile;
 
     fn parse(&self, path: &Path) -> Result<Self::Output, ParseError> {
         let content = std::fs::read_to_string(path)?;
@@ -81,7 +81,7 @@ impl Parseable for BuildFile {
             Self::Taskfile => Some(BuildSystem::Task),
         };
 
-        let mut result = ParsedBuildFile {
+        let mut result = ParsedTaskFile {
             build_system,
             targets: Vec::new(),
             system_deps: Vec::new(),
@@ -105,7 +105,7 @@ impl Parseable for BuildFile {
 }
 
 /// Parse Makefile to extract targets and system deps
-fn parse_makefile(content: &str, result: &mut ParsedBuildFile) {
+fn parse_makefile(content: &str, result: &mut ParsedTaskFile) {
     for line in content.lines() {
         let trimmed = line.trim();
 
@@ -136,7 +136,7 @@ fn parse_makefile(content: &str, result: &mut ParsedBuildFile) {
 }
 
 /// Parse CMakeLists.txt to extract find_package calls
-fn parse_cmake(content: &str, result: &mut ParsedBuildFile) {
+fn parse_cmake(content: &str, result: &mut ParsedTaskFile) {
     for line in content.lines() {
         let trimmed = line.trim();
 
@@ -157,7 +157,7 @@ fn parse_cmake(content: &str, result: &mut ParsedBuildFile) {
     }
 }
 
-impl TryFrom<&str> for BuildFile {
+impl TryFrom<&str> for TaskFile {
     type Error = ();
 
     fn try_from(filename: &str) -> Result<Self, Self::Error> {

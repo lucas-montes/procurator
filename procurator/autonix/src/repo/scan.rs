@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::mapping::{
-    BuildFile, CiCdFile, ContainerFile, Language, LockFile, ManifestFile, ParseError, Parseable
+    TaskFile, CiCdFile, ContainerFile, Language, LockFile, ManifestFile, ParseError, Parseable
 };
 
 const IGNORED_DIR_BASENAMES: [&str; 32] = [
@@ -81,11 +81,14 @@ impl Repo {
     pub fn lockfiles(&self) -> &Vec<FilePath<LockFile>> {
         &self.files.lockfiles
     }
-    pub fn buildfiles(&self) -> &Vec<FilePath<BuildFile>> {
-        &self.files.buildfiles
+    pub fn task_files(&self) -> &Vec<FilePath<TaskFile>> {
+        &self.files.task_files
     }
     pub fn cicd_files(&self) -> &Vec<FilePath<CiCdFile>> {
         &self.files.cicd_files
+    }
+    pub fn container_files(&self) -> &Vec<FilePath<ContainerFile>> {
+        &self.files.container_files
     }
     pub fn file_per_language(&self) -> &HashMap<Language, u16> {
         &self.files.file_per_language
@@ -192,7 +195,7 @@ impl From<PathBuf> for ScanNode {
 }
 
 impl ScanNode {
-    /// A node is interesting if it has manifests, lockfiles, buildfiles, CI/CD files,
+    /// A node is interesting if it has manifests, lockfiles, task_files, CI/CD files,
     /// or has interesting children. Pure source directories are not interesting.
     fn is_interesting(&self) -> bool {
         self.has_interesting_files() || self.has_interesting_children()
@@ -203,7 +206,7 @@ impl ScanNode {
         // Has any project-relevant files?
         !self.files.manifest_files.is_empty()
             || !self.files.lockfiles.is_empty()
-            || !self.files.buildfiles.is_empty()
+            || !self.files.task_files.is_empty()
             || !self.files.cicd_files.is_empty()
             || !self.files.container_files.is_empty()
         //NOTE: maybe build, cicd or containers files aren't that important and we could merge them
@@ -220,8 +223,8 @@ pub struct DirectoryScan {
     manifest_files: Vec<FilePath<ManifestFile>>,
     /// All lockfiles found in the repository that cann tell use what dependencies to use and what packages
     lockfiles: Vec<FilePath<LockFile>>,
-    /// All buildfiles found in the repository that can tell us how to build the project
-    buildfiles: Vec<FilePath<BuildFile>>,
+    /// All task_files found in the repository that can tell us how to build the project
+    task_files: Vec<FilePath<TaskFile>>,
     /// CI/CD files found in the repository that can tell us how the project is deployed/tested or even built
     cicd_files: Vec<FilePath<CiCdFile>>,
     /// The number of files with the extension of each language found in the repository
@@ -237,7 +240,7 @@ impl AddAssign<PathBuf> for DirectoryScan {
         match FileType::from(path) {
             FileType::Manifest(m) => self.manifest_files.push(m),
             FileType::Lockfile(l) => self.lockfiles.push(l),
-            FileType::Buildfile(p) => self.buildfiles.push(p),
+            FileType::TaskFile(p) => self.task_files.push(p),
             FileType::CicdFile(p) => self.cicd_files.push(p),
             FileType::ContainerFile(p) => self.container_files.push(p),
             FileType::Regular(lang) => {
@@ -255,7 +258,7 @@ impl AddAssign<DirectoryScan> for DirectoryScan {
             *self.file_per_language.entry(lang).or_insert(0) += count;
         }
 
-        // Note: We don't merge manifests, lockfiles, buildfiles, or cicd_files
+        // Note: We don't merge manifests, lockfiles, task_files, or cicd_files
         // because the directory merged shouldn't have any of them, otherwise it would be "interesting"
     }
 }
@@ -275,7 +278,7 @@ impl<T: Parseable> FilePath<T> {
 enum FileType {
     Manifest(FilePath<ManifestFile>),
     Lockfile(FilePath<LockFile>),
-    Buildfile(FilePath<BuildFile>),
+    TaskFile(FilePath<TaskFile>),
     CicdFile(FilePath<CiCdFile>),
     ContainerFile(FilePath<ContainerFile>),
     Regular(Language),
@@ -296,8 +299,8 @@ impl From<PathBuf> for FileType {
             return Self::Lockfile(FilePath { kind, path });
         }
 
-        if let Ok(kind) = BuildFile::try_from(filename) {
-            return Self::Buildfile(FilePath { kind, path });
+        if let Ok(kind) = TaskFile::try_from(filename) {
+            return Self::TaskFile(FilePath { kind, path });
         }
 
         if let Ok(kind) = CiCdFile::try_from(filename) {
@@ -341,7 +344,7 @@ mod tests {
                         path: path.join("Cargo.toml"),
                     }],
                     lockfiles: vec![],
-                    buildfiles: vec![],
+                    task_files: vec![],
                     cicd_files: vec![],
                     container_files: vec![],
                     file_per_language: HashMap::from([(Language::Rust, 1)]),
@@ -371,7 +374,7 @@ mod tests {
                         path: path.join("Cargo.toml"),
                     }],
                     lockfiles: vec![],
-                    buildfiles: vec![],
+                    task_files: vec![],
                     cicd_files: vec![],
                     container_files: vec![],
                     file_per_language: HashMap::new(),
@@ -381,7 +384,7 @@ mod tests {
                     files: DirectoryScan {
                         manifest_files: vec![],
                         lockfiles: vec![],
-                        buildfiles: vec![],
+                        task_files: vec![],
                         cicd_files: vec![],
                         container_files: vec![],
                         file_per_language: HashMap::new(),
@@ -395,7 +398,7 @@ mod tests {
                                     path: crate_b_path.join("Cargo.toml"),
                                 }],
                                 lockfiles: vec![],
-                                buildfiles: vec![],
+                                task_files: vec![],
                                 cicd_files: vec![],
                                 container_files: vec![],
                                 file_per_language: HashMap::from([(Language::Rust, 1)]),
@@ -410,7 +413,7 @@ mod tests {
                                     path: crate_a_path.join("Cargo.toml"),
                                 }],
                                 lockfiles: vec![],
-                                buildfiles: vec![],
+                                task_files: vec![],
                                 cicd_files: vec![],
                                 container_files: vec![],
                                 file_per_language: HashMap::from([(Language::Rust, 1)]),
@@ -446,7 +449,7 @@ mod tests {
                         kind: LockFile::PackageLockJson,
                         path: path.join("package-lock.json"),
                     }],
-                    buildfiles: vec![],
+                    task_files: vec![],
                     cicd_files: vec![],
                     container_files: vec![],
                     file_per_language: HashMap::new(),
@@ -456,7 +459,7 @@ mod tests {
                     files: DirectoryScan {
                         manifest_files: vec![],
                         lockfiles: vec![],
-                        buildfiles: vec![],
+                        task_files: vec![],
                         cicd_files: vec![],
                         container_files: vec![],
                         file_per_language: HashMap::new(),
@@ -470,7 +473,7 @@ mod tests {
                                     path: shared_path.join("package.json"),
                                 }],
                                 lockfiles: vec![],
-                                buildfiles: vec![],
+                                task_files: vec![],
                                 cicd_files: vec![],
                                 container_files: vec![],
                                 file_per_language: HashMap::from([(Language::JavaScript, 1)]),
@@ -485,7 +488,7 @@ mod tests {
                                     path: web_path.join("package.json"),
                                 }],
                                 lockfiles: vec![],
-                                buildfiles: vec![],
+                                task_files: vec![],
                                 cicd_files: vec![],
                                 container_files: vec![],
                                 file_per_language: HashMap::from([(Language::JavaScript, 1)]),
@@ -517,7 +520,7 @@ mod tests {
                         kind: LockFile::PoetryLock,
                         path: path.join("poetry.lock"),
                     }],
-                    buildfiles: vec![],
+                    task_files: vec![],
                     cicd_files: vec![],
                     container_files: vec![],
                     file_per_language: HashMap::from([(Language::Python, 1)]),
@@ -546,7 +549,7 @@ mod tests {
                         kind: LockFile::GoSum,
                         path: path.join("go.sum"),
                     }],
-                    buildfiles: vec![],
+                    task_files: vec![],
                     cicd_files: vec![],
                     container_files: vec![],
                     file_per_language: HashMap::from([(Language::Go, 1)]),
@@ -572,7 +575,7 @@ mod tests {
                 files: DirectoryScan {
                     manifest_files: vec![],
                     lockfiles: vec![],
-                    buildfiles: vec![],
+                    task_files: vec![],
                     cicd_files: vec![],
                     container_files: vec![],
                     file_per_language: HashMap::new(),
@@ -586,7 +589,7 @@ mod tests {
                                 path: shared_path.join("go.mod"),
                             }],
                             lockfiles: vec![],
-                            buildfiles: vec![],
+                            task_files: vec![],
                             cicd_files: vec![],
                             container_files: vec![],
                             file_per_language: HashMap::from([(Language::Go, 1)]),
@@ -601,7 +604,7 @@ mod tests {
                                 path: backend_path.join("go.mod"),
                             }],
                             lockfiles: vec![],
-                            buildfiles: vec![],
+                            task_files: vec![],
                             cicd_files: vec![],
                             container_files: vec![],
                             file_per_language: HashMap::from([(Language::Go, 1)]),
@@ -635,7 +638,7 @@ mod tests {
                         },
                     ],
                     lockfiles: vec![],
-                    buildfiles: vec![],
+                    task_files: vec![],
                     cicd_files: vec![],
                     container_files: vec![],
                     file_per_language: HashMap::from([
@@ -665,7 +668,7 @@ mod tests {
                 files: DirectoryScan {
                     manifest_files: vec![],
                     lockfiles: vec![],
-                    buildfiles: vec![],
+                    task_files: vec![],
                     cicd_files: vec![],
                     container_files: vec![],
                     file_per_language: HashMap::new(),
@@ -679,7 +682,7 @@ mod tests {
                                 path: scripts_path.join("requirements.txt"),
                             }],
                             lockfiles: vec![],
-                            buildfiles: vec![],
+                            task_files: vec![],
                             cicd_files: vec![],
                             container_files: vec![],
                             file_per_language: HashMap::from([(Language::Python, 1)]),
@@ -694,7 +697,7 @@ mod tests {
                                 path: backend_path.join("Cargo.toml"),
                             }],
                             lockfiles: vec![],
-                            buildfiles: vec![],
+                            task_files: vec![],
                             cicd_files: vec![],
                             container_files: vec![],
                             file_per_language: HashMap::from([(Language::Rust, 1)]),
@@ -712,7 +715,7 @@ mod tests {
                                 kind: LockFile::PackageLockJson,
                                 path: frontend_path.join("package-lock.json"),
                             }],
-                            buildfiles: vec![],
+                            task_files: vec![],
                             cicd_files: vec![],
                             container_files: vec![],
                             file_per_language: HashMap::from([(Language::JavaScript, 1)]),
@@ -744,7 +747,7 @@ mod tests {
                 files: DirectoryScan {
                     manifest_files: vec![],
                     lockfiles: vec![],
-                    buildfiles: vec![],
+                    task_files: vec![],
                     cicd_files: vec![],
                     container_files: vec![],
                     file_per_language: HashMap::new(),
@@ -758,7 +761,7 @@ mod tests {
                                 path: project_path.join("go.mod"),
                             }],
                             lockfiles: vec![],
-                            buildfiles: vec![],
+                            task_files: vec![],
                             cicd_files: vec![],
                             container_files: vec![],
                             file_per_language: HashMap::from([(Language::Go, 1)]),
@@ -768,7 +771,7 @@ mod tests {
                             files: DirectoryScan {
                                 manifest_files: vec![],
                                 lockfiles: vec![],
-                                buildfiles: vec![],
+                                task_files: vec![],
                                 cicd_files: vec![],
                                 container_files: vec![],
                                 file_per_language: HashMap::new(),
@@ -781,7 +784,7 @@ mod tests {
                                         path: converter_path.join("package.json"),
                                     }],
                                     lockfiles: vec![],
-                                    buildfiles: vec![],
+                                    task_files: vec![],
                                     cicd_files: vec![],
                                     container_files: vec![],
                                     file_per_language: HashMap::from([(Language::JavaScript, 1)]),
@@ -798,7 +801,7 @@ mod tests {
                                 path: mega_crate_path.join("Cargo.toml"),
                             }],
                             lockfiles: vec![],
-                            buildfiles: vec![],
+                            task_files: vec![],
                             cicd_files: vec![],
                             container_files: vec![],
                             file_per_language: HashMap::new(),
@@ -812,7 +815,7 @@ mod tests {
                                         path: sub_a_path.join("Cargo.toml"),
                                     }],
                                     lockfiles: vec![],
-                                    buildfiles: vec![],
+                                    task_files: vec![],
                                     cicd_files: vec![],
                                     container_files: vec![],
                                     file_per_language: HashMap::from([(Language::Rust, 5)]),
@@ -827,7 +830,7 @@ mod tests {
                                         path: sub_b_path.join("Cargo.toml"),
                                     }],
                                     lockfiles: vec![],
-                                    buildfiles: vec![],
+                                    task_files: vec![],
                                     cicd_files: vec![],
                                     container_files: vec![],
                                     file_per_language: HashMap::from([(Language::Rust, 1)]),
@@ -862,7 +865,7 @@ mod tests {
                         path: path.join("Cargo.toml"),
                     }],
                     lockfiles: vec![],
-                    buildfiles: vec![],
+                    task_files: vec![],
                     cicd_files: vec![],
                     container_files: vec![],
                     file_per_language: HashMap::new(),
@@ -876,7 +879,7 @@ mod tests {
                                 path: crate_a_path.join("Cargo.toml"),
                             }],
                             lockfiles: vec![],
-                            buildfiles: vec![],
+                            task_files: vec![],
                             cicd_files: vec![],
                             container_files: vec![],
                             file_per_language: HashMap::from([(Language::Rust, 1)]),
@@ -891,7 +894,7 @@ mod tests {
                                 path: mega_crate_path.join("Cargo.toml"),
                             }],
                             lockfiles: vec![],
-                            buildfiles: vec![],
+                            task_files: vec![],
                             cicd_files: vec![],
                             container_files: vec![],
                             file_per_language: HashMap::new(),
@@ -905,7 +908,7 @@ mod tests {
                                         path: sub_a_path.join("Cargo.toml"),
                                     }],
                                     lockfiles: vec![],
-                                    buildfiles: vec![],
+                                    task_files: vec![],
                                     cicd_files: vec![],
                                     container_files: vec![],
                                     file_per_language: HashMap::from([(Language::Rust, 5)]),
@@ -920,7 +923,7 @@ mod tests {
                                         path: sub_b_path.join("Cargo.toml"),
                                     }],
                                     lockfiles: vec![],
-                                    buildfiles: vec![],
+                                    task_files: vec![],
                                     cicd_files: vec![],
                                     container_files: vec![],
                                     file_per_language: HashMap::from([(Language::Rust, 1)]),

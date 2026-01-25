@@ -1,5 +1,5 @@
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum Language {
     Rust,
     JavaScript,
@@ -33,7 +33,7 @@ impl Language {
 
 /// Package managers that can be detected from lock files or manifest configuration
 /// Used to determine the correct build and dependency installation commands
-#[derive(Debug, PartialEq, Eq, Hash, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum PackageManager {
     // Rust
     Cargo,

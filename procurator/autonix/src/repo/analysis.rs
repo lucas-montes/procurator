@@ -1,16 +1,21 @@
-use std::{collections::HashMap, path::PathBuf};
-
-use serde::{Deserialize, Serialize};
+use std::{
+    collections::{HashMap, HashSet},
+    ffi::OsStr,
+    path::{Path, PathBuf},
+};
 
 use crate::{
-    mapping::{Language, PackageManager},
+    mapping::{
+        Language, PackageManager, ParsedCiCdFile, ParsedContainerFile, ParsedManifest,
+        ParsedTaskFile, Version,
+    },
     repo::scan::{Repo, ScanIter},
 };
 
 /// Analysis result for the entire repository
 /// Complete configuration for each repo in the repository
 /// This is what we'll use to generate flake.nix
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct Analysis(Vec<RepoAnalysis>);
 
 impl From<ScanIter> for Analysis {
@@ -23,10 +28,10 @@ impl From<ScanIter> for Analysis {
 ///
 /// A repo can contain multiple packages (e.g., Rust workspace, npm workspaces)
 /// This is the key intermediate representation that contains everything needed
-/// to generate Nix expressions and can be compared with previous versions to detect changes
-#[derive(Debug, Serialize, Deserialize)]
+/// to generate Nix expressions
+#[derive(Debug)]
 struct RepoAnalysis {
-    /// Human-readable repo name (from manifest)
+    /// Human-readable repo name
     name: String,
 
     /// Path from repository root to this repo
@@ -36,111 +41,70 @@ struct RepoAnalysis {
     /// One repo can have multiple packages (workspace members, monorepo apps)
     packages: Packages,
 
-    /// Dependencies needed for the repo to build and run
-    dependencies: Dependencies,
-
     /// Development environment configuration
     dev_tools: DevTools,
 
     /// Check operations (tests, lints, formatting, etc.)
     checks: Checks,
-
-    /// Runtime configuration (how to run the built app)
-    /// None for libraries that don't produce runnable artifacts
-    runtime: Option<Runtime>,
-
-    /// Additional metadata from the manifest
-    metadata: Metadata,
 }
 
 impl From<Repo> for RepoAnalysis {
     fn from(repo: Repo) -> Self {
-        // Parse all manifest files
-        let parsed_manifests: Vec<_> = repo
-            .manifest_files()
-            .iter()
-            .filter_map(|manifest_file| manifest_file.parse().ok())
-            .collect();
+        let path = repo.path().to_path_buf();
+        //NOTE: not nice, we possibly can avoid to many copy
+        let name = path
+            .file_name()
+            .expect("the dir should have a name")
+            .to_str()
+            .expect("we should have hte str our the name")
+            .to_owned();
 
-        // Get primary manifest or use defaults
-        let primary_manifest = parsed_manifests.first();
+        let ctx = ExtractionContext::from(&repo);
 
-        // Extract name from primary manifest or directory
-        let name = primary_manifest
-            .and_then(|m| m.names.first())
-            .cloned()
-            .unwrap_or_else(|| {
-                repo.path()
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("unknown")
-                    .to_string()
-            });
-
-        // Extract metadata from primary manifest
-        let metadata = if let Some(manifest) = primary_manifest {
-            Metadata {
-                version: Version(manifest.version.clone()),
-                description: manifest.metadata.description.clone(),
-                authors: manifest.metadata.authors.clone(),
-                license: manifest.metadata.license.clone(),
-            }
-        } else {
-            Metadata {
-                version: Version(None),
-                description: None,
-                authors: Vec::new(),
-                license: None,
-            }
-        };
-
-        // TODO: Implement full parsing logic
-        // - Extract packages from workspace members
-        // - Infer toolchain from manifests
-        // - Discover checks from CI/CD files
-        // - Detect runtime configuration
+        let packages = Packages::from(&ctx);
+        let dev_tools = DevTools::from(&ctx);
+        let checks = Checks::from(&ctx);
 
         RepoAnalysis {
             name,
-            path: repo.path().to_path_buf(),
-            packages: Packages(Vec::new()),
-            dependencies: Dependencies {
-                nix_packages: Vec::new(),
-                language_deps: HashMap::new(),
-            },
-            dev_tools: DevTools {
-                tools: Vec::new(),
-                env: HashMap::new(),
-                shell_hook: None,
-            },
-            checks: Checks(Vec::new()),
-            runtime: None,
-            metadata,
+            path,
+            packages,
+            dev_tools,
+            checks,
         }
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 struct Packages(Vec<Package>);
+
+impl From<&ExtractionContext<'_>> for Packages {
+    fn from(ctx: &ExtractionContext<'_>) -> Self {
+        todo!()
+    }
+}
 
 /// A package that can be built from this repo
 /// Examples: a binary crate in Cargo workspace, an app in npm workspace
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 struct Package {
     /// Package name
     name: String,
 
     /// Path relative to repo root
     path: PathBuf,
+
     toolchain: Toolchain,
-    /// Custom build command if needed
-    /// Example: "cargo build -p api", "npm run build --workspace apps/web"
-    /// None means use default build for the package manager
-    build_command: Option<String>,
+
+    /// Dependencies specific to this package
+    dependencies: Dependencies,
+
+    /// Package metadata (version, description, license, etc.)
+    metadata: Metadata,
 }
 
 /// Toolchain configuration for the repo
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 struct Toolchain {
     /// The main language (Rust, Python, TypeScript, etc.)
     language: Language,
@@ -152,41 +116,61 @@ struct Toolchain {
     version: Version,
 }
 
-/// Dependencies needed for the repo
-#[derive(Debug, Serialize, Deserialize)]
-struct Dependencies {
-    /// System packages from nixpkgs
-    /// Examples: pkgs.openssl, pkgs.postgresql, pkgs.pkg-config
-    /// Maps to buildInputs/nativeBuildInputs in Nix
-    nix_packages: Vec<String>,
+/// System packages from nixpkgs
+/// Examples: pkgs.openssl, pkgs.postgresql, pkgs.pkg-config
+/// Maps to buildInputs/nativeBuildInputs in Nix
+#[derive(Debug)]
+struct Dependencies(Vec<Dependency>);
 
-    /// Language-level dependencies from lockfiles
-    /// Used for change detection and caching
-    /// Key: package name, Value: version
-    language_deps: HashMap<String, String>,
+/// A dependency can be either a running service or a build-time package
+#[derive(Debug)]
+struct Dependency {
+    name: String,
+    version: Version,
+}
+
+#[derive(Debug)]
+struct Tool {
+    name: String,
+    version: Version,
 }
 
 /// Development tools configuration
 /// Maps to devShells.<system>.default in flake.nix
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 struct DevTools {
     /// Development tools (rust-analyzer, prettier, eslint, etc.)
     /// These are in addition to the base toolchain
-    tools: Vec<String>,
+    tools: Vec<Tool>,
 
     /// Environment variables for development
     env: HashMap<String, String>,
 
     /// Shell hook - runs when entering `nix develop`
     shell_hook: Option<String>,
+
+    dependencies: Dependencies,
+    services: Services,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+impl From<&ExtractionContext<'_>> for DevTools {
+    fn from(ctx: &ExtractionContext<'_>) -> Self {
+        todo!()
+    }
+}
+
+#[derive(Debug)]
 struct Checks(Vec<Check>);
+
+impl From<&ExtractionContext<'_>> for Checks {
+    fn from(ctx: &ExtractionContext<'_>) -> Self {
+        todo!()
+    }
+}
 
 /// A check operation (test, lint, format check, etc.)
 /// Maps to checks.<system>.<name> in flake.nix
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 struct Check {
     /// Check name (e.g., "test", "lint", "format")
     name: String,
@@ -197,42 +181,15 @@ struct Check {
     /// toolchain for this specific check
     toolchain: Toolchain,
 
-    /// Services needed for this check (e.g., postgresql for integration tests)
-    services: Vec<Service>,
+    dependencies: Dependencies,
+    services: Services,
 }
 
-/// Runtime configuration for running the built application
-/// Maps to apps.<system>.* in flake.nix
-#[derive(Debug, Serialize, Deserialize)]
-struct Runtime {
-    /// How to run the application (binaries, scripts, servers)
-    entry_points: Vec<EntryPoint>,
-
-    /// Environment variables needed at runtime
-    env: HashMap<String, String>,
-
-    /// Services that must be running (databases, caches, etc.)
-    services: Vec<Service>,
-
-    /// Ports this service exposes
-    ports: Vec<u16>,
-}
-
-/// An entry point for running the application
-#[derive(Debug, Serialize, Deserialize)]
-struct EntryPoint {
-    /// Entry point name
-    name: String,
-
-    /// Path to executable/script relative to package root
-    path: PathBuf,
-
-    /// Default arguments to pass
-    default_args: Vec<String>,
-}
+#[derive(Debug)]
+struct Services(Vec<Service>);
 
 /// A service dependency (database, cache, message queue, etc.)
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 struct Service {
     /// Service name (postgresql, redis, mongodb, etc.)
     name: String,
@@ -245,12 +202,9 @@ struct Service {
     config: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct Version(Option<String>);
-
 /// Metadata from manifest files
 /// Maps to meta.* in Nix derivation
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 struct Metadata {
     /// Package version
     version: Version,
@@ -263,4 +217,52 @@ struct Metadata {
 
     /// License
     license: Option<String>,
+}
+
+/// Context for extraction containing all parsed files
+struct ExtractionContext<'a> {
+    repo: &'a Repo,
+    manifests: Vec<ParsedManifest>,
+    task_files: Vec<ParsedTaskFile>,
+    cicd: Vec<ParsedCiCdFile>,
+    containers: Vec<ParsedContainerFile>,
+}
+
+// 'ec for extraction context lifetime
+impl<'ec: 'a, 'a> From<&'ec Repo> for ExtractionContext<'a> {
+    fn from(repo: &'ec Repo) -> Self {
+        // Parse all file types
+        let parsed_manifests = repo
+            .manifest_files()
+            .iter()
+            .filter_map(|f| f.parse().ok())
+            .collect();
+
+        let parsed_task_files = repo
+            .task_files()
+            .iter()
+            .filter_map(|f| f.parse().ok())
+            .collect();
+
+        let parsed_cicd = repo
+            .cicd_files()
+            .iter()
+            .filter_map(|f| f.parse().ok())
+            .collect();
+
+        let parsed_containers = repo
+            .container_files()
+            .iter()
+            .filter_map(|f| f.parse().ok())
+            .collect();
+
+        // Build extraction context
+        Self {
+            repo: &repo,
+            manifests: parsed_manifests,
+            task_files: parsed_task_files,
+            cicd: parsed_cicd,
+            containers: parsed_containers,
+        }
+    }
 }
