@@ -2,11 +2,11 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::mapping::{ParseError, Parseable};
+use crate::mapping::{Language, PackageManager, ParseError, Parseable};
 
 /// Manifest files declare dependencies and project metadata
 /// These are the primary files that tell us what a project needs
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum ManifestFile {
     // Rust
     CargoToml,
@@ -108,6 +108,7 @@ impl TryFrom<&str> for ManifestFile {
 /// Common parsed manifest result
 #[derive(Debug)]
 pub struct ParsedManifest {
+    pub manifest_type: ManifestFile,
     pub names: Vec<String>,
     pub version: Option<String>,
     pub workspace_members: Vec<String>,
@@ -233,13 +234,14 @@ impl Parseable for ManifestFile {
         let content = std::fs::read_to_string(path)?;
 
         match self {
-            Self::CargoToml => parse_cargo_toml(&content),
-            Self::PackageJson => parse_package_json(&content),
-            Self::PyprojectToml => parse_pyproject_toml(&content),
-            Self::GoMod => parse_go_mod(&content),
+            Self::CargoToml => parse_cargo_toml(&content, self.clone()),
+            Self::PackageJson => parse_package_json(&content, self.clone()),
+            Self::PyprojectToml => parse_pyproject_toml(&content, self.clone()),
+            Self::GoMod => parse_go_mod(&content, self.clone()),
 
             // Version files (simple single-line reads)
             Self::PythonVersion | Self::RuntimeTxt => Ok(ParsedManifest {
+                manifest_type: self.clone(),
                 names: vec![],
                 version: None,
                 workspace_members: vec![],
@@ -264,7 +266,11 @@ impl Parseable for ManifestFile {
             | Self::Csproj
             | Self::Fsproj
             | Self::Sln
-            | Self::BuildSbt => Ok(ParsedManifest::default()),
+            | Self::BuildSbt => {
+                let mut result = ParsedManifest::default();
+                result.manifest_type = self.clone();
+                Ok(result)
+            }
         }
     }
 }
@@ -272,6 +278,7 @@ impl Parseable for ManifestFile {
 impl Default for ParsedManifest {
     fn default() -> Self {
         Self {
+            manifest_type: ManifestFile::CargoToml, // Default fallback
             names: Vec::new(),
             version: None,
             workspace_members: Vec::new(),
@@ -283,9 +290,11 @@ impl Default for ParsedManifest {
     }
 }
 
-fn parse_cargo_toml(content: &str) -> Result<ParsedManifest, ParseError> {
+fn parse_cargo_toml(content: &str, manifest_type: ManifestFile) -> Result<ParsedManifest, ParseError> {
     let cargo: CargoToml = toml::from_str(content)?;
-    Ok(cargo.into())
+    let mut result = ParsedManifest::from(cargo);
+    result.manifest_type = manifest_type;
+    Ok(result)
 }
 
 impl From<CargoToml> for ParsedManifest {
@@ -314,14 +323,17 @@ impl From<CargoToml> for ParsedManifest {
     }
 }
 
-fn parse_package_json(content: &str) -> Result<ParsedManifest, ParseError> {
+fn parse_package_json(content: &str, manifest_type: ManifestFile) -> Result<ParsedManifest, ParseError> {
     let pkg: PackageJson = serde_json::from_str(content)?;
-    Ok(pkg.into())
+    let mut result = ParsedManifest::from(pkg);
+    result.manifest_type = manifest_type;
+    Ok(result)
 }
 
 impl From<PackageJson> for ParsedManifest {
     fn from(pkg: PackageJson) -> Self {
         let mut result = ParsedManifest {
+            manifest_type: ManifestFile::PackageJson,
             names: vec![pkg.name],
             version: pkg.version,
             workspace_members: Vec::new(),
@@ -353,13 +365,17 @@ impl From<PackageJson> for ParsedManifest {
     }
 }
 
-fn parse_pyproject_toml(content: &str) -> Result<ParsedManifest, ParseError> {
+fn parse_pyproject_toml(content: &str, manifest_type: ManifestFile) -> Result<ParsedManifest, ParseError> {
     let pyproject: PyprojectToml = toml::from_str(content)?;
 
     if let Some(project) = pyproject.project {
-        Ok(project.into())
+        let mut result = ParsedManifest::from(project);
+        result.manifest_type = manifest_type;
+        Ok(result)
     } else {
-        Ok(ParsedManifest::default())
+        let mut result = ParsedManifest::default();
+        result.manifest_type = manifest_type;
+        Ok(result)
     }
 }
 
@@ -387,6 +403,7 @@ impl From<PythonProject> for ParsedManifest {
             .unwrap_or_default();
 
         ParsedManifest {
+            manifest_type: ManifestFile::PyprojectToml,
             names: vec![project.name],
             version: project.version,
             workspace_members: Vec::new(),
@@ -402,7 +419,7 @@ impl From<PythonProject> for ParsedManifest {
     }
 }
 
-fn parse_go_mod(content: &str) -> Result<ParsedManifest, ParseError> {
+fn parse_go_mod(content: &str, manifest_type: ManifestFile) -> Result<ParsedManifest, ParseError> {
     let mut names = Vec::new();
     let mut toolchain_version = None;
 
@@ -417,6 +434,7 @@ fn parse_go_mod(content: &str) -> Result<ParsedManifest, ParseError> {
     }
 
     Ok(ParsedManifest {
+        manifest_type,
         names,
         version: None,
         workspace_members: Vec::new(),
@@ -648,4 +666,51 @@ mod tests {
         assert!(result.entry_points.is_empty());
     }
 
+}
+
+/// Convert ManifestFile to Language
+impl From<&ManifestFile> for Language {
+    fn from(manifest: &ManifestFile) -> Self {
+        match manifest {
+            ManifestFile::CargoToml => Language::Rust,
+            ManifestFile::PackageJson => Language::JavaScript,
+            ManifestFile::PyprojectToml
+            | ManifestFile::SetupPy
+            | ManifestFile::SetupCfg
+            | ManifestFile::RequirementsTxt
+            | ManifestFile::Pipfile
+            | ManifestFile::PythonVersion
+            | ManifestFile::RuntimeTxt
+            | ManifestFile::CondaYaml
+            | ManifestFile::EnvironmentYml => Language::Python,
+            ManifestFile::GoMod => Language::Go,
+            ManifestFile::PomXml | ManifestFile::BuildGradle | ManifestFile::BuildGradleKts | ManifestFile::BuildSbt => Language::Java,
+            ManifestFile::Csproj | ManifestFile::Fsproj | ManifestFile::Sln => Language::CSharp,
+            ManifestFile::Gemfile => Language::Ruby,
+            ManifestFile::ComposerJson => Language::PHP,
+        }
+    }
+}
+
+/// Convert ManifestFile to PackageManager
+impl From<&ManifestFile> for PackageManager {
+    fn from(manifest: &ManifestFile) -> Self {
+        match manifest {
+            ManifestFile::CargoToml => PackageManager::Cargo,
+            ManifestFile::PackageJson => PackageManager::Npm, // Default, can be overridden by lockfile detection
+            ManifestFile::PyprojectToml => PackageManager::Poetry, // Modern Python, likely Poetry or similar
+            ManifestFile::SetupPy | ManifestFile::SetupCfg => PackageManager::Pip,
+            ManifestFile::RequirementsTxt => PackageManager::Pip,
+            ManifestFile::Pipfile => PackageManager::Pipenv,
+            ManifestFile::PythonVersion | ManifestFile::RuntimeTxt => PackageManager::Pip, // Version files, default to pip
+            ManifestFile::CondaYaml | ManifestFile::EnvironmentYml => PackageManager::Conda,
+            ManifestFile::GoMod => PackageManager::GoModules,
+            ManifestFile::PomXml => PackageManager::Maven,
+            ManifestFile::BuildGradle | ManifestFile::BuildGradleKts => PackageManager::Gradle,
+            ManifestFile::BuildSbt => PackageManager::Sbt,
+            ManifestFile::Csproj | ManifestFile::Fsproj | ManifestFile::Sln => PackageManager::Nuget,
+            ManifestFile::Gemfile => PackageManager::Bundler,
+            ManifestFile::ComposerJson => PackageManager::Composer,
+        }
+    }
 }

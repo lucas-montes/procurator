@@ -1,0 +1,97 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NODE_ENV: production
+        API_VERSION: v2
+      target: production
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    environment:
+      DATABASE_URL: postgresql://postgres:password@db:5432/myapp
+      REDIS_URL: redis://cache:6379
+      LOG_LEVEL: info
+    depends_on:
+      - db
+      - cache
+    volumes:
+      - ./logs:/app/logs
+      - app-data:/app/data
+    command: ["./myapp", "serve"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  worker:
+    image: myapp:latest
+    environment:
+      DATABASE_URL: postgresql://postgres:password@db:5432/myapp
+      REDIS_URL: redis://cache:6379
+      WORKER_THREADS: "4"
+    depends_on:
+      - db
+      - cache
+    command: ["./myapp", "worker"]
+    restart: always
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_PASSWORD: password
+      POSTGRES_USER: postgres
+      POSTGRES_DB: myapp
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  cache:
+    image: redis:7-alpine
+    ports:
+      - target: 6379
+        published: 6379
+        protocol: tcp
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - type: bind
+        source: ./nginx.conf
+        target: /etc/nginx/nginx.conf
+        read_only: true
+    depends_on:
+      - api
+
+volumes:
+  postgres-data:
+  redis-data:
+  app-data:
+
+networks:
+  default:
+    driver: bridge

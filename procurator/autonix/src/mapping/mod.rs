@@ -9,7 +9,7 @@ mod containers;
 mod cicdfiles;
 
 pub use cicdfiles::{CiCdFile, CiJob, CiService, CiStep, ParsedCiCdFile};
-pub use containers::{ContainerFile, ParsedContainerFile};
+pub use containers::{ContainerFile, ContainerService, ParsedContainerFile};
 pub use languages::{Language, PackageManager};
 pub use tasks::{TaskFile, BuildSystem, ParsedTaskFile};
 pub use lockfiles::LockFile;

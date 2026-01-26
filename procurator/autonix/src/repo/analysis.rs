@@ -1,7 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    ffi::OsStr,
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
 use crate::{
@@ -80,7 +79,39 @@ struct Packages(Vec<Package>);
 
 impl From<&ExtractionContext<'_>> for Packages {
     fn from(ctx: &ExtractionContext<'_>) -> Self {
-        todo!()
+        let mut packages = Vec::new();
+        let dependencies = extract_dependencies(ctx);
+
+        // Create one package per manifest
+        for manifest in &ctx.manifests {
+            let language = Language::from(&manifest.manifest_type);
+            let package_manager = PackageManager::from(&manifest.manifest_type);
+
+            // Each name in the manifest becomes a package
+            // (for workspaces with members, we skip them per requirement)
+            for name in &manifest.names {
+                let package = Package {
+                    name: name.clone(),
+                    path: ctx.repo.path().to_path_buf(), // Relative path from repo root
+                    toolchain: Toolchain {
+                        language,
+                        package_manager,
+                        version: manifest.toolchain_version.as_deref().into(),
+                    },
+                    dependencies: dependencies.clone(),
+                    metadata: Metadata {
+                        version: manifest.version.as_deref().into(),
+                        description: manifest.metadata.description.clone(),
+                        authors: manifest.metadata.authors.clone(),
+                        license: manifest.metadata.license.clone(),
+                    },
+                };
+
+                packages.push(package);
+            }
+        }
+
+        Self(packages)
     }
 }
 
@@ -119,11 +150,11 @@ struct Toolchain {
 /// System packages from nixpkgs
 /// Examples: pkgs.openssl, pkgs.postgresql, pkgs.pkg-config
 /// Maps to buildInputs/nativeBuildInputs in Nix
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Dependencies(Vec<Dependency>);
 
 /// A dependency can be either a running service or a build-time package
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Dependency {
     name: String,
     version: Version,
@@ -155,7 +186,27 @@ struct DevTools {
 
 impl From<&ExtractionContext<'_>> for DevTools {
     fn from(ctx: &ExtractionContext<'_>) -> Self {
-        todo!()
+        let dependencies = extract_dependencies(ctx);
+        let services = extract_services(ctx);
+        let env = extract_environment(ctx);
+
+        // Extract tools from manifest scripts
+        let mut all_scripts = HashMap::new();
+        for manifest in &ctx.manifests {
+            all_scripts.extend(manifest.scripts.clone());
+        }
+        let tools = infer_tools_from_scripts(&all_scripts);
+
+        // Shell hook could be extracted from container entrypoint if needed
+        let shell_hook = None;
+
+        Self {
+            tools,
+            env,
+            shell_hook,
+            dependencies,
+            services,
+        }
     }
 }
 
@@ -164,7 +215,150 @@ struct Checks(Vec<Check>);
 
 impl From<&ExtractionContext<'_>> for Checks {
     fn from(ctx: &ExtractionContext<'_>) -> Self {
-        todo!()
+        let mut checks = Vec::new();
+        let dependencies = extract_dependencies(ctx);
+        let services = extract_services(ctx);
+
+        // From CI/CD jobs - each job with steps becomes a check
+        for cicd_file in &ctx.cicd {
+            for job in &cicd_file.jobs {
+                // If job has multiple unrelated steps, create separate checks
+                // For now, combine steps with the same context (test, lint, build, etc.)
+                let job_name = &job.name;
+
+                // Group steps by inferred check type
+                let mut test_commands = Vec::new();
+                let mut lint_commands = Vec::new();
+                let mut build_commands = Vec::new();
+                let mut other_commands = Vec::new();
+
+                for step in &job.steps {
+                    if let Some(run_cmd) = &step.run {
+                        let lower = run_cmd.to_lowercase();
+                        if lower.contains("test") || lower.contains("jest") || lower.contains("pytest") {
+                            test_commands.push(run_cmd.clone());
+                        } else if lower.contains("lint") || lower.contains("eslint") || lower.contains("clippy") {
+                            lint_commands.push(run_cmd.clone());
+                        } else if lower.contains("build") || lower.contains("compile") {
+                            build_commands.push(run_cmd.clone());
+                        } else {
+                            other_commands.push(run_cmd.clone());
+                        }
+                    }
+                }
+
+                // Create checks for each category
+                if !test_commands.is_empty() {
+                    checks.push(create_check(
+                        format!("{}-test", job_name),
+                        test_commands.join(" && "),
+                        ctx,
+                        &dependencies,
+                        &services,
+                    ));
+                }
+                if !lint_commands.is_empty() {
+                    checks.push(create_check(
+                        format!("{}-lint", job_name),
+                        lint_commands.join(" && "),
+                        ctx,
+                        &dependencies,
+                        &services,
+                    ));
+                }
+                if !build_commands.is_empty() {
+                    checks.push(create_check(
+                        format!("{}-build", job_name),
+                        build_commands.join(" && "),
+                        ctx,
+                        &dependencies,
+                        &services,
+                    ));
+                }
+                if !other_commands.is_empty() {
+                    checks.push(create_check(
+                        job_name.clone(),
+                        other_commands.join(" && "),
+                        ctx,
+                        &dependencies,
+                        &services,
+                    ));
+                }
+            }
+        }
+
+        // From task file targets (Makefile, etc.)
+        for task_file in &ctx.task_files {
+            for target in &task_file.targets {
+                // Common check targets
+                if matches!(
+                    target.as_str(),
+                    "test" | "check" | "lint" | "format" | "fmt"
+                ) {
+                    checks.push(create_check(
+                        target.clone(),
+                        format!("make {}", target),
+                        ctx,
+                        &dependencies,
+                        &services,
+                    ));
+                }
+            }
+        }
+
+        // From manifest scripts
+        for manifest in &ctx.manifests {
+            for (script_name, script_cmd) in &manifest.scripts {
+                // Common check script names
+                if matches!(
+                    script_name.as_str(),
+                    "test" | "lint" | "format" | "check" | "typecheck"
+                ) {
+                    checks.push(create_check(
+                        script_name.clone(),
+                        script_cmd.clone(),
+                        ctx,
+                        &dependencies,
+                        &services,
+                    ));
+                }
+            }
+        }
+
+        Self(checks)
+    }
+}
+
+/// Helper to create a Check with inferred toolchain
+fn create_check(
+    name: String,
+    command: String,
+    ctx: &ExtractionContext<'_>,
+    dependencies: &Dependencies,
+    services: &Services,
+) -> Check {
+    // Infer toolchain from the first manifest (primary language)
+    let toolchain = if let Some(manifest) = ctx.manifests.first() {
+        Toolchain {
+            language: Language::from(&manifest.manifest_type),
+            package_manager: PackageManager::from(&manifest.manifest_type),
+            version: manifest.toolchain_version.as_deref().into(),
+        }
+    } else {
+        // Default toolchain
+        Toolchain {
+            language: Language::Bash,
+            package_manager: PackageManager::Pip, // Doesn't matter for Bash
+            version: Version::default(),
+        }
+    };
+
+    Check {
+        name,
+        command,
+        toolchain,
+        dependencies: dependencies.clone(),
+        services: services.clone(),
     }
 }
 
@@ -185,11 +379,11 @@ struct Check {
     services: Services,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Services(Vec<Service>);
 
 /// A service dependency (database, cache, message queue, etc.)
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Service {
     /// Service name (postgresql, redis, mongodb, etc.)
     name: String,
@@ -235,7 +429,7 @@ impl<'ec: 'a, 'a> From<&'ec Repo> for ExtractionContext<'a> {
         let parsed_manifests = repo
             .manifest_files()
             .iter()
-            .filter_map(|f| f.parse().ok())
+            .filter_map(|file_path| file_path.parse().ok())
             .collect();
 
         let parsed_task_files = repo
@@ -265,4 +459,143 @@ impl<'ec: 'a, 'a> From<&'ec Repo> for ExtractionContext<'a> {
             containers: parsed_containers,
         }
     }
+}
+
+/// Helper functions for extraction
+
+/// Extract all system dependencies from context (deduplicated)
+fn extract_dependencies(ctx: &ExtractionContext<'_>) -> Dependencies {
+    let mut deps = HashSet::new();
+
+    // From task files (Makefile, CMake, etc.)
+    for task_file in &ctx.task_files {
+        for dep in &task_file.system_deps {
+            deps.insert(dep.clone());
+        }
+    }
+
+    // From container files (Dockerfile RUN commands, docker-compose)
+    for container in &ctx.containers {
+        for pkg in &container.system_packages {
+            deps.insert(pkg.clone());
+        }
+    }
+
+    Dependencies(
+        deps.into_iter()
+            .map(|name| Dependency {
+                name,
+                version: Version::default(),
+            })
+            .collect(),
+    )
+}
+
+/// Extract all services from context (deduplicated)
+fn extract_services(ctx: &ExtractionContext<'_>) -> Services {
+    let mut services_map: HashMap<String, Service> = HashMap::new();
+
+    // From CI/CD service definitions
+    for cicd_file in &ctx.cicd {
+        for job in &cicd_file.jobs {
+            for ci_service in &job.services {
+                let (name, version) = parse_image_tag(&ci_service.image);
+                services_map.entry(name.clone()).or_insert(Service {
+                    name,
+                    version,
+                    config: None,
+                });
+            }
+        }
+    }
+
+    // From container service definitions (docker-compose)
+    for container in &ctx.containers {
+        for container_service in &container.services {
+            if let Some(image) = &container_service.image {
+                let (name, version) = parse_image_tag(image);
+                services_map.entry(name.clone()).or_insert(Service {
+                    name,
+                    version,
+                    config: None,
+                });
+            }
+        }
+    }
+
+    Services(services_map.into_values().collect())
+}
+
+/// Parse Docker image tag into service name and version
+/// Example: "postgres:15" -> ("postgresql", Version("15"))
+/// Example: "redis:7-alpine" -> ("redis", Version("7"))
+fn parse_image_tag(image: &str) -> (String, Version) {
+    let parts: Vec<&str> = image.split(':').collect();
+    let name = parts[0].to_string();
+    let version = if parts.len() > 1 {
+        // Extract numeric version, ignore suffixes like "-alpine"
+        let version_str = parts[1].split('-').next().unwrap_or(parts[1]);
+        Version(Some(version_str.to_string()))
+    } else {
+        Version::default()
+    };
+
+    (name, version)
+}
+
+/// Extract environment variables from context
+fn extract_environment(ctx: &ExtractionContext<'_>) -> HashMap<String, String> {
+    let mut env = HashMap::new();
+
+    // From CI/CD global environment
+    for cicd_file in &ctx.cicd {
+        env.extend(cicd_file.env.clone());
+    }
+
+    // From container environment
+    for container in &ctx.containers {
+        env.extend(container.environment.clone());
+    }
+
+    env
+}
+
+/// Infer tools from script commands
+/// Example: "eslint ." -> Tool { name: "eslint", version: None }
+fn infer_tools_from_scripts(scripts: &HashMap<String, String>) -> Vec<Tool> {
+    let tool_keywords = [
+        "eslint",
+        "prettier",
+        "rust-analyzer",
+        "clippy",
+        "rustfmt",
+        "black",
+        "pylint",
+        "mypy",
+        "pytest",
+        "jest",
+        "vitest",
+        "cargo",
+        "npm",
+        "pnpm",
+        "yarn",
+    ];
+
+    let mut tools = HashSet::new();
+
+    for command in scripts.values() {
+        for keyword in &tool_keywords {
+            if command.contains(keyword) {
+                tools.insert(keyword.to_string());
+            }
+        }
+    }
+
+    tools
+        .into_iter()
+        .map(|name| Tool {
+            name,
+            version: Version::default(),
+        })
+        .collect()
 }

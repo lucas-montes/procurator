@@ -263,3 +263,138 @@ impl TryFrom<&str> for CiCdFile {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn fixtures_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("cicd")
+    }
+
+    #[test]
+    fn test_cicd_file_try_from() {
+        // GitHub Actions
+        assert_eq!(
+            CiCdFile::try_from(".github/workflows/ci.yml"),
+            Ok(CiCdFile::GitHubActions)
+        );
+        assert_eq!(
+            CiCdFile::try_from(".github/workflows/test.yaml"),
+            Ok(CiCdFile::GitHubActions)
+        );
+
+        // GitLab CI
+        assert_eq!(
+            CiCdFile::try_from(".gitlab-ci.yml"),
+            Ok(CiCdFile::GitLabCI)
+        );
+        assert_eq!(
+            CiCdFile::try_from("path/to/.gitlab-ci.yaml"),
+            Ok(CiCdFile::GitLabCI)
+        );
+
+        // CircleCI
+        assert_eq!(
+            CiCdFile::try_from(".circleci/config.yml"),
+            Ok(CiCdFile::CircleCI)
+        );
+
+        // Jenkins
+        assert_eq!(
+            CiCdFile::try_from("Jenkinsfile"),
+            Ok(CiCdFile::Jenkinsfile)
+        );
+        assert_eq!(
+            CiCdFile::try_from("path/to/Jenkinsfile"),
+            Ok(CiCdFile::Jenkinsfile)
+        );
+
+        // Travis CI
+        assert_eq!(
+            CiCdFile::try_from(".travis.yml"),
+            Ok(CiCdFile::TravisCI)
+        );
+
+        // Unknown file
+        assert!(CiCdFile::try_from("random.txt").is_err());
+    }
+
+    #[test]
+    fn test_parse_github_actions() {
+        let path = fixtures_path().join("github-workflow.yml");
+        let cicd_file = CiCdFile::GitHubActions;
+        let result = cicd_file.parse(&path).expect("Failed to parse GitHub Actions workflow");
+
+        // Check global environment variables
+        assert_eq!(result.env.len(), 2);
+        assert_eq!(result.env.get("RUST_VERSION"), Some(&"1.75.0".to_string()));
+        assert_eq!(result.env.get("NODE_VERSION"), Some(&"20.x".to_string()));
+
+        // Check jobs
+        assert_eq!(result.jobs.len(), 3);
+
+        // Check test job
+        let test_job = result.jobs.iter().find(|j| j.name == "Run Tests").expect("Test job not found");
+        assert_eq!(test_job.name, "Run Tests");
+
+        // Check test job services
+        assert_eq!(test_job.services.len(), 2);
+
+        let postgres = test_job.services.iter().find(|s| s.name == "postgres").expect("Postgres service not found");
+        assert_eq!(postgres.image, "postgres:15");
+        assert_eq!(postgres.env.get("POSTGRES_PASSWORD"), Some(&"postgres".to_string()));
+        assert_eq!(postgres.env.get("POSTGRES_DB"), Some(&"test_db".to_string()));
+
+        let redis = test_job.services.iter().find(|s| s.name == "redis").expect("Redis service not found");
+        assert_eq!(redis.image, "redis:7-alpine");
+
+        // Check test job environment
+        assert_eq!(test_job.env.get("DATABASE_URL"), Some(&"postgresql://postgres:postgres@localhost:5432/test_db".to_string()));
+        assert_eq!(test_job.env.get("REDIS_URL"), Some(&"redis://localhost:6379".to_string()));
+
+        // Check test job steps
+        assert!(test_job.steps.len() >= 2);
+        let test_steps: Vec<_> = test_job.steps.iter()
+            .filter_map(|s| s.run.as_ref())
+            .collect();
+        assert!(test_steps.iter().any(|s| s.contains("cargo test")));
+
+        // Check lint job
+        let lint_job = result.jobs.iter().find(|j| j.name == "Lint and Format").expect("Lint job not found");
+        assert_eq!(lint_job.services.len(), 0);
+        let lint_steps: Vec<_> = lint_job.steps.iter()
+            .filter_map(|s| s.run.as_ref())
+            .collect();
+        assert!(lint_steps.iter().any(|s| s.contains("clippy")));
+        assert!(lint_steps.iter().any(|s| s.contains("fmt")));
+
+        // Check build job
+        let build_job = result.jobs.iter().find(|j| j.name == "Build Release").expect("Build job not found");
+        let build_steps: Vec<_> = build_job.steps.iter()
+            .filter_map(|s| s.run.as_ref())
+            .collect();
+        assert!(build_steps.iter().any(|s| s.contains("cargo build --release")));
+    }
+
+    #[test]
+    fn test_extract_env_map() {
+        let mut yaml_map = HashMap::new();
+        yaml_map.insert("STRING_VAR".to_string(), serde_yaml_ng::Value::String("value".to_string()));
+        yaml_map.insert("NUMBER_VAR".to_string(), serde_yaml_ng::Value::Number(42.into()));
+        yaml_map.insert("BOOL_VAR".to_string(), serde_yaml_ng::Value::Bool(true));
+        yaml_map.insert("NULL_VAR".to_string(), serde_yaml_ng::Value::Null);
+
+        let result = extract_env_map(&yaml_map);
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.get("STRING_VAR"), Some(&"value".to_string()));
+        assert_eq!(result.get("NUMBER_VAR"), Some(&"42".to_string()));
+        assert_eq!(result.get("BOOL_VAR"), Some(&"true".to_string()));
+        assert!(!result.contains_key("NULL_VAR"));
+    }
+}
