@@ -1,0 +1,29 @@
+[package]
+name = "myapp-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "REST API server for myapp"
+keywords = ["api", "web", "rest", "http"]
+
+[dependencies]
+myapp-core = { path = "../myapp-core" }
+tokio.workspace = true
+axum.workspace = true
+sqlx.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+config.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[[bin]]
+name = "myapp-api"
+path = "src/main.rs"

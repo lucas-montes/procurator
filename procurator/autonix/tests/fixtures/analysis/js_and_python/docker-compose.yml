@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NODE_ENV: production
+    ports:
+      - "8000:8000"
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://user:pass@db:5432/mydb
+      REDIS_URL: redis://cache:6379/0
+      NODE_ENV: production
+      PYTHON_ENV: production
+    depends_on:
+      - db
+      - cache
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: mydb
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  cache:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    ports:
+      - target: 6379
+        published: 6379
+        protocol: tcp
+
+  worker:
+    image: fullstack-monorepo:latest
+    command: python -m ml_service.worker
+    environment:
+      DATABASE_URL: postgresql://user:pass@db:5432/mydb
+      REDIS_URL: redis://cache:6379/0
+    depends_on:
+      - db
+      - cache
+    restart: always
+
+volumes:
+  postgres-data:
+  redis-data:

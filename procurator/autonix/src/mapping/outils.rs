@@ -41,7 +41,7 @@ impl From<serde_yaml_ng::Error> for ParseError {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Version(pub Option<String>);
 
 

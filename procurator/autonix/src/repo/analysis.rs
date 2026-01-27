@@ -14,7 +14,7 @@ use crate::{
 /// Analysis result for the entire repository
 /// Complete configuration for each repo in the repository
 /// This is what we'll use to generate flake.nix
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Analysis(Vec<RepoAnalysis>);
 
 impl From<ScanIter> for Analysis {
@@ -28,8 +28,8 @@ impl From<ScanIter> for Analysis {
 /// A repo can contain multiple packages (e.g., Rust workspace, npm workspaces)
 /// This is the key intermediate representation that contains everything needed
 /// to generate Nix expressions
-#[derive(Debug)]
-struct RepoAnalysis {
+#[derive(Debug, PartialEq)]
+pub struct RepoAnalysis {
     /// Human-readable repo name
     name: String,
 
@@ -74,8 +74,8 @@ impl From<Repo> for RepoAnalysis {
     }
 }
 
-#[derive(Debug)]
-struct Packages(Vec<Package>);
+#[derive(Debug, PartialEq)]
+pub struct Packages(Vec<Package>);
 
 impl From<&ExtractionContext<'_>> for Packages {
     fn from(ctx: &ExtractionContext<'_>) -> Self {
@@ -117,8 +117,8 @@ impl From<&ExtractionContext<'_>> for Packages {
 
 /// A package that can be built from this repo
 /// Examples: a binary crate in Cargo workspace, an app in npm workspace
-#[derive(Debug)]
-struct Package {
+#[derive(Debug, PartialEq)]
+pub struct Package {
     /// Package name
     name: String,
 
@@ -135,8 +135,8 @@ struct Package {
 }
 
 /// Toolchain configuration for the repo
-#[derive(Debug, Clone)]
-struct Toolchain {
+#[derive(Debug, Clone, PartialEq)]
+pub struct Toolchain {
     /// The main language (Rust, Python, TypeScript, etc.)
     language: Language,
 
@@ -150,26 +150,26 @@ struct Toolchain {
 /// System packages from nixpkgs
 /// Examples: pkgs.openssl, pkgs.postgresql, pkgs.pkg-config
 /// Maps to buildInputs/nativeBuildInputs in Nix
-#[derive(Debug, Clone)]
-struct Dependencies(Vec<Dependency>);
+#[derive(Debug, Clone, PartialEq)]
+pub struct Dependencies(Vec<Dependency>);
 
 /// A dependency can be either a running service or a build-time package
-#[derive(Debug, Clone)]
-struct Dependency {
+#[derive(Debug, Clone, PartialEq)]
+pub struct Dependency {
     name: String,
     version: Version,
 }
 
-#[derive(Debug)]
-struct Tool {
+#[derive(Debug, PartialEq)]
+pub struct Tool {
     name: String,
     version: Version,
 }
 
 /// Development tools configuration
 /// Maps to devShells.<system>.default in flake.nix
-#[derive(Debug)]
-struct DevTools {
+#[derive(Debug, PartialEq)]
+pub struct DevTools {
     /// Development tools (rust-analyzer, prettier, eslint, etc.)
     /// These are in addition to the base toolchain
     tools: Vec<Tool>,
@@ -210,8 +210,8 @@ impl From<&ExtractionContext<'_>> for DevTools {
     }
 }
 
-#[derive(Debug)]
-struct Checks(Vec<Check>);
+#[derive(Debug, PartialEq)]
+pub struct Checks(Vec<Check>);
 
 impl From<&ExtractionContext<'_>> for Checks {
     fn from(ctx: &ExtractionContext<'_>) -> Self {
@@ -348,7 +348,7 @@ fn create_check(
         // Default toolchain
         Toolchain {
             language: Language::Bash,
-            package_manager: PackageManager::Pip, // Doesn't matter for Bash
+            package_manager: PackageManager::Pip, // TODO: wtf is this thing? why pip? I probably should rethink this thing here
             version: Version::default(),
         }
     };
@@ -364,8 +364,8 @@ fn create_check(
 
 /// A check operation (test, lint, format check, etc.)
 /// Maps to checks.<system>.<name> in flake.nix
-#[derive(Debug)]
-struct Check {
+#[derive(Debug, PartialEq)]
+pub struct Check {
     /// Check name (e.g., "test", "lint", "format")
     name: String,
 
@@ -379,12 +379,12 @@ struct Check {
     services: Services,
 }
 
-#[derive(Debug, Clone)]
-struct Services(Vec<Service>);
+#[derive(Debug, Clone, PartialEq)]
+pub struct Services(Vec<Service>);
 
 /// A service dependency (database, cache, message queue, etc.)
-#[derive(Debug, Clone)]
-struct Service {
+#[derive(Debug, Clone, PartialEq)]
+pub struct Service {
     /// Service name (postgresql, redis, mongodb, etc.)
     name: String,
 
@@ -398,8 +398,8 @@ struct Service {
 
 /// Metadata from manifest files
 /// Maps to meta.* in Nix derivation
-#[derive(Debug, Clone)]
-struct Metadata {
+#[derive(Debug, Clone, PartialEq)]
+pub struct Metadata {
     /// Package version
     version: Version,
 
@@ -598,4 +598,284 @@ fn infer_tools_from_scripts(scripts: &HashMap<String, String>) -> Vec<Tool> {
             version: Version::default(),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::repo::scan::Scan;
+    use std::path::PathBuf;
+
+    fn fixtures_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("analysis")
+    }
+
+    #[test]
+    fn test_rust_workspace_analysis() {
+        let rust_project = fixtures_path().join("rust");
+        let scan = Scan::from(rust_project.clone());
+        let result = Analysis::from(scan.into_iter());
+
+        let pkg_config_dep = Dependencies(vec![
+            Dependency { name: "pkg-config".to_string(), version: Version(None) },
+        ]);
+
+        let expected = Analysis(vec![
+            RepoAnalysis {
+                name: "rust".to_string(),
+                path: rust_project.clone(),
+                packages: Packages(vec![]),
+                dev_tools: DevTools {
+                    tools: vec![],
+                    env: HashMap::new(),
+                    shell_hook: None,
+                    dependencies: pkg_config_dep.clone(),
+                    services: Services(vec![]),
+                },
+                checks: Checks(vec![
+                    Check {
+                        name: "test".to_string(),
+                        command: "make test".to_string(),
+                        toolchain: Toolchain {
+                            language: Language::Rust,
+                            package_manager: PackageManager::Cargo,
+                            version: Version(None),
+                        },
+                        dependencies: pkg_config_dep.clone(),
+                        services: Services(vec![]),
+                    },
+                    Check {
+                        name: "lint".to_string(),
+                        command: "make lint".to_string(),
+                        toolchain: Toolchain {
+                            language: Language::Rust,
+                            package_manager: PackageManager::Cargo,
+                            version: Version(None),
+                        },
+                        dependencies: pkg_config_dep.clone(),
+                        services: Services(vec![]),
+                    },
+                    Check {
+                        name: "format".to_string(),
+                        command: "make format".to_string(),
+                        toolchain: Toolchain {
+                            language: Language::Rust,
+                            package_manager: PackageManager::Cargo,
+                            version: Version(None),
+                        },
+                        dependencies: pkg_config_dep.clone(),
+                        services: Services(vec![]),
+                    },
+                    Check {
+                        name: "check".to_string(),
+                        command: "make check".to_string(),
+                        toolchain: Toolchain {
+                            language: Language::Rust,
+                            package_manager: PackageManager::Cargo,
+                            version: Version(None),
+                        },
+                        dependencies: pkg_config_dep.clone(),
+                        services: Services(vec![]),
+                    },
+                ]),
+            },
+            RepoAnalysis {
+                name: "myapp-api".to_string(),
+                path: rust_project.join("crates/myapp-api"),
+                packages: Packages(vec![]),
+                dev_tools: DevTools {
+                    tools: vec![],
+                    env: HashMap::new(),
+                    shell_hook: None,
+                    dependencies: Dependencies(vec![]),
+                    services: Services(vec![]),
+                },
+                checks: Checks(vec![]),
+            },
+            RepoAnalysis {
+                name: "myapp-cli".to_string(),
+                path: rust_project.join("crates/myapp-cli"),
+                packages: Packages(vec![]),
+                dev_tools: DevTools {
+                    tools: vec![],
+                    env: HashMap::new(),
+                    shell_hook: None,
+                    dependencies: Dependencies(vec![]),
+                    services: Services(vec![]),
+                },
+                checks: Checks(vec![]),
+            },
+            RepoAnalysis {
+                name: "myapp-core".to_string(),
+                path: rust_project.join("crates/myapp-core"),
+                packages: Packages(vec![]),
+                dev_tools: DevTools {
+                    tools: vec![],
+                    env: HashMap::new(),
+                    shell_hook: None,
+                    dependencies: Dependencies(vec![]),
+                    services: Services(vec![]),
+                },
+                checks: Checks(vec![]),
+            },
+        ]);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_js_python_monorepo_analysis() {
+        let js_python_project = fixtures_path().join("js_and_python");
+        let scan = Scan::from(js_python_project.clone());
+        let result = Analysis::from(scan.into_iter());
+
+        let shared_deps = Dependencies(vec![
+            Dependency { name: "postgresql".to_string(), version: Version(None) },
+        ]);
+
+        let expected = Analysis(vec![RepoAnalysis {
+            name: "js_and_python".to_string(),
+            path: js_python_project.clone(),
+            packages: Packages(vec![
+                Package {
+                    name: "fullstack-monorepo".to_string(),
+                    path: js_python_project.clone(),
+                    toolchain: Toolchain {
+                        language: Language::JavaScript,
+                        package_manager: PackageManager::Npm,
+                        version: Version(Some(">=20.0.0".to_string())),
+                    },
+                    dependencies: shared_deps.clone(),
+                    metadata: Metadata {
+                        version: Version(Some("1.5.0".to_string())),
+                        description: Some("Full-stack monorepo with Node.js API and Python ML service".to_string()),
+                        authors: vec!["Development Team <dev@example.com>".to_string()],
+                        license: Some("MIT".to_string()),
+                    },
+                },
+                Package {
+                    name: "ml-service".to_string(),
+                    path: js_python_project.clone(),
+                    toolchain: Toolchain {
+                        language: Language::Python,
+                        package_manager: PackageManager::Poetry,
+                        version: Version(Some(">=3.11".to_string())),
+                    },
+                    dependencies: shared_deps.clone(),
+                    metadata: Metadata {
+                        version: Version(Some("0.3.2".to_string())),
+                        description: Some("Machine learning service for predictions".to_string()),
+                        authors: vec!["ML Team".to_string()],
+                        license: Some("MIT".to_string()),
+                    },
+                },
+            ]),
+            dev_tools: DevTools {
+                tools: vec![
+                    Tool { name: "jest".to_string(), version: Version(None) },
+                    Tool { name: "eslint".to_string(), version: Version(None) },
+                    Tool { name: "prettier".to_string(), version: Version(None) },
+                ],
+                env: HashMap::new(),
+                shell_hook: None,
+                dependencies: shared_deps.clone(),
+                services: Services(vec![]),
+            },
+            checks: Checks(vec![
+                Check {
+                    name: "test".to_string(),
+                    command: "make test".to_string(),
+                    toolchain: Toolchain {
+                        language: Language::JavaScript,
+                        package_manager: PackageManager::Npm,
+                        version: Version(Some(">=20.0.0".to_string())),
+                    },
+                    dependencies: shared_deps.clone(),
+                    services: Services(vec![]),
+                },
+                Check {
+                    name: "lint".to_string(),
+                    command: "make lint".to_string(),
+                    toolchain: Toolchain {
+                        language: Language::JavaScript,
+                        package_manager: PackageManager::Npm,
+                        version: Version(Some(">=20.0.0".to_string())),
+                    },
+                    dependencies: shared_deps.clone(),
+                    services: Services(vec![]),
+                },
+                Check {
+                    name: "format".to_string(),
+                    command: "make format".to_string(),
+                    toolchain: Toolchain {
+                        language: Language::JavaScript,
+                        package_manager: PackageManager::Npm,
+                        version: Version(Some(">=20.0.0".to_string())),
+                    },
+                    dependencies: shared_deps.clone(),
+                    services: Services(vec![]),
+                },
+                Check {
+                    name: "check".to_string(),
+                    command: "make check".to_string(),
+                    toolchain: Toolchain {
+                        language: Language::JavaScript,
+                        package_manager: PackageManager::Npm,
+                        version: Version(Some(">=20.0.0".to_string())),
+                    },
+                    dependencies: shared_deps.clone(),
+                    services: Services(vec![]),
+                },
+                Check {
+                    name: "test".to_string(),
+                    command: "jest --coverage".to_string(),
+                    toolchain: Toolchain {
+                        language: Language::JavaScript,
+                        package_manager: PackageManager::Npm,
+                        version: Version(Some(">=20.0.0".to_string())),
+                    },
+                    dependencies: shared_deps.clone(),
+                    services: Services(vec![]),
+                },
+                Check {
+                    name: "format".to_string(),
+                    command: "prettier --write \"**/*.{js,jsx,ts,tsx,json,md}\"".to_string(),
+                    toolchain: Toolchain {
+                        language: Language::JavaScript,
+                        package_manager: PackageManager::Npm,
+                        version: Version(Some(">=20.0.0".to_string())),
+                    },
+                    dependencies: shared_deps.clone(),
+                    services: Services(vec![]),
+                },
+                Check {
+                    name: "lint".to_string(),
+                    command: "eslint . --ext .js,.jsx,.ts,.tsx".to_string(),
+                    toolchain: Toolchain {
+                        language: Language::JavaScript,
+                        package_manager: PackageManager::Npm,
+                        version: Version(Some(">=20.0.0".to_string())),
+                    },
+                    dependencies: shared_deps.clone(),
+                    services: Services(vec![]),
+                },
+                Check {
+                    name: "typecheck".to_string(),
+                    command: "tsc --noEmit".to_string(),
+                    toolchain: Toolchain {
+                        language: Language::JavaScript,
+                        package_manager: PackageManager::Npm,
+                        version: Version(Some(">=20.0.0".to_string())),
+                    },
+                    dependencies: shared_deps.clone(),
+                    services: Services(vec![]),
+                },
+            ]),
+        }]);
+
+        assert_eq!(result, expected);
+    }
 }

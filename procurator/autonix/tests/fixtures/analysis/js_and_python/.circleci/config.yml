@@ -1,0 +1,221 @@
+version: 2.1
+
+orbs:
+  node: circleci/node@5.1
+  python: circleci/python@2.1
+
+executors:
+  node-executor:
+    docker:
+      - image: cimg/node:20.10
+  python-executor:
+    docker:
+      - image: cimg/python:3.11
+  full-stack-executor:
+    docker:
+      - image: cimg/node:20.10
+      - image: cimg/postgres:15.5
+        environment:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test_db
+      - image: cimg/redis:7.2
+
+jobs:
+  install-deps:
+    executor: node-executor
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - node-deps-v1-{{ checksum "package-lock.json" }}
+            - node-deps-v1-
+      - run:
+          name: Install Node dependencies
+          command: npm ci
+      - save_cache:
+          key: node-deps-v1-{{ checksum "package-lock.json" }}
+          paths:
+            - node_modules
+      - persist_to_workspace:
+          root: .
+          paths:
+            - node_modules
+
+  install-python-deps:
+    executor: python-executor
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - python-deps-v1-{{ checksum "requirements.txt" }}
+            - python-deps-v1-
+      - run:
+          name: Install Python dependencies
+          command: |
+            python -m venv venv
+            . venv/bin/activate
+            pip install --upgrade pip
+            pip install -r requirements.txt
+            pip install pytest pytest-cov black ruff mypy
+      - save_cache:
+          key: python-deps-v1-{{ checksum "requirements.txt" }}
+          paths:
+            - venv
+      - persist_to_workspace:
+          root: .
+          paths:
+            - venv
+
+  test-node:
+    executor: full-stack-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: .
+      - run:
+          name: Wait for PostgreSQL
+          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - run:
+          name: Wait for Redis
+          command: dockerize -wait tcp://localhost:6379 -timeout 1m
+      - run:
+          name: Run Node.js tests
+          command: npm test
+          environment:
+            DATABASE_URL: postgresql://test:test@localhost:5432/test_db
+            REDIS_URL: redis://localhost:6379
+      - store_test_results:
+          path: test-results
+      - store_artifacts:
+          path: coverage
+
+  test-python:
+    executor: full-stack-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: .
+      - run:
+          name: Wait for services
+          command: |
+            dockerize -wait tcp://localhost:5432 -timeout 1m
+            dockerize -wait tcp://localhost:6379 -timeout 1m
+      - run:
+          name: Run Python tests
+          command: |
+            . venv/bin/activate
+            pytest --cov=ml_service --cov-report=html --cov-report=xml
+          environment:
+            DATABASE_URL: postgresql://test:test@localhost:5432/test_db
+            REDIS_URL: redis://localhost:6379
+      - store_test_results:
+          path: test-results
+      - store_artifacts:
+          path: htmlcov
+      - store_artifacts:
+          path: coverage.xml
+
+  lint-node:
+    executor: node-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: .
+      - run:
+          name: Run ESLint
+          command: npm run lint
+      - run:
+          name: Check formatting
+          command: npm run format:check
+      - run:
+          name: Type check
+          command: npm run typecheck
+
+  lint-python:
+    executor: python-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: .
+      - run:
+          name: Run Black
+          command: |
+            . venv/bin/activate
+            black --check .
+      - run:
+          name: Run Ruff
+          command: |
+            . venv/bin/activate
+            ruff check .
+      - run:
+          name: Run MyPy
+          command: |
+            . venv/bin/activate
+            mypy ml_service
+
+  build:
+    executor: node-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: .
+      - run:
+          name: Build application
+          command: npm run build
+      - persist_to_workspace:
+          root: .
+          paths:
+            - dist
+      - store_artifacts:
+          path: dist
+
+  deploy-staging:
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - checkout
+      - setup_remote_docker:
+          docker_layer_caching: true
+      - run:
+          name: Build Docker image
+          command: |
+            docker build -t myapp:${CIRCLE_SHA1} .
+            docker tag myapp:${CIRCLE_SHA1} myapp:latest
+      - run:
+          name: Deploy to staging
+          command: |
+            echo "Deploying to staging environment"
+            # Add deployment commands here
+
+workflows:
+  version: 2
+  test-and-deploy:
+    jobs:
+      - install-deps
+      - install-python-deps
+      - test-node:
+          requires:
+            - install-deps
+      - test-python:
+          requires:
+            - install-python-deps
+      - lint-node:
+          requires:
+            - install-deps
+      - lint-python:
+          requires:
+            - install-python-deps
+      - build:
+          requires:
+            - install-deps
+      - deploy-staging:
+          requires:
+            - test-node
+            - test-python
+            - lint-node
+            - lint-python
+            - build
+          filters:
+            branches:
+              only: main
