@@ -184,18 +184,20 @@ pub struct DevTools {
     services: Services,
 }
 
+///TODO: a lot of those From from context are very similar and we are duplicating too much info
 impl From<&ExtractionContext<'_>> for DevTools {
     fn from(ctx: &ExtractionContext<'_>) -> Self {
         let dependencies = extract_dependencies(ctx);
         let services = extract_services(ctx);
         let env = extract_environment(ctx);
 
-        // Extract tools from manifest scripts
-        let mut all_scripts = HashMap::new();
-        for manifest in &ctx.manifests {
-            all_scripts.extend(manifest.scripts.clone());
-        }
-        let tools = infer_tools_from_scripts(&all_scripts);
+        // Tools will be empty for now
+        // In the future, could extract system-level dev tools like:
+        // - rust-analyzer, cargo-watch for Rust
+        // - nodePackages.typescript-language-server for Node
+        // - python3Packages.python-lsp-server for Python
+        // These are NOT language package manager dependencies (npm/cargo/pip)
+        let tools = Vec::new();
 
         // Shell hook could be extracted from container entrypoint if needed
         let shell_hook = None;
@@ -308,20 +310,28 @@ impl From<&ExtractionContext<'_>> for Checks {
 
         // From manifest scripts
         for manifest in &ctx.manifests {
-            for (script_name, script_cmd) in &manifest.scripts {
-                // Common check script names
-                if matches!(
-                    script_name.as_str(),
-                    "test" | "lint" | "format" | "check" | "typecheck"
-                ) {
-                    checks.push(create_check(
-                        script_name.clone(),
-                        script_cmd.clone(),
-                        ctx,
-                        &dependencies,
-                        &services,
-                    ));
-                }
+            // Collect and sort script names for deterministic order
+            let mut script_checks: Vec<(String, String)> = manifest
+                .scripts
+                .iter()
+                .filter(|(script_name, _)| {
+                    matches!(
+                        script_name.as_str(),
+                        "test" | "lint" | "format" | "check" | "typecheck"
+                    )
+                })
+                .map(|(name, cmd)| (name.clone(), cmd.clone()))
+                .collect();
+            script_checks.sort_by(|a, b| a.0.cmp(&b.0));
+
+            for (script_name, script_cmd) in script_checks {
+                checks.push(create_check(
+                    script_name,
+                    script_cmd,
+                    ctx,
+                    &dependencies,
+                    &services,
+                ));
             }
         }
 
@@ -526,6 +536,7 @@ fn extract_services(ctx: &ExtractionContext<'_>) -> Services {
     Services(services_map.into_values().collect())
 }
 
+///TODO: this needs some testing and the current implementation is trash
 /// Parse Docker image tag into service name and version
 /// Example: "postgres:15" -> ("postgresql", Version("15"))
 /// Example: "redis:7-alpine" -> ("redis", Version("7"))
@@ -543,6 +554,7 @@ fn parse_image_tag(image: &str) -> (String, Version) {
     (name, version)
 }
 
+///TODO: probably useless and ca use refs
 /// Extract environment variables from context
 fn extract_environment(ctx: &ExtractionContext<'_>) -> HashMap<String, String> {
     let mut env = HashMap::new();
@@ -558,46 +570,6 @@ fn extract_environment(ctx: &ExtractionContext<'_>) -> HashMap<String, String> {
     }
 
     env
-}
-
-/// Infer tools from script commands
-/// Example: "eslint ." -> Tool { name: "eslint", version: None }
-fn infer_tools_from_scripts(scripts: &HashMap<String, String>) -> Vec<Tool> {
-    let tool_keywords = [
-        "eslint",
-        "prettier",
-        "rust-analyzer",
-        "clippy",
-        "rustfmt",
-        "black",
-        "pylint",
-        "mypy",
-        "pytest",
-        "jest",
-        "vitest",
-        "cargo",
-        "npm",
-        "pnpm",
-        "yarn",
-    ];
-
-    let mut tools = HashSet::new();
-
-    for command in scripts.values() {
-        for keyword in &tool_keywords {
-            if command.contains(keyword) {
-                tools.insert(keyword.to_string());
-            }
-        }
-    }
-
-    tools
-        .into_iter()
-        .map(|name| Tool {
-            name,
-            version: Version::default(),
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -774,11 +746,7 @@ mod tests {
                 },
             ]),
             dev_tools: DevTools {
-                tools: vec![
-                    Tool { name: "jest".to_string(), version: Version(None) },
-                    Tool { name: "eslint".to_string(), version: Version(None) },
-                    Tool { name: "prettier".to_string(), version: Version(None) },
-                ],
+                tools: vec![],
                 env: HashMap::new(),
                 shell_hook: None,
                 dependencies: shared_deps.clone(),
@@ -830,17 +798,6 @@ mod tests {
                     services: Services(vec![]),
                 },
                 Check {
-                    name: "test".to_string(),
-                    command: "jest --coverage".to_string(),
-                    toolchain: Toolchain {
-                        language: Language::JavaScript,
-                        package_manager: PackageManager::Npm,
-                        version: Version(Some(">=20.0.0".to_string())),
-                    },
-                    dependencies: shared_deps.clone(),
-                    services: Services(vec![]),
-                },
-                Check {
                     name: "format".to_string(),
                     command: "prettier --write \"**/*.{js,jsx,ts,tsx,json,md}\"".to_string(),
                     toolchain: Toolchain {
@@ -854,6 +811,17 @@ mod tests {
                 Check {
                     name: "lint".to_string(),
                     command: "eslint . --ext .js,.jsx,.ts,.tsx".to_string(),
+                    toolchain: Toolchain {
+                        language: Language::JavaScript,
+                        package_manager: PackageManager::Npm,
+                        version: Version(Some(">=20.0.0".to_string())),
+                    },
+                    dependencies: shared_deps.clone(),
+                    services: Services(vec![]),
+                },
+                Check {
+                    name: "test".to_string(),
+                    command: "jest --coverage".to_string(),
                     toolchain: Toolchain {
                         language: Language::JavaScript,
                         package_manager: PackageManager::Npm,

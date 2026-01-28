@@ -162,10 +162,10 @@ struct PackageJson {
     description: Option<String>,
     author: Option<String>,
     license: Option<String>,
-    workspaces: Option<PackageJsonWorkspaces>,
-    bin: Option<PackageJsonBin>,
     scripts: Option<HashMap<String, String>>,
+    workspaces: Option<PackageJsonWorkspaces>,
     engines: Option<PackageJsonEngines>,
+    bin: Option<PackageJsonBin>,
 }
 
 #[derive(Deserialize)]
