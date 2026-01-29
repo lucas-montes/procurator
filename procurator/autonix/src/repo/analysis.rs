@@ -572,6 +572,162 @@ fn extract_environment(ctx: &ExtractionContext<'_>) -> HashMap<String, String> {
     env
 }
 
+// Accessor methods for private fields (used by flake.rs)
+
+impl Analysis {
+    pub fn repos(&self) -> &[RepoAnalysis] {
+        &self.0
+    }
+}
+
+impl RepoAnalysis {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn packages(&self) -> &Packages {
+        &self.packages
+    }
+
+    pub fn dev_tools(&self) -> &DevTools {
+        &self.dev_tools
+    }
+
+    pub fn checks(&self) -> &Checks {
+        &self.checks
+    }
+}
+
+impl Packages {
+    pub fn iter(&self) -> impl Iterator<Item = &Package> {
+        self.0.iter()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl Package {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn toolchain(&self) -> &Toolchain {
+        &self.toolchain
+    }
+
+    pub fn dependencies(&self) -> &Dependencies {
+        &self.dependencies
+    }
+
+    pub fn metadata(&self) -> &Metadata {
+        &self.metadata
+    }
+}
+
+impl Toolchain {
+    pub fn language(&self) -> &Language {
+        &self.language
+    }
+
+    pub fn package_manager(&self) -> &PackageManager {
+        &self.package_manager
+    }
+
+    pub fn version(&self) -> &Version {
+        &self.version
+    }
+}
+
+impl DevTools {
+    pub fn dependencies(&self) -> &Dependencies {
+        &self.dependencies
+    }
+
+    pub fn services(&self) -> &Services {
+        &self.services
+    }
+
+    pub fn env(&self) -> &HashMap<String, String> {
+        &self.env
+    }
+}
+
+impl Checks {
+    pub fn iter(&self) -> impl Iterator<Item = &Check> {
+        self.0.iter()
+    }
+}
+
+impl Check {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn command(&self) -> &str {
+        &self.command
+    }
+
+    pub fn toolchain(&self) -> &Toolchain {
+        &self.toolchain
+    }
+
+    pub fn dependencies(&self) -> &Dependencies {
+        &self.dependencies
+    }
+
+    pub fn services(&self) -> &Services {
+        &self.services
+    }
+}
+
+impl Services {
+    pub fn iter(&self) -> impl Iterator<Item = &Service> {
+        self.0.iter()
+    }
+}
+
+impl Service {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn version(&self) -> &Version {
+        &self.version
+    }
+}
+
+impl Metadata {
+    pub fn version(&self) -> &Version {
+        &self.version
+    }
+
+    pub fn description(&self) -> &Option<String> {
+        &self.description
+    }
+
+    pub fn authors(&self) -> &Vec<String> {
+        &self.authors
+    }
+
+    pub fn license(&self) -> &Option<String> {
+        &self.license
+    }
+}
+
+impl Dependencies {
+    pub fn iter(&self) -> impl Iterator<Item = &Dependency> {
+        self.0.iter()
+    }
+}
+
+impl Dependency {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

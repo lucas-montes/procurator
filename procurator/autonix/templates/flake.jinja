@@ -1,0 +1,115 @@
+
+{# flake.jinja - Askama template for a modern, multi-system Nix flake using flake-utils #}
+{
+  description = "{{ self.description }}";
+
+  inputs = {
+    nixpkgs.url = "{{ self.inputs.nixpkgs }}";
+    flake-utils.url = "github:numtide/flake-utils";
+  };
+
+  outputs = { self, nixpkgs, flake-utils, ... }@inputs:
+    flake-utils.lib.eachDefaultSystem (system: let
+      pkgs = import nixpkgs { inherit system; };
+    in {
+      packages = {
+        {% for (name, pkg) in self.outputs.packages %}
+        {{ name }} = pkgs.stdenv.mkDerivation {
+          pname = "{{ pkg.name }}";
+          version = "{{ pkg.metadata.version }}";
+          src = ./.;
+          buildInputs = [
+            {% for dep in pkg.dependencies %}
+            pkgs.{{ dep }}
+            {% endfor %}
+          ];
+          meta = {
+            description = "{{ pkg.metadata.description }}";
+            {% if pkg.metadata.license %}
+            license = "{{ pkg.metadata.license }}";
+            {% endif %}
+            maintainers = [
+              {% for author in pkg.metadata.authors %}
+              "{{ author }}"
+              {% endfor %}
+            ];
+          };
+        };
+        {% endfor %}
+      };
+
+      devShells = {
+        default = pkgs.mkShell {
+          buildInputs = [
+            {% for tc in self.outputs.dev_shells.toolchains %}
+            pkgs.{{ tc.language | lower }}
+            {% endfor %}
+            {% for dep in self.outputs.dev_shells.dependencies %}
+            pkgs.{{ dep }}
+            {% endfor %}
+          ];
+          {% if self.outputs.dev_shells.shell_hook %}
+          shellHook = ''
+            {{ self.outputs.dev_shells.shell_hook }}
+          '';
+          {% endif %}
+        };
+      };
+
+      checks = {
+        {% for (name, check) in self.outputs.checks %}
+        {{ name }} = pkgs.runCommand "check-{{ name }}" {
+          buildInputs = [
+            {% for dep in check.dependencies %}
+            pkgs.{{ dep }}
+            {% endfor %}
+          ];
+        } ''
+          {{ check.command }}
+        '';
+        {% endfor %}
+      };
+
+      procurator = {
+        services = [
+          {% for svc in self.outputs.procurator.services %}
+          {
+            name = "{{ svc.name }}";
+            {% if svc.version %}
+            version = "{{ svc.version }}";
+            {% endif %}
+            {% if svc.port %}
+            port = {{ svc.port }};
+            {% endif %}
+            {% if svc.health_check %}
+            healthCheck = "{{ svc.health_check }}";
+            {% endif %}
+            dependsOn = [
+              {% for dep in svc.depends_on %}
+              "{{ dep }}"
+              {% endfor %}
+            ];
+            envVars = {
+              {% for (key, value) in svc.env_vars %}
+              {{ key }} = "{{ value }}";
+              {% endfor %}
+            };
+          }
+          {% endfor %}
+        ];
+        project = {
+          name = "{{ self.outputs.procurator.project.name }}";
+          languages = [
+            {% for lang in self.outputs.procurator.project.languages %}
+            "{{ lang }}"
+            {% endfor %}
+          ];
+          packageManagers = [
+            {% for pm in self.outputs.procurator.project.package_managers %}
+            "{{ pm }}"
+            {% endfor %}
+          ];
+        };
+      };
+    });
+}

@@ -1,5 +1,9 @@
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+use std::fmt;
+
+use serde::Serialize;
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Serialize)]
 pub enum Language {
     Rust,
     JavaScript,
@@ -31,9 +35,25 @@ impl Language {
     }
 }
 
+impl fmt::Display for Language {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Language::Rust => write!(f, "rust"),
+            Language::JavaScript => write!(f, "javascript"),
+            Language::Python => write!(f, "python3"),
+            Language::Go => write!(f, "go"),
+            Language::Ruby => write!(f, "ruby"),
+            Language::Java => write!(f, "jdk"),
+            Language::CSharp => write!(f, "dotnet-sdk"),
+            Language::C => write!(f, "c"),
+            Language::PHP => write!(f, "php"),
+        }
+    }
+}
+
 /// Package managers that can be detected from lock files or manifest configuration
 /// Used to determine the correct build and dependency installation commands
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Serialize)]
 pub enum PackageManager {
     // Rust
     Cargo,
@@ -68,6 +88,24 @@ pub enum PackageManager {
 
     // PHP
     Composer,
+}
+
+impl fmt::Display for PackageManager {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PackageManager::Cargo => write!(f, "cargo"),
+            PackageManager::Npm => write!(f, "npm"),
+            PackageManager::Yarn => write!(f, "yarn"),
+            PackageManager::Pnpm => write!(f, "pnpm"),
+            PackageManager::Poetry => write!(f, "poetry"),
+            PackageManager::Pip => write!(f, "pip"),
+            PackageManager::Pipenv => write!(f, "pipenv"),
+            PackageManager::Maven => write!(f, "maven"),
+            PackageManager::Gradle => write!(f, "gradle"),
+            PackageManager::Bundler => write!(f, "bundler"),
+            PackageManager::Composer => write!(f, "composer"),
+        }
+    }
 }
 
 impl TryFrom<&str> for PackageManager {

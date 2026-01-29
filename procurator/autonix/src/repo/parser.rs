@@ -2,6 +2,8 @@
 // railpack and direnv.
 use std::path::PathBuf;
 
+use crate::repo::flake::Configuration;
+
 use super::{analysis::Analysis, scan::Scan};
 
 #[derive(Debug)]
@@ -23,6 +25,13 @@ impl Parser<PathBuf> {
 impl Parser<Scan> {
     pub fn analyse(self) -> Parser<Analysis> {
         Parser(Analysis::from(self.0.into_iter()))
+    }
+}
+
+
+impl Parser<Analysis> {
+    fn build(self) -> Parser<Configuration> {
+        Parser(Configuration::from(self.0.into_iter()))
     }
 
     //     pub fn save(&self, path: &Path) -> std::io::Result<()> {
@@ -51,12 +60,4 @@ impl Parser<Scan> {
     //         tracing::info!("Loaded configuration from {path:?}");
     //         Ok(Parser(ir))
     //     }
-}
-
-struct Configuration;
-
-impl Parser<Analysis> {
-    fn represent(self) -> Parser<Configuration> {
-        todo!()
-    }
 }

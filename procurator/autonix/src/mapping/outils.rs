@@ -41,7 +41,9 @@ impl From<serde_yaml_ng::Error> for ParseError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+use serde::Serialize;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Version(pub Option<String>);
 
 

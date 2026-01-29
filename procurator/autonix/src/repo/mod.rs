@@ -6,6 +6,6 @@
 mod parser;
 mod scan;
 mod analysis;
-
+mod flake;
 
 pub use parser::Parser;
