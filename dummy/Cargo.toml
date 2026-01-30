@@ -1,0 +1,9 @@
+[package]
+name = "dummy"
+version = "0.1.0"
+
+[lib]
+name = "dummy_rust"
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
