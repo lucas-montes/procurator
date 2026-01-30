@@ -47,6 +47,7 @@ impl fmt::Display for Language {
             Language::CSharp => write!(f, "dotnet-sdk"),
             Language::C => write!(f, "c"),
             Language::PHP => write!(f, "php"),
+            Language::Bash => write!(f, "bash"),
         }
     }
 }
@@ -97,11 +98,18 @@ impl fmt::Display for PackageManager {
             PackageManager::Npm => write!(f, "npm"),
             PackageManager::Yarn => write!(f, "yarn"),
             PackageManager::Pnpm => write!(f, "pnpm"),
+            PackageManager::Bun => write!(f, "bun"),
             PackageManager::Poetry => write!(f, "poetry"),
             PackageManager::Pip => write!(f, "pip"),
             PackageManager::Pipenv => write!(f, "pipenv"),
+            PackageManager::Pdm => write!(f, "pdm"),
+            PackageManager::Uv => write!(f, "uv"),
+            PackageManager::Conda => write!(f, "conda"),
+            PackageManager::GoModules => write!(f, "go"),
             PackageManager::Maven => write!(f, "maven"),
             PackageManager::Gradle => write!(f, "gradle"),
+            PackageManager::Sbt => write!(f, "sbt"),
+            PackageManager::Nuget => write!(f, "nuget"),
             PackageManager::Bundler => write!(f, "bundler"),
             PackageManager::Composer => write!(f, "composer"),
         }

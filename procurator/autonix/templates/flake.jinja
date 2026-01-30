@@ -9,80 +9,85 @@
   };
 
   outputs = { self, nixpkgs, flake-utils, ... }@inputs:
-    flake-utils.lib.eachDefaultSystem (system: let
-      pkgs = import nixpkgs { inherit system; };
-    in {
-      packages = {
-        {% for (name, pkg) in self.outputs.packages %}
-        {{ name }} = pkgs.stdenv.mkDerivation {
-          pname = "{{ pkg.name }}";
-          version = "{{ pkg.metadata.version }}";
-          src = ./.;
-          buildInputs = [
-            {% for dep in pkg.dependencies %}
-            pkgs.{{ dep }}
-            {% endfor %}
-          ];
-          meta = {
-            description = "{{ pkg.metadata.description }}";
-            {% if pkg.metadata.license %}
-            license = "{{ pkg.metadata.license }}";
-            {% endif %}
-            maintainers = [
-              {% for author in pkg.metadata.authors %}
-              "{{ author }}"
+    flake-utils.lib.eachDefaultSystem (system:
+      let
+        pkgs = import nixpkgs { inherit system; };
+      in
+      {
+        packages = {
+          {% for (name, pkg) in self.outputs.packages %}
+          {{ name }} = pkgs.stdenv.mkDerivation {
+            pname = "{{ pkg.name }}";
+            version = "{{ pkg.metadata.version }}";
+            src = ./.;
+
+            buildInputs = with pkgs; [
+              {{ pkg.toolchain.language }}
+              {% for dep in pkg.dependencies %}
+              {{ dep }}
               {% endfor %}
             ];
-          };
-        };
-        {% endfor %}
-      };
 
-      devShells = {
-        default = pkgs.mkShell {
-          buildInputs = [
+            meta = with pkgs.lib; {
+              description = "{{ pkg.metadata.description_str() }}";
+              {% if !pkg.metadata.license_str().is_empty() %}
+              license = licenses.{{ pkg.metadata.license_str() }};
+              {% endif %}
+              maintainers = [
+                {% for author in pkg.metadata.authors %}
+                "{{ author }}"
+                {% endfor %}
+              ];
+            };
+          };
+          {% endfor %}
+        };
+
+        devShells.default = pkgs.mkShell {
+          buildInputs = with pkgs; [
             {% for tc in self.outputs.dev_shells.toolchains %}
-            pkgs.{{ tc.language | lower }}
+            {{ tc.language }}
             {% endfor %}
             {% for dep in self.outputs.dev_shells.dependencies %}
-            pkgs.{{ dep }}
+            {{ dep }}
             {% endfor %}
           ];
-          {% if self.outputs.dev_shells.shell_hook %}
+
+          {% if !self.outputs.dev_shells.shell_hook_str().is_empty() %}
           shellHook = ''
-            {{ self.outputs.dev_shells.shell_hook }}
+            {{ self.outputs.dev_shells.shell_hook_str() }}
           '';
           {% endif %}
         };
-      };
 
-      checks = {
-        {% for (name, check) in self.outputs.checks %}
-        {{ name }} = pkgs.runCommand "check-{{ name }}" {
-          buildInputs = [
-            {% for dep in check.dependencies %}
-            pkgs.{{ dep }}
-            {% endfor %}
-          ];
-        } ''
-          {{ check.command }}
-        '';
-        {% endfor %}
-      };
-
+        checks = {
+          {% for (name, check) in self.outputs.checks %}
+          {{ name }} = pkgs.runCommand "check-{{ name }}" {
+            buildInputs = with pkgs; [
+              {{ check.toolchain.language }}
+              {% for dep in check.dependencies %}
+              {{ dep }}
+              {% endfor %}
+            ];
+          } ''
+            {{ check.command }}
+            touch $out
+          '';
+          {% endfor %}
+        };
+      }
+    ) // {
       procurator = {
         services = [
           {% for svc in self.outputs.procurator.services %}
           {
             name = "{{ svc.name }}";
-            {% if svc.version %}
-            version = "{{ svc.version }}";
+            version = "{{ svc.version_str() }}";
+            {% if svc.has_port() %}
+            port = {{ svc.port_value() }};
             {% endif %}
-            {% if svc.port %}
-            port = {{ svc.port }};
-            {% endif %}
-            {% if svc.health_check %}
-            healthCheck = "{{ svc.health_check }}";
+            {% if !svc.health_check_str().is_empty() %}
+            healthCheck = "{{ svc.health_check_str() }}";
             {% endif %}
             dependsOn = [
               {% for dep in svc.depends_on %}
@@ -97,6 +102,7 @@
           }
           {% endfor %}
         ];
+
         project = {
           name = "{{ self.outputs.procurator.project.name }}";
           languages = [
@@ -111,5 +117,5 @@
           ];
         };
       };
-    });
+    };
 }

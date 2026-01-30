@@ -174,6 +174,12 @@ struct DevShellOutput {
     services: Vec<ServiceConfig>,
 }
 
+impl DevShellOutput {
+    pub fn shell_hook_str(&self) -> &str {
+        self.shell_hook.as_deref().unwrap_or("")
+    }
+}
+
 /// Check output configuration
 #[derive(Debug, Serialize)]
 struct CheckOutput {
@@ -213,6 +219,16 @@ struct MetadataConfig {
     license: Option<String>,
 }
 
+impl MetadataConfig {
+    pub fn description_str(&self) -> &str {
+        self.description.as_deref().unwrap_or("")
+    }
+
+    pub fn license_str(&self) -> &str {
+        self.license.as_deref().unwrap_or("")
+    }
+}
+
 impl From<&Metadata> for MetadataConfig {
     fn from(meta: &Metadata) -> Self {
         Self {
@@ -244,6 +260,24 @@ struct ServiceDefinition {
     health_check: Option<String>,
     depends_on: Vec<String>,
     env_vars: HashMap<String, String>,
+}
+
+impl ServiceDefinition {
+    pub fn version_str(&self) -> &str {
+        self.version.as_deref().unwrap_or("latest")
+    }
+
+    pub fn health_check_str(&self) -> &str {
+        self.health_check.as_deref().unwrap_or("")
+    }
+
+    pub fn has_port(&self) -> bool {
+        self.port.is_some()
+    }
+
+    pub fn port_value(&self) -> u16 {
+        self.port.unwrap_or(0)
+    }
 }
 
 /// Project metadata

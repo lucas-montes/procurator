@@ -23,6 +23,7 @@ impl From<ScanIter> for Analysis {
     }
 }
 
+
 /// Complete configuration for a single repo
 ///
 /// A repo can contain multiple packages (e.g., Rust workspace, npm workspaces)

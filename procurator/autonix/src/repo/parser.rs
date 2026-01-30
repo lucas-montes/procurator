@@ -2,9 +2,7 @@
 // railpack and direnv.
 use std::path::PathBuf;
 
-use crate::repo::flake::Configuration;
-
-use super::{analysis::Analysis, scan::Scan};
+use super::{analysis::Analysis,flake::Configuration, scan::Scan};
 
 #[derive(Debug)]
 pub struct Parser<T = PathBuf>(T);
@@ -30,29 +28,28 @@ impl Parser<Scan> {
 
 
 impl Parser<Analysis> {
-    fn build(self) -> Parser<Configuration> {
-        Parser(Configuration::from(self.0.into_iter()))
+    pub fn build(self) -> Parser<Configuration> {
+        //TODO: maybe we want to pass an iterator? not sure that we want to do the merging in the iterator
+        Parser(Configuration::from(self.0))
     }
 
-    //     pub fn save(&self, path: &Path) -> std::io::Result<()> {
-    //         let json = serde_json::to_string_pretty(&self.0)?;
-    //         std::fs::write(path, json)?;
-    //         tracing::info!("Saved configuration to {path:?}");
-    //         Ok(())
-    //     }
+}
 
-    //     pub fn print(&self){
-    //         tracing::info!(?self, "Intermediate Representation:");
-    //         tracing::info!("Detected {} projects", self.0.projects.len());
-    //         for config in &self.0.projects {
-    //             tracing::info!(
-    //                 "  - {} ({:?}, {:?})",
-    //                 config.name,
-    //                 config.toolchain.language,
-    //                 config.toolchain.package_manager
-    //             );
-    //         }
-    //     }
+impl Parser<Configuration> {
+    pub fn generate(&self, output: &PathBuf) -> std::io::Result<()> {
+        let flake = self.0.to_nix().expect("");
+        std::fs::write(output, flake)
+    }
+
+    pub fn as_nix(&self, output: &PathBuf) -> std::io::Result<()> {
+        let flake = ser_nix::to_string(&self.0).expect("");
+        std::fs::write(output, flake)
+    }
+
+    pub fn as_json(&self, output: &PathBuf) -> std::io::Result<()> {
+        let flake = serde_json::to_string_pretty(&self.0).expect("");
+        std::fs::write(output, flake)
+    }
 
     //     pub fn load(path: &Path) -> std::io::Result<Self> {
     //         let json = std::fs::read(path)?;

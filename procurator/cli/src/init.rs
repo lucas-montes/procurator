@@ -19,14 +19,26 @@ pub fn init(path: Option<PathBuf>) {
         return;
     };
 
-    // let parser = Parser::from(path).advance().advance().advance();
+    let parser = Parser::from(path).scan().analyse().build();
 
-    // println!("Generated configuration:");
-    // parser.print();
+    save_and_log(|p| parser.as_json(p), &config_path);
+    save_and_log(|p| parser.as_nix(p), &config_path.with_extension("nix"));
+    save_and_log(|p| parser.generate(p), &config_path.with_file_name("flake.nix"));
 
     // parser
-    //     .save(&config_path)
-    //     .expect("Failed to save configuration");
+    //     .as_json(&config_path)
+    //     .expect("Failed to save configuration as json");
 
-    tracing::info!("Configuration saved to {}", config_path.display());
+    // parser
+    //     .as_nix(&config_path.with_extension("nix"))
+    //     .expect("Failed to save configuration as nix");
+
+    // parser
+    //     .generate(&config_path.with_file_name("flake.nix"))
+    //     .expect("Failed to save flake.nix");
+}
+
+fn save_and_log<F: Fn(&PathBuf) -> std::io::Result<()>>(f: F, p: &PathBuf) {
+    f(p).expect("Failed to save configuration as json");
+    tracing::info!("Configuration saved to {}", p.display());
 }
