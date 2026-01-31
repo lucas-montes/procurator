@@ -2,7 +2,7 @@
   description = "This flake will simulate a simple monorepo where infra and code are in the same repo";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
     flake-utils.url = "github:numtide/flake-utils";
     # Example: external service as flake input (pinned via lock file)
     # auth-service.url = "github:myorg/auth-service";
@@ -48,22 +48,27 @@
           inherit system;
         };
 
-        # Build Rust library for FFI
+        # Build Rust library for FFI with header generation
         rustLib = pkgs.rustPlatform.buildRustPackage {
           pname = "dummy-rust";
           version = "0.1.0";
           src = ./.;
+
           cargoLock = {
             lockFile = ./Cargo.lock;
           };
-          # Build only the library, not the binary
-          buildPhase = ''
-            cargo build --release --lib
-          '';
+
+          cargoBuildFlags = ["--release" "--lib"];
+
+          nativeBuildInputs = [ pkgs.rust-cbindgen ];
+
+buildPhase = ''
+    cbindgen --config cbindgen.toml --output dummy_rust.h
+  '';
+
           installPhase = ''
-            mkdir -p $out/lib
-            cp target/release/libdummy_rust.a $out/lib/
-            cp target/release/libdummy_rust.so $out/lib/ || true
+            mkdir -p $out/lib $out/include
+            cp dummy_rust.h $out/include/
           '';
         };
 
@@ -72,9 +77,11 @@
           pname = "ffi-example";
           version = "0.1.0";
           src = ./.;
-          buildInputs = [pkgs.gcc];
+          nativeBuildInputs = [pkgs.gcc];
+          buildInputs = [rustLib];
           buildPhase = ''
             gcc -o ffi_example ffi_example.c \
+              -I${rustLib}/include \
               -L${rustLib}/lib \
               -ldummy_rust \
               -lpthread -ldl -lm
@@ -90,10 +97,12 @@
           pname = "ffi-example-dynamic";
           version = "0.1.0";
           src = ./.;
-          buildInputs = [pkgs.gcc];
+          nativeBuildInputs = [pkgs.gcc];
+          buildInputs = [rustLib];
           buildPhase = ''
             if [ -f ${rustLib}/lib/libdummy_rust.so ]; then
               gcc -o ffi_example_dynamic ffi_example.c \
+                -I${rustLib}/include \
                 -L${rustLib}/lib \
                 -ldummy_rust \
                 -Wl,-rpath,${rustLib}/lib
@@ -208,6 +217,27 @@
               license = licenses.mit;
             };
           };
+        };
+
+        # Development shell for experimenting with FFI
+        devShells.default = pkgs.mkShell {
+          buildInputs = with pkgs; [
+            rustc
+            cargo
+            gcc
+            cbindgen
+          ];
+
+          shellHook = ''
+            echo "🦀 Rust FFI Development Environment"
+            echo ""
+            echo "Quick commands:"
+            echo "  cargo build --lib          - Build Rust library + generate header"
+            echo "  cat dummy_rust.h           - View generated header"
+            echo "  nix run                    - Build and run complete example"
+            echo "  nix build .#rust-lib       - Build just the Rust library"
+            echo ""
+          '';
         };
 
         # Export infrastructure configuration (JSON-serializable)

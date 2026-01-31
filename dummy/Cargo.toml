@@ -1,9 +1,14 @@
 [package]
 name = "dummy"
 version = "0.1.0"
+edition = "2021"
+build = "build.rs"
 
 [lib]
 name = "dummy_rust"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
+
+[build-dependencies]
+cbindgen = "0.26"
