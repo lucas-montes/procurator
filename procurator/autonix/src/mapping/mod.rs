@@ -6,12 +6,14 @@ mod manifests;
 mod languages;
 mod outils;
 mod containers;
+mod version;
 mod cicdfiles;
 
+pub use version::{Version, SemVerParser};
 pub use cicdfiles::{CiCdFile, CiJob, CiService, CiStep, ParsedCiCdFile};
 pub use containers::{ContainerFile, ContainerService, ParsedContainerFile};
 pub use languages::{Language, PackageManager};
 pub use tasks::{TaskFile, BuildSystem, ParsedTaskFile};
 pub use lockfiles::LockFile;
 pub use manifests::{ManifestFile, ParsedManifest};
-pub use outils::{ParseError, Parseable, Version};
+pub use outils::{ParseError, Parseable};

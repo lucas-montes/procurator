@@ -1,5 +1,6 @@
 use std::path::Path;
 
+
 /// Trait for parsing manifest files
 pub trait Parseable {
     type Output;
@@ -38,23 +39,5 @@ impl From<serde_json::Error> for ParseError {
 impl From<serde_yaml_ng::Error> for ParseError {
     fn from(err: serde_yaml_ng::Error) -> Self {
         Self::Yaml(err)
-    }
-}
-
-use serde::Serialize;
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Version(pub Option<String>);
-
-
-impl From<Option<&str>> for Version {
-    fn from(s: Option<&str>) -> Self {
-        Self(s.map(|s| s.to_string()))
-    }
-}
-
-impl Default for Version {
-    fn default() -> Self {
-        Self(None)
     }
 }
