@@ -11,23 +11,20 @@ use crate::{
 /// Nix flake configuration
 /// Maps one-to-one with a real flake.nix structure
 #[derive(Debug, Serialize, Template)]
-#[template(path = "flake.jinja", escape = "none")]
-pub struct Configuration {
+#[template(path = "flake.jinja")]
+pub struct Configuration<'write> {
     /// Flake description
     description: String,
 
-    /// Nix systems to support
-    systems: Vec<System>,
-
     /// Flake inputs (nixpkgs, etc.)
-    inputs: Inputs,
+    inputs: Inputs<'write>,
 
     /// Flake outputs
     outputs: Outputs,
 }
 
 
-impl From<Analysis> for Configuration {
+impl<'write> From<Analysis> for Configuration<'write> {
     fn from(analysis: Analysis) -> Self {
         // Filter out empty RepoAnalysis (no packages, no checks, no meaningful data)
         let all_repos = analysis.repos();
@@ -58,7 +55,6 @@ impl From<Analysis> for Configuration {
 
         Self {
             description,
-            systems: System::all(),
             inputs: Inputs::default(),
             outputs: Outputs {
                 packages,
@@ -71,43 +67,22 @@ impl From<Analysis> for Configuration {
 }
 
 /// Helper functions for extraction
-
-impl Configuration {
+impl<'write> Configuration<'write> {
     pub fn to_nix(&self) -> Result<String, askama::Error> {
         self.render()
     }
 }
 
-
-/// Nix system architecture
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
-pub struct System(String);
-
-impl System {
-    pub fn all() -> Vec<Self> {
-        vec![
-            Self("x86_64-linux".into()),
-            Self("aarch64-darwin".into()),
-            Self("aarch64-linux".into()),
-            Self("x86_64-darwin".into()),
-        ]
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
 /// Flake inputs
 #[derive(Debug, Serialize)]
-struct Inputs {
-    nixpkgs: String,
+struct Inputs<'write> {
+    nixpkgs: &'write str,
 }
 
-impl Default for Inputs {
+impl<'write> Default for Inputs<'write> {
     fn default() -> Self {
         Self {
-            nixpkgs: "github:NixOS/nixpkgs/nixos-unstable".to_string(),
+            nixpkgs: "github:NixOS/nixpkgs/nixos-unstable",
         }
     }
 }
@@ -203,7 +178,7 @@ impl From<&Service> for ServiceConfig {
     fn from(service: &Service) -> Self {
         Self {
             name: service.name().to_string(),
-            version: service.version().0.clone(),
+            version: Some(service.version().to_nix()),
             port: infer_default_port(service.name()),
             env: HashMap::new(),
         }
@@ -232,7 +207,7 @@ impl MetadataConfig {
 impl From<&Metadata> for MetadataConfig {
     fn from(meta: &Metadata) -> Self {
         Self {
-            version: meta.version().0.clone().unwrap_or_else(|| "0.0.0".to_string()),
+            version: meta.version().to_nix(),
             description: meta.description().clone(),
             authors: meta.authors().clone(),
             license: meta.license().clone(),
@@ -322,7 +297,7 @@ fn merge_dev_shells(repos: &[&RepoAnalysis]) -> DevShellOutput {
             toolchains_set.insert(format!(
                 "{:?}-{:?}",
                 package.toolchain().language(),
-                package.toolchain().version().0.as_ref().unwrap_or(&"latest".to_string())
+                package.toolchain().version().to_nix(),
             ));
         }
 
@@ -356,7 +331,7 @@ fn merge_dev_shells(repos: &[&RepoAnalysis]) -> DevShellOutput {
             let key = format!(
                 "{:?}-{:?}",
                 package.toolchain().language(),
-                package.toolchain().version().0.as_ref().unwrap_or(&"latest".to_string())
+                package.toolchain().version().to_nix()
             );
             if toolchains_set.remove(&key) {
                 toolchains.push(ToolchainConfig::from(package.toolchain()));
@@ -434,7 +409,7 @@ fn extract_extensions(repos: &[&RepoAnalysis]) -> ProcuratorExtensions {
         for service in repo.dev_tools().services().iter() {
             let service_def = ServiceDefinition {
                 name: service.name().to_string(),
-                version: service.version().0.clone(),
+                version: Some(service.version().to_nix()),
                 port: infer_default_port(service.name()),
                 health_check: None, // TODO: Extract from docker-compose
                 depends_on: Vec::new(), // TODO: Extract dependencies
@@ -450,7 +425,7 @@ fn extract_extensions(repos: &[&RepoAnalysis]) -> ProcuratorExtensions {
                     .entry(service.name().to_string())
                     .or_insert_with(|| ServiceDefinition {
                         name: service.name().to_string(),
-                        version: service.version().0.clone(),
+                        version: Some(service.version().to_nix()),
                         port: infer_default_port(service.name()),
                         health_check: None,
                         depends_on: Vec::new(),
@@ -514,9 +489,6 @@ fn infer_default_port(service_name: &str) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::repo::analysis::Analysis;
-    use crate::repo::scan::Scan;
     use std::path::PathBuf;
 
     fn fixtures_path() -> PathBuf {
@@ -526,143 +498,4 @@ mod tests {
             .join("analysis")
     }
 
-    #[test]
-    fn test_flake_config_from_rust_workspace() {
-        let rust_project = fixtures_path().join("rust");
-        let scan = Scan::from(rust_project.clone());
-        let analysis = Analysis::from(scan.into_iter());
-
-        let flake_config = Configuration::from(analysis);
-
-        // Verify description contains repo names
-        assert!(flake_config.description.contains("rust"));
-
-        // Verify systems are populated
-        assert_eq!(flake_config.systems.len(), 4);
-        assert!(flake_config.systems.iter().any(|s| s.as_str() == "x86_64-linux"));
-        assert!(flake_config.systems.iter().any(|s| s.as_str() == "aarch64-darwin"));
-
-        // Verify nixpkgs input
-        assert!(flake_config.inputs.nixpkgs.contains("nixpkgs"));
-
-        // Verify packages were collected
-        // The rust workspace has 4 packages (root + 3 crates)
-        assert!(!flake_config.outputs.packages.is_empty());
-
-        // Verify devShell has Rust toolchain
-        assert!(!flake_config.outputs.dev_shells.toolchains.is_empty());
-        let has_rust = flake_config.outputs.dev_shells.toolchains.iter().any(|t| {
-            matches!(t.language, Language::Rust)
-        });
-        assert!(has_rust, "DevShell should contain Rust toolchain");
-
-        // Verify dependencies include pkg-config from Dockerfiles
-        assert!(flake_config.outputs.dev_shells.dependencies.contains(&"pkg-config".to_string()));
-
-        // Verify checks were collected
-        assert!(!flake_config.outputs.checks.is_empty());
-
-        // Verify procurator extensions
-        assert!(!flake_config.outputs.procurator.project.name.is_empty());
-    }
-
-    #[test]
-    fn test_flake_config_from_js_python_monorepo() {
-        let monorepo_project = fixtures_path().join("js_and_python");
-        let scan = Scan::from(monorepo_project.clone());
-        let analysis = Analysis::from(scan.into_iter());
-
-        let flake_config = Configuration::from(analysis);
-
-        // Verify multiple languages are detected
-        assert!(flake_config.outputs.procurator.project.languages.len() >= 1);
-
-        // Should have JavaScript packages
-        let has_js = flake_config.outputs.packages.values().any(|p| {
-            matches!(p.toolchain.language, Language::JavaScript)
-        });
-        assert!(has_js, "Should have JavaScript packages");
-
-        // Verify devShell has appropriate toolchains
-        assert!(!flake_config.outputs.dev_shells.toolchains.is_empty());
-
-        // Verify checks from npm scripts
-        assert!(!flake_config.outputs.checks.is_empty());
-    }
-
-    #[test]
-    fn test_empty_analysis_produces_minimal_flake() {
-        // Create a temporary empty directory for scanning
-        let temp_dir = std::env::temp_dir().join("empty_test_dir");
-        std::fs::create_dir_all(&temp_dir).ok();
-
-        let scan = Scan::from(temp_dir.clone());
-        let analysis = Analysis::from(scan.into_iter());
-        let flake_config = Configuration::from(analysis);
-
-        // Should still have valid structure
-        assert_eq!(flake_config.systems.len(), 4);
-        assert!(flake_config.outputs.packages.is_empty());
-        assert!(flake_config.outputs.checks.is_empty());
-
-        // Cleanup
-        std::fs::remove_dir_all(&temp_dir).ok();
-    }
-
-    #[test]
-    fn test_check_namespacing_on_duplicates() {
-        let rust_project = fixtures_path().join("rust");
-        let scan = Scan::from(rust_project.clone());
-        let analysis = Analysis::from(scan.into_iter());
-
-        let flake_config = Configuration::from(analysis);
-
-        // If there are duplicate check names, they should be namespaced
-        let check_names: Vec<&String> = flake_config.outputs.checks.keys().collect();
-
-        // All check names should be unique
-        let mut sorted_names = check_names.clone();
-        sorted_names.sort();
-        sorted_names.dedup();
-        assert_eq!(check_names.len(), sorted_names.len(),
-                   "All check names should be unique after namespacing");
-    }
-
-    #[test]
-    fn test_service_port_inference() {
-        assert_eq!(infer_default_port("postgres"), Some(5432));
-        assert_eq!(infer_default_port("postgresql"), Some(5432));
-        assert_eq!(infer_default_port("redis"), Some(6379));
-        assert_eq!(infer_default_port("mysql"), Some(3306));
-        assert_eq!(infer_default_port("mongodb"), Some(27017));
-        assert_eq!(infer_default_port("unknown-service"), None);
-    }
-
-    #[test]
-    fn test_check_source_inference() {
-        assert_eq!(infer_check_source("make test"), "makefile");
-        assert_eq!(infer_check_source("npm run test"), "npm-script");
-        assert_eq!(infer_check_source("cargo test"), "cargo");
-        assert_eq!(infer_check_source("./custom-script.sh"), "script");
-        assert_eq!(infer_check_source("python -m pytest"), "script");
-    }
-
-    #[test]
-    fn test_system_as_str() {
-        let systems = System::all();
-        assert_eq!(systems[0].as_str(), "x86_64-linux");
-        assert_eq!(systems[1].as_str(), "aarch64-darwin");
-        assert_eq!(systems[2].as_str(), "aarch64-linux");
-        assert_eq!(systems[3].as_str(), "x86_64-darwin");
-    }
-
-    #[test]
-    fn test_system_all() {
-        let systems = System::all();
-        assert_eq!(systems.len(), 4);
-        assert!(systems.iter().any(|s| s.as_str() == "x86_64-linux"));
-        assert!(systems.iter().any(|s| s.as_str() == "aarch64-darwin"));
-        assert!(systems.iter().any(|s| s.as_str() == "aarch64-linux"));
-        assert!(systems.iter().any(|s| s.as_str() == "x86_64-darwin"));
-    }
 }

@@ -1,36 +1,65 @@
-use std::{iter::Peekable, ops::Not, str::FromStr};
-
+use std::{iter::Peekable, str::FromStr};
 use serde::Serialize;
 
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Version(pub Option<String>);
+pub enum Version {
+    SemVer(SemVerVersion),
+    Multiple(Vec<Version>),
+    Docker(String),
+    Unknown(Option<String>),
+}
+
+impl Version {
+    //TOOD: avoid converting to String, again
+    pub fn to_nix(&self)->String {
+        match self {
+            Version::SemVer(semver) => format!("{:?}", semver),
+            Version::Docker(docker_str) => docker_str.to_owned(),
+            //TODO: wtf is this shit? AI generated buillshit to delete !!
+            Version::Multiple(versions) => {
+                let mut versions_str = String::from("[ ");
+                for v in versions {
+                    versions_str.push_str(&v.to_nix());
+                        versions_str.push(' ');
+                }
+                versions_str.push(']');
+                versions_str
+            }
+            Version::Unknown(_) => "latest".to_owned(),
+        }
+    }
+}
 
 impl From<Option<&str>> for Version {
     fn from(s: Option<&str>) -> Self {
-        Self(s.map(|s| s.to_string()))
+        Self::Unknown(s.map(|s| s.to_string()))
     }
 }
 
 impl Default for Version {
     fn default() -> Self {
-        Self(None)
+        Self::Unknown(None)
     }
 }
 
-#[derive(Debug)]
+
+//TODO: remove the clone
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PreRelease(Vec<String>);
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Build(Vec<String>);
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Core {
     major: u16,
     minor: u16,
     patch: u16,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum SemVerVersion {
     ValidCore(Core),
     PreRelease {
@@ -47,6 +76,58 @@ pub enum SemVerVersion {
         build: Build,
     },
     Unknown(String),
+}
+
+impl std::fmt::Display for SemVerVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SemVerVersion::ValidCore(core) => {
+                write!(f, "{}.{}.{}", core.major, core.minor, core.patch)
+            }
+            SemVerVersion::PreRelease { core, pre_release } => {
+                write!(
+                    f,
+                    "{}.{}.{}-{}",
+                    core.major,
+                    core.minor,
+                    core.patch,
+                    pre_release.0.join(".")
+                )
+            }
+            SemVerVersion::Build { core, build } => {
+                write!(
+                    f,
+                    "{}.{}.{}+{}",
+                    core.major,
+                    core.minor,
+                    core.patch,
+                    build.0.join(".")
+                )
+            }
+            SemVerVersion::PreReleaseAndBuild {
+                core,
+                pre_release,
+                build,
+            } => {
+                write!(
+                    f,
+                    "{}.{}.{}-{}+{}",
+                    core.major,
+                    core.minor,
+                    core.patch,
+                    pre_release.0.join("."),
+                    build.0.join(".")
+                )
+            }
+            SemVerVersion::Unknown(s) => write!(f, "{}", s),
+        }
+    }
+}
+
+impl From<String> for SemVerVersion {
+    fn from(s: String) -> Self {
+        Self::from_str(&s).unwrap_or(SemVerVersion::Unknown(s))
+    }
 }
 
 impl FromStr for SemVerVersion {
@@ -172,12 +253,6 @@ pub trait SemVerParser {
             // TODO: do we want to raise an error or ignore?
             Err(Error::TrailingCharacters)
         }
-    }
-
-    fn dot_separated_build_identifier(
-        input: &mut Peekable<std::str::Chars<'_>>,
-    ) -> Result<Build, Error> {
-        Self::dot_separated_identifiers(input).map(Build)
     }
 
     /// This can be either an alphanumeric identifier or a numeric identifier, therefore instead of using the numeric_identifier function directly,

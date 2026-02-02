@@ -547,7 +547,7 @@ fn parse_image_tag(image: &str) -> (String, Version) {
     let version = if parts.len() > 1 {
         // Extract numeric version, ignore suffixes like "-alpine"
         let version_str = parts[1].split('-').next().unwrap_or(parts[1]);
-        Version(Some(version_str.to_string()))
+        Version::Docker(version_str.to_string())
     } else {
         Version::default()
     };
@@ -749,7 +749,7 @@ mod tests {
         let result = Analysis::from(scan.into_iter());
 
         let pkg_config_dep = Dependencies(vec![
-            Dependency { name: "pkg-config".to_string(), version: Version(None) },
+            Dependency { name: "pkg-config".to_string(), version: Version::Unknown(None) },
         ]);
 
         let expected = Analysis(vec![
@@ -771,7 +771,7 @@ mod tests {
                         toolchain: Toolchain {
                             language: Language::Rust,
                             package_manager: PackageManager::Cargo,
-                            version: Version(None),
+                            version: Version::Unknown(None),
                         },
                         dependencies: pkg_config_dep.clone(),
                         services: Services(vec![]),
@@ -782,7 +782,7 @@ mod tests {
                         toolchain: Toolchain {
                             language: Language::Rust,
                             package_manager: PackageManager::Cargo,
-                            version: Version(None),
+                            version: Version::Unknown(None),
                         },
                         dependencies: pkg_config_dep.clone(),
                         services: Services(vec![]),
@@ -793,7 +793,7 @@ mod tests {
                         toolchain: Toolchain {
                             language: Language::Rust,
                             package_manager: PackageManager::Cargo,
-                            version: Version(None),
+                            version: Version::Unknown(None),
                         },
                         dependencies: pkg_config_dep.clone(),
                         services: Services(vec![]),
@@ -804,7 +804,7 @@ mod tests {
                         toolchain: Toolchain {
                             language: Language::Rust,
                             package_manager: PackageManager::Cargo,
-                            version: Version(None),
+                            version: Version::Unknown(None),
                         },
                         dependencies: pkg_config_dep.clone(),
                         services: Services(vec![]),
@@ -862,7 +862,7 @@ mod tests {
         let result = Analysis::from(scan.into_iter());
 
         let shared_deps = Dependencies(vec![
-            Dependency { name: "postgresql".to_string(), version: Version(None) },
+            Dependency { name: "postgresql".to_string(), version: Version::Unknown(None) },
         ]);
 
         let expected = Analysis(vec![RepoAnalysis {
@@ -875,11 +875,11 @@ mod tests {
                     toolchain: Toolchain {
                         language: Language::JavaScript,
                         package_manager: PackageManager::Npm,
-                        version: Version(Some(">=20.0.0".to_string())),
+                        version: Version::Unknown(Some(">=20.0.0".to_string())),
                     },
                     dependencies: shared_deps.clone(),
                     metadata: Metadata {
-                        version: Version(Some("1.5.0".to_string())),
+                        version: Version::Unknown(Some("1.5.0".to_string())),
                         description: Some("Full-stack monorepo with Node.js API and Python ML service".to_string()),
                         authors: vec!["Development Team <dev@example.com>".to_string()],
                         license: Some("MIT".to_string()),
@@ -891,11 +891,11 @@ mod tests {
                     toolchain: Toolchain {
                         language: Language::Python,
                         package_manager: PackageManager::Poetry,
-                        version: Version(Some(">=3.11".to_string())),
+                        version: Version::Unknown(Some(">=3.11".to_string())),
                     },
                     dependencies: shared_deps.clone(),
                     metadata: Metadata {
-                        version: Version(Some("0.3.2".to_string())),
+                        version: Version::Unknown(Some("0.3.2".to_string())),
                         description: Some("Machine learning service for predictions".to_string()),
                         authors: vec!["ML Team".to_string()],
                         license: Some("MIT".to_string()),
@@ -916,7 +916,7 @@ mod tests {
                     toolchain: Toolchain {
                         language: Language::JavaScript,
                         package_manager: PackageManager::Npm,
-                        version: Version(Some(">=20.0.0".to_string())),
+                        version: Version::Unknown(Some(">=20.0.0".to_string())),
                     },
                     dependencies: shared_deps.clone(),
                     services: Services(vec![]),
@@ -927,7 +927,7 @@ mod tests {
                     toolchain: Toolchain {
                         language: Language::JavaScript,
                         package_manager: PackageManager::Npm,
-                        version: Version(Some(">=20.0.0".to_string())),
+                        version: Version::Unknown(Some(">=20.0.0".to_string())),
                     },
                     dependencies: shared_deps.clone(),
                     services: Services(vec![]),
@@ -938,7 +938,7 @@ mod tests {
                     toolchain: Toolchain {
                         language: Language::JavaScript,
                         package_manager: PackageManager::Npm,
-                        version: Version(Some(">=20.0.0".to_string())),
+                        version: Version::Unknown(Some(">=20.0.0".to_string())),
                     },
                     dependencies: shared_deps.clone(),
                     services: Services(vec![]),
@@ -949,7 +949,7 @@ mod tests {
                     toolchain: Toolchain {
                         language: Language::JavaScript,
                         package_manager: PackageManager::Npm,
-                        version: Version(Some(">=20.0.0".to_string())),
+                        version: Version::Unknown(Some(">=20.0.0".to_string())),
                     },
                     dependencies: shared_deps.clone(),
                     services: Services(vec![]),
@@ -960,7 +960,7 @@ mod tests {
                     toolchain: Toolchain {
                         language: Language::JavaScript,
                         package_manager: PackageManager::Npm,
-                        version: Version(Some(">=20.0.0".to_string())),
+                        version: Version::Unknown(Some(">=20.0.0".to_string())),
                     },
                     dependencies: shared_deps.clone(),
                     services: Services(vec![]),
@@ -971,7 +971,7 @@ mod tests {
                     toolchain: Toolchain {
                         language: Language::JavaScript,
                         package_manager: PackageManager::Npm,
-                        version: Version(Some(">=20.0.0".to_string())),
+                        version: Version::Unknown(Some(">=20.0.0".to_string())),
                     },
                     dependencies: shared_deps.clone(),
                     services: Services(vec![]),
@@ -982,7 +982,7 @@ mod tests {
                     toolchain: Toolchain {
                         language: Language::JavaScript,
                         package_manager: PackageManager::Npm,
-                        version: Version(Some(">=20.0.0".to_string())),
+                        version: Version::Unknown(Some(">=20.0.0".to_string())),
                     },
                     dependencies: shared_deps.clone(),
                     services: Services(vec![]),
@@ -993,7 +993,7 @@ mod tests {
                     toolchain: Toolchain {
                         language: Language::JavaScript,
                         package_manager: PackageManager::Npm,
-                        version: Version(Some(">=20.0.0".to_string())),
+                        version: Version::Unknown(Some(">=20.0.0".to_string())),
                     },
                     dependencies: shared_deps.clone(),
                     services: Services(vec![]),

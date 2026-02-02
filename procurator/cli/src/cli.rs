@@ -42,6 +42,11 @@ impl Cli {
                 super::init::init(args.path);
             }
 
+            Commands::Agents(args) => match args.command {
+                AgentsCommands::Stop => println!("Stopping agent session"),
+                AgentsCommands::Create => println!("Creating new agent session"),
+            }
+
             Commands::Stack(stack) => match stack.command {
                 StackCommands::Up => println!("Stack up"),
                 StackCommands::Down => println!("Stack down"),
@@ -97,7 +102,10 @@ enum Commands {
     /// Version control integrations
     Vcs(VcsArgs),
 
-    /// Inspect local or remote cluster via TUI
+    /// Manage background agents
+    Agents(AgentsArgs),
+
+    /// Start an interative TUI to control and inspect agent sessions, run tests, checks vcs things and remote or local clusters
     Inspect,
 }
 
@@ -167,4 +175,26 @@ enum VcsCommands {
 
     /// Pull all repos
     Pull,
+}
+
+/// Arguments for agents namespace
+/// TODO: agents will need to be able to play with the vcs, like cloning repos, pushing and maybe performing other operations
+/// they also will need access to test or some tests should be able to run against their changes
+#[derive(Debug, Args)]
+struct AgentsArgs {
+    #[command(subcommand)]
+    command: AgentsCommands,
+}
+
+/// Agents commands
+#[derive(Debug, Subcommand)]
+enum AgentsCommands {
+    /// Stop a running session
+    Stop,
+
+    ///Create a new session
+    /// TODO: what params should go there?
+    /// By default it could try to look at the current dir and look for a flake or some config we might have, otherwise we could pass
+    /// a url to a project
+    Create,
 }

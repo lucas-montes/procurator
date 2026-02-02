@@ -28,14 +28,14 @@ impl Parser<Scan> {
 
 
 impl Parser<Analysis> {
-    pub fn build(self) -> Parser<Configuration> {
+    pub fn build<'write>(self) -> Parser<Configuration<'write>> {
         //TODO: maybe we want to pass an iterator? not sure that we want to do the merging in the iterator
         Parser(Configuration::from(self.0))
     }
 
 }
 
-impl Parser<Configuration> {
+impl Parser<Configuration<'_>> {
     pub fn generate(&self, output: &PathBuf) -> std::io::Result<()> {
         let flake = self.0.to_nix().expect("");
         std::fs::write(output, flake)

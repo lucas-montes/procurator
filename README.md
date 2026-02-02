@@ -41,51 +41,47 @@ nix build -f default.nix
 ## Notes
 You need to add yourself (or some user) to the trusted users in the nix.settings.trusted-users
 
-# TODO
+## Components
+*Project*: A set of services or repos. For a SOA (service oriented architecture) we would probably have multiple services separated in different repos
+*Repo*: A regular repo, with one or more services in it. If can be a monorepo with multiple services or a single service that can run independently.
 
-## 1. Control Plane (`procurator-control-plane`)
+The idea is to be able to map all the services in a large project together. Get as much information automatically
 
-- [ ] Define Cap'n Proto schema for worker RPC
-- [ ] Implement job queue and scheduling
-- [ ] Implement worker registry and health tracking
-- [ ] Implement pull-based work assignment (`GetWork()`)
-- [ ] Implement status update handling (`UpdateStatus()`)
-- [ ] Implement deployment state machine (rolling, blue-green, canary)
-- [ ] Persist state to database (PostgreSQL)
-- [ ] Implement leader election for HA
-- [ ] Push notifications to workers on deployments/config changes
+## TODO
 
-## 2. Worker (`procurator-worker`)
+### Documentation
+An agent or some AI bullshit that reads everything and writes and keeps documentation up to date.
 
-- [x] Basic builder with state machine (Initial → Built → Tested → StateSaved)
-- [x] Nix flake building and testing
-- [x] Runtime modules structure (application, controller, executable, oci)
-- [ ] Implement Cap'n Proto RPC client
-- [ ] Implement pull loop (`GetWork()` polling with backoff)
-- [ ] Integrate builder with RPC to execute jobs
-- [ ] Implement systemd service executor for deployments
-- [ ] Implement cgroup resource limits
-- [ ] Collect and push metrics to observability
-- [ ] Implement health checks (HTTP/TCP/exec)
-- [ ] Stream logs to observability service
-- [ ] Heartbeat mechanism to signal liveness
+### CLI
+A cli to manage all this crap
+Probably a nice tui to see things and play with them
+- [ ] Set up the config from autonix
+- [ ] Spin up agents
+- [ ] Have a Procfile like service to run everything needed and control it easily.
 
-## 3. CI/CD Service (`procurator-ci-service`)
+### Autonix
+Detec config, services and everything needed to run repos and projects.
 
-- [x] Basic queue system (BuildQueue with SQLite)
-- [x] Build status tracking (Queued, Running, Success, Failed)
-- [x] Worker processing builds and storing logs
-- [x] Git hook integration (post-receive hook)
-- [x] Web UI (index.html with build list)
-- [x] Build events API
-- [ ] Parse `procurator.ci` from flakes (extend nix_parser)
-- [ ] Queue jobs to control plane instead of local processing
-- [ ] Implement deployment triggering on successful builds
-- [ ] Implement retry logic with exponential backoff
-- [ ] Report status back to Git (commit checks)
-- [ ] Improve CI UI logic and error handling
+### Control plane
+for :
+- Agents
+- Actual servers running code
+Maybe those could be the exact same thing?
 
-## 4. Cache Service
+### Workers
+The actual machines where the code or agents are running.
+They could be a microVm or systemd
+MicroVm is probably the best idea for starters so we can use it with agents.
+The workers would be created from a flake
+They should publish metrics
+
+### CI/CD Service
+Some pipeline to run tests in the code itself, linting validations and things like so.
+It will reuse the build from the build service/registry.
+If requested it should deploy things to staging
+
+### Build/cache registry
+It listents to build sent by the users local build cache
 
 - [ ] Implement Nix binary cache protocol (`.narinfo`, `.nar`)
 - [ ] Implement upload endpoint for users/CI
@@ -94,7 +90,7 @@ You need to add yourself (or some user) to the trusted users in the nix.settings
 - [ ] Add metrics (hit/miss ratio, storage usage)
 - [ ] Support S3 backend (optional)
 
-## 5. Secret Manager
+### Secret Manager
 
 - [ ] Implement envelope encryption (DEK + KEK)
 - [ ] Create/update/delete secret endpoints
@@ -103,7 +99,7 @@ You need to add yourself (or some user) to the trusted users in the nix.settings
 - [ ] Audit log secret access
 - [ ] Support secret rotation
 
-## 6. Git Service / Forge
+### Git Service / Forge
 
 - [x] Bare repository storage (managed via RepoManager)
 - [x] Post-receive hook dispatcher embedded
@@ -111,112 +107,57 @@ You need to add yourself (or some user) to the trusted users in the nix.settings
 - [ ] Improve repository access control
 - [ ] Add branch protection rules
 
-## 7. Observability Service
-
-- [ ] Receive metrics from workers
-- [ ] Store time-series data (WAL-based or InfluxDB)
-- [ ] Query API for metrics
-- [ ] Aggregate logs from workers
-- [ ] Track service uptime
-- [ ] (Phase 2) Alerting system
-
-## 8. Web UI
-
-- [ ] Service status dashboard
-- [ ] Deployment management UI
-- [x] CI pipeline visualization (basic)
-- [ ] Improve code diff visualization
-- [ ] Logs viewer with filtering
-- [ ] Metrics/uptime graphs
-
-## 9. Flake Schema & CLI
-
-- [ ] Define `procurator.services.*` schema (extend infrastructure.nix model)
-- [ ] Define `procurator.ci.*` schema
-- [ ] Create `procurator` CLI tool
-  - [x] Basic structure with commands
-  - [x] Apply command scaffolding
-  - [ ] `procurator deploy`
-  - [ ] `procurator status`
-  - [ ] `procurator logs`
-  - [ ] `procurator secrets`
-  - [x] Monitor command with TUI (interactive app)
-
-## 10. NixOS Integration
-
-- [ ] NixOS module for control plane
-- [ ] NixOS module for worker
-- [ ] NixOS module for cache service
-- [ ] Deployment documentation
-
-## 11. Security & Hardening
-
-- [ ] mTLS setup (CA, cert rotation)
-- [ ] RBAC (admin, developer, viewer roles)
-- [ ] API authentication (tokens)
-- [ ] Audit logging
 
 
-## Notes
-Probably the infra stuff should be separated from the apps things.
 
-┌─────────────────────────────────────────────────────────────────┐
-│                         User's Machine                          │
-│  ┌──────────────┐        ┌─────────────────┐                    │
-│  │ Nix Build    │───────▶│  Cache Client   │                    │
-│  │ (local dev)  │        │  (sync daemon)  │                    │
-│  └──────────────┘        └────────┬────────┘                    │
-└───────────────────────────────────┼─────────────────────────────┘
-                                    │ push + cache upload
-                                    ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Procurator Platform                        │
-│                                                                 │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │  1. Git Service                                          │   │
-│  │     - Git hosting + webhooks                             │   │
-│  │     - Trigger CI on push                                 │   │
-│  └──────────────┬───────────────────────────────────────────┘   │
-│                 │                                               │
-│  ┌──────────────▼───────────────────────────────────────────┐   │
-│  │  2. CI/CD Service                                        │   │
-│  │     - Parse procurator.* outputs                         │   │
-│  │     - Queue jobs (flake check, build)                    │   │
-│  │     - Deployment decisions and testing                   │   │
-│  └──────────────┬───────────────────────────────────────────┘   │
-│                 │                                               │
-│  ┌──────────────▼───────────────────────────────────────────┐   │
-│  │  3. Cache Service (nix binary cache)                     │   │
-│  │     - Store/serve .narinfo + .nar files                  │   │
-│  │     - Content-addressed storage                          │   │
-│  │     - Serve to: CI, workers, users                       │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                 │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │  4. Control Plane                                        │   │
-│  │     - Scheduling (job → worker)                          │   │
-│  │     - Resource management                                │   │
-│  │     - Health tracking                                    │   │
-│  └──────────────┬───────────────────────────────────────────┘   │
-│                 │                                               │
-│  ┌──────────────▼───────────────────────────────────────────┐   │
-│  │  5. Workers (N nodes)                                    │   │
-│  │     - Execute builds (with cache access)                 │   │
-│  │     - Run services (systemd + cgroups)                   │   │
-│  │     - Collect metrics → Observability                    │   │
-│  └──────────────┬───────────────────────────────────────────┘   │
-│                 │                                               │
-│  ┌──────────────▼───────────────────────────────────────────┐   │
-│  │  6. Observability Service                                │   │
-│  │     - Time-series metrics storage (custom)               │   │
-│  │     - Logs aggregation                                   │   │
-│  │     - Uptime monitoring                                  │   │
-│  │     - Dashboard UI                                       │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                 │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │  7. Secret Manager                                       │   │
-│  │     - Encrypted key-value store                          │   │
-│  │     - Injection to workers at runtime                    │   │
-│  └──────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
+
+Looking at your TODO list and codebase, I have several questions about the control plane and worker orchestration design:
+
+Control Plane Architecture
+Job Assignment Model: You mentioned pull-based work assignment (GetWork()). Should workers poll the control plane, or would you prefer a hybrid push/pull model where the control plane can also push urgent jobs?
+
+State Management: You have a State enum with Infrastructure and Services variants. How do you envision the relationship between:
+
+The declarative Nix flake config (from config.nix)
+The runtime state in the control plane
+The actual deployed state on workers?
+Worker Types: You mention workers can run:
+
+Build jobs (CI)
+Services (systemd/cgroups)
+Agents (AI/automation)
+Should these be different worker types with capabilities, or should any worker be able to run anything?
+### Agents
+Probably reuse the control plane and workers to run agents that can use projects information.
+Should they run locally and remotely? Probably yes
+
+
+Agent System
+Agent Lifecycle: When you say "agents that can use projects information" - are agents:
+
+Long-running services that respond to events?
+Short-lived tasks that analyze/modify things?
+Both?
+Agent Deployment: Should agents:
+
+Be defined in the same procurator.services.* flake schema?
+Have access to the same infrastructure as regular services?
+Run on dedicated worker pools?
+Control Plane vs Agents: Should the control plane:
+
+Treat agents as just another type of service to orchestrate?
+Have a separate agent management subsystem?
+Let agents register themselves and communicate peer-to-peer?
+Orchestration Questions
+Scheduling: For the scheduler you have stubbed out - what constraints matter most?
+
+Resource availability (CPU/memory from machine definitions)?
+Worker capabilities/roles (from the roles field)?
+Data locality (build cache, git repos)?
+Cost optimization?
+Communication: You're using Cap'n Proto RPC. Should:
+
+Control plane → worker be purely RPC calls?
+Workers maintain persistent connections for streaming logs/metrics?
+Use a message queue for async events?
+What's your intuition on these tradeoffs?
