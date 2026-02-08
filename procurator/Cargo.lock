@@ -553,7 +553,6 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "uuid",
- "worker",
 ]
 
 [[package]]
@@ -1904,12 +1903,15 @@ dependencies = [
  "capnp",
  "capnp-rpc",
  "control_plane",
+ "serde",
+ "serde_json",
  "tokio",
  "tokio-util",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
  "uuid",
+ "worker",
 ]
 
 [[package]]
@@ -3587,6 +3589,7 @@ dependencies = [
  "capnp-rpc",
  "cgroups-rs",
  "commands",
+ "futures",
  "tokio",
  "tokio-util",
  "tracing",

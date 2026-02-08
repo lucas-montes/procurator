@@ -4,9 +4,10 @@
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-25.05";
     flake-utils.url = "github:numtide/flake-utils";
+    procurator.url = "../procurator/nix";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, procurator, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system: let
       pkgs = import nixpkgs { inherit system; overlays = []; };
       node = pkgs.nodejs-20_x;
@@ -16,6 +17,16 @@
       };
     in
     {
+      orchestrator =
+        procurator.lib.evalCluster {
+          clusterModule = {
+            cluster.vms.web = {
+              replicas = 2;
+              labels = [ "frontend" ];
+            };
+          };
+        };
+
       packages = {
         web = pkgs.stdenv.mkDerivation {
           pname = "procurator-web";

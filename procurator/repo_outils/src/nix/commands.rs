@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{ops::Not, path::Path, time::SystemTime};
 use tokio::{io::BufReader, process::Command};
 
@@ -96,6 +96,82 @@ async fn run_command<H: Parser>(mut command: Command) -> Result<H::Output> {
 #[derive(Debug, Serialize)]
 pub struct CheckResult {
     summary: Summary,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VmMetadata {
+    pub name: String,
+    pub drv_path: String,
+    pub out_path: String,
+    pub content_hash: String,
+    pub cpu: f64,
+    pub memory_bytes: u64,
+    pub labels: Vec<String>,
+    pub replicas: u64,
+}
+
+/// Evaluate cluster metadata from flake output (JSON)
+pub async fn eval_cluster_metadata(
+    flake_path: impl AsRef<Path>,
+    attr: &str,
+) -> Result<std::collections::HashMap<String, VmMetadata>> {
+    let path = flake_path.as_ref();
+    validate_path(path)?;
+
+    let mut command = Command::new("nix");
+    command
+        .arg("eval")
+        .arg("--json")
+        .arg(format!("{}#{}", path.display(), attr));
+
+    let output = command.output().await?;
+    if output.status.success().not() {
+        return Err(Error::ProcessFailed {
+            exit_code: output.status.code(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        });
+    }
+
+    let parsed: std::collections::HashMap<String, VmMetadata> =
+        serde_json::from_slice(&output.stdout)?;
+    Ok(parsed)
+}
+
+/// Build cluster images (no link) and return output paths
+pub async fn build_cluster_images(
+    flake_path: impl AsRef<Path>,
+    attr: &str,
+) -> Result<Vec<String>> {
+    let path = flake_path.as_ref();
+    validate_path(path)?;
+
+    let mut command = Command::new("nix");
+    command
+        .arg("build")
+        .arg("--no-link")
+        .arg("--print-out-paths")
+        .arg(format!("{}#{}", path.display(), attr));
+
+    let output = command.output().await?;
+    if output.status.success().not() {
+        return Err(Error::ProcessFailed {
+            exit_code: output.status.code(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        });
+    }
+
+    let paths = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+
+    if paths.is_empty() {
+        return Err(Error::BuildOutputMissing);
+    }
+
+    Ok(paths)
 }
 
 /// Run `nix flake check` - returns detailed summary and success status

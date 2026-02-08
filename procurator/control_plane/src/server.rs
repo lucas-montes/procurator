@@ -1,26 +1,35 @@
 //! Central point of communication. Talks to workers and receives requests from the cli.
 use std::net::SocketAddr;
 
-use capnp_rpc::{RpcSystem, pry, rpc_twoparty_capnp, twoparty};
-use commands::control_plane;
+use capnp_rpc::{RpcSystem, rpc_twoparty_capnp, twoparty};
 use futures::AsyncReadExt;
 
-use crate::dto::{NodeMessage, NodeMessenger};
+use crate::dto::NodeMessenger;
 
 pub struct Server {
-    node_channel: NodeMessenger,
+    messenger: NodeMessenger,
 }
 
 impl Server {
-    pub fn new(node_channel: impl Into<NodeMessenger>) -> Self {
+    pub fn new(messenger: impl Into<NodeMessenger>) -> Self {
         Server {
-            node_channel: node_channel.into(),
+            messenger: messenger.into(),
         }
     }
 
     pub async fn serve(self, addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         let listener = tokio::net::TcpListener::bind(&addr).await?;
-        let client: control_plane::Client = capnp_rpc::new_client(self);
+        // Server implements all three interfaces directly
+        let publisher_client: commands::desired_state_publisher::Client = capnp_rpc::new_client(PublisherImpl {
+            messenger: self.messenger.clone(),
+        });
+        let master_client: commands::master_control::Client = capnp_rpc::new_client(MasterControlImpl {
+            messenger: self.messenger.clone(),
+        });
+        let worker_client: commands::worker_control::Client = capnp_rpc::new_client(WorkerControlImpl {
+            messenger: self.messenger.clone(),
+        });
+
         loop {
             let (stream, _) = listener.accept().await?;
             stream.set_nodelay(true)?;
@@ -33,49 +42,92 @@ impl Server {
                 Default::default(),
             );
 
-            let rpc_system = RpcSystem::new(Box::new(network), Some(client.clone().client));
+            // TODO: Determine which client to provide based on connection context
+            // For now, defaulting to master_control for CLI connections
+            let rpc_system = RpcSystem::new(Box::new(network), Some(master_client.clone().client));
 
             tokio::task::spawn_local(rpc_system);
         }
     }
 }
 
-impl control_plane::Server for Server {
-    /// Handles the `apply` command, which applies changes to a file
-    fn apply(
+// ============================================================================
+// Interface Implementations
+// ============================================================================
+
+struct PublisherImpl {
+    messenger: NodeMessenger,
+}
+
+impl commands::desired_state_publisher::Server for PublisherImpl {
+    fn publish_desired_state(
         &mut self,
-        params: control_plane::ApplyParams,
-        mut results: control_plane::ApplyResults,
+        _params: commands::desired_state_publisher::PublishDesiredStateParams,
+        _results: commands::desired_state_publisher::PublishDesiredStateResults,
     ) -> capnp::capability::Promise<(), capnp::Error> {
-        let file = pry!(pry!(pry!(params.get()).get_file()).to_string());
-        let name = pry!(pry!(pry!(params.get()).get_name()).to_string());
-        let channel = self.node_channel.clone();
-        capnp::capability::Promise::from_future(async move {
-            let mut tx = channel.apply(file, name).await;
-            match tx.try_recv() {
-                Ok(msg) => {
-                    let mut resp = results.get().init_response();
-                    match msg {
-                        Ok(_) => {
-                            resp.set_ok(());
-                        }
-                        Err(err) => {
-                            resp.set_err(err);
-                        }
-                    }
-                    Ok(())
-                }
-                Err(err) => Err(capnp::Error::failed("wrong".into())),
-            }
-        })
+        // TODO: Use messenger to send to Node
+        capnp::capability::Promise::err(capnp::Error::unimplemented("not implemented".into()))
+    }
+}
+
+// ============================================================================
+// Sub-server implementations
+// ============================================================================
+
+
+struct MasterControlImpl {
+    messenger: NodeMessenger,
+}
+
+impl commands::master_control::Server for MasterControlImpl {
+    fn get_cluster_status(
+        &mut self,
+        _params: commands::master_control::GetClusterStatusParams,
+        _results: commands::master_control::GetClusterStatusResults,
+    ) -> capnp::capability::Promise<(), capnp::Error> {
+        // TODO: Use messenger to send to Node
+        capnp::capability::Promise::err(capnp::Error::unimplemented("not implemented".into()))
     }
 
-    //TODO: I should look into the stream feature
-    fn monitor(
+    fn get_worker(
         &mut self,
-        params: control_plane::MonitorParams,
-        mut results: control_plane::MonitorResults,
+        _params: commands::master_control::GetWorkerParams,
+        _results: commands::master_control::GetWorkerResults,
     ) -> capnp::capability::Promise<(), capnp::Error> {
-        capnp::capability::Promise::ok(())
+        // TODO: Use messenger to send to Node
+        capnp::capability::Promise::err(capnp::Error::unimplemented("not implemented".into()))
+    }
+
+    fn get_vm(
+        &mut self,
+        _params: commands::master_control::GetVmParams,
+        _results: commands::master_control::GetVmResults,
+    ) -> capnp::capability::Promise<(), capnp::Error> {
+        // TODO: Use messenger to send to Node
+        capnp::capability::Promise::err(capnp::Error::unimplemented("not implemented".into()))
+    }
+}
+
+struct WorkerControlImpl {
+    messenger: NodeMessenger,
+}
+
+impl commands::worker_control::Server for WorkerControlImpl {
+    fn get_assignment(
+        &mut self,
+        _params: commands::worker_control::GetAssignmentParams,
+        _results: commands::worker_control::GetAssignmentResults,
+    ) -> capnp::capability::Promise<(), capnp::Error> {
+        // TODO: Use messenger to send to Node
+        capnp::capability::Promise::err(capnp::Error::unimplemented("not implemented".into()))
+    }
+
+    fn push_observed_state(
+        &mut self,
+        _params: commands::worker_control::PushObservedStateParams,
+        _results: commands::worker_control::PushObservedStateResults,
+    ) -> capnp::capability::Promise<(), capnp::Error> {
+        // TODO: Use messenger to send to Node
+        capnp::capability::Promise::err(capnp::Error::unimplemented("not implemented".into()))
     }
 }

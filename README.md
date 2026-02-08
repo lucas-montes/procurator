@@ -41,6 +41,8 @@ nix build -f default.nix
 ## Notes
 You need to add yourself (or some user) to the trusted users in the nix.settings.trusted-users
 
+We don't need the cli to have an apply command, let's use gitops practices to have the repohub, or some other service to run the nix commands to make derivations and all the shenanigans so we can send paths and hashes to the control-plane
+
 ## Components
 *Project*: A set of services or repos. For a SOA (service oriented architecture) we would probably have multiple services separated in different repos
 *Repo*: A regular repo, with one or more services in it. If can be a monorepo with multiple services or a single service that can run independently.
@@ -67,6 +69,7 @@ for :
 - Agents
 - Actual servers running code
 Maybe those could be the exact same thing?
+yeah, it would be similar to the testing thing. A master control plane that controls machines, then another control plane that controls logic to retry and things like that
 
 ### Workers
 The actual machines where the code or agents are running.
@@ -109,55 +112,48 @@ It listents to build sent by the users local build cache
 
 
 
-
-
-Looking at your TODO list and codebase, I have several questions about the control plane and worker orchestration design:
-
-Control Plane Architecture
-Job Assignment Model: You mentioned pull-based work assignment (GetWork()). Should workers poll the control plane, or would you prefer a hybrid push/pull model where the control plane can also push urgent jobs?
-
-State Management: You have a State enum with Infrastructure and Services variants. How do you envision the relationship between:
-
-The declarative Nix flake config (from config.nix)
-The runtime state in the control plane
-The actual deployed state on workers?
-Worker Types: You mention workers can run:
-
-Build jobs (CI)
-Services (systemd/cgroups)
-Agents (AI/automation)
-Should these be different worker types with capabilities, or should any worker be able to run anything?
-### Agents
-Probably reuse the control plane and workers to run agents that can use projects information.
-Should they run locally and remotely? Probably yes
-
-
-Agent System
-Agent Lifecycle: When you say "agents that can use projects information" - are agents:
-
-Long-running services that respond to events?
-Short-lived tasks that analyze/modify things?
-Both?
-Agent Deployment: Should agents:
-
-Be defined in the same procurator.services.* flake schema?
-Have access to the same infrastructure as regular services?
-Run on dedicated worker pools?
-Control Plane vs Agents: Should the control plane:
-
-Treat agents as just another type of service to orchestrate?
-Have a separate agent management subsystem?
-Let agents register themselves and communicate peer-to-peer?
-Orchestration Questions
-Scheduling: For the scheduler you have stubbed out - what constraints matter most?
-
-Resource availability (CPU/memory from machine definitions)?
-Worker capabilities/roles (from the roles field)?
-Data locality (build cache, git repos)?
-Cost optimization?
-Communication: You're using Cap'n Proto RPC. Should:
-
-Control plane → worker be purely RPC calls?
-Workers maintain persistent connections for streaming logs/metrics?
-Use a message queue for async events?
-What's your intuition on these tradeoffs?
+## Diagram
+┌─────────────────────────────────────────────────┐
+│                    USER                         │
+│                                                 │
+│    CLI  /  TUI  /  Web Interface                │
+└──────────────────┬──────────────────────────────┘
+                   │
+                   │ RPC (Cap'n Proto)
+                   │
+┌──────────────────▼───────────────────────────────┐
+│              MASTER NODE                         │
+│                                                  │
+│  ┌────────────────────────────────────────────┐  │
+│  │         Control Plane (Master)             │  │
+│  │                                            │  │
+│  │  - API Server (user requests)              │  │
+│  │  - Scheduler (decide which worker)         │  │
+│  │  - Global state (all VMs, workers)         │  │
+│  │  - Worker registry                         │  │
+│  └────────────────────────────────────────────┘  │
+└──────────────────┬───────────────────────────────┘
+                   │
+                   │ RPC commands
+          ┌────────┴─────────┐
+          │                  │
+    ┌─────▼──────┐     ┌─────▼──────┐
+    │  WORKER 1  │     │  WORKER 2  │
+    │            │     │            │
+    │  ┌──────┐  │     │  ┌──────┐  │
+    │  │ CP   │  │     │  │ CP   │  │  Control Plane (Worker Agent)
+    │  │Agent │  │     │  │Agent │  │  - Receive commands from master
+    │  └───┬──┘  │     │  └───┬──┘  │  - Manage local cloud-hypervisor
+    │      │     │     │      │     │  - Report status/metrics
+    │  ┌───▼──┐  │     │  ┌───▼──┐  │  - Local state
+    │  │cloud-│  │     │  │cloud-│  │
+    │  │hyper-│  │     │  │hyper-│  │
+    │  │visor │  │     │  │visor │  │
+    │  └───┬──┘  │     │  └───┬──┘  │
+    │      │     │     │      │     │
+    │   ┌──▼──┐  │     │   ┌──▼──┐  │
+    │   │ VM  │  │     │   │ VM  │  │
+    │   │ VM  │  │     │   │ VM  │  │
+    │   │ VM  │  │     │   │ VM  │  │
+    │   └─────┘  │     │   └─────┘  │
+    └────────────┘     └────────────┘

@@ -49,9 +49,9 @@
         cache = mkRustPackage "cache";
 
         ci_service = mkRustPackage "ci_service";
+        repohub = mkRustPackage "repohub";
 
-        worker = mkRustPackage "worker";
-        control_plane = mkRustPackage "control_plane";
+        procurator = mkRustPackage "procurator";
 
         cli = mkRustPackage "cli";
 
@@ -61,7 +61,7 @@
 
       in {
         packages = {
-          inherit cache worker ci_service control_plane cli;
+          inherit cache ci_service procurator cli;
         };
 
         devShells.default = with pkgs;
