@@ -1,5 +1,3 @@
-// mod client;
-// mod interactive;
 mod cli;
 mod init;
 

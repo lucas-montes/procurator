@@ -50,12 +50,11 @@ async fn main() {
 
     match cfg.role {
         Role::Master { peers_addr } => {
-            tracing::info!("Starting in Master mode");
+            tracing::info!(?peers_addr, "Starting in Master mode");
             control_plane::main(cfg.hostname, cfg.addr, peers_addr).await;
         }
         Role::Worker { master_addr } => {
-            tracing::info!("Starting in Worker mode");
-            worker::main(cfg.hostname, cfg.addr, master_addr).await;
+            tracing::info!(?master_addr, "Starting in Worker mode");
         }
     }
 }
