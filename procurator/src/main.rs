@@ -55,6 +55,7 @@ async fn main() {
         }
         Role::Worker { master_addr } => {
             tracing::info!(?master_addr, "Starting in Worker mode");
+            worker::main(cfg.hostname, cfg.addr, master_addr).await;
         }
     }
 }

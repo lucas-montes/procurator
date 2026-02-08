@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 
 use capnp_rpc::{RpcSystem, rpc_twoparty_capnp, twoparty};
 use futures::AsyncReadExt;
-use tracing::{info, debug, instrument};
+use tracing::{debug, info, instrument};
 
 use crate::dto::NodeMessenger;
 
@@ -56,12 +56,12 @@ impl commands::master_capnp::master::Server for Server {
     ) -> ::capnp::capability::Promise<(), ::capnp::Error> {
         match params.get() {
             Ok(p) => {
-                let _commit = p.get_commit();
-                let _generation = p.get_generation();
-                let _intent_hash = p.get_intent_hash();
+                let commit = p.get_commit();
+                let generation = p.get_generation();
+                let intent_hash = p.get_intent_hash();
                 let _vm_specs = p.get_vm_specs();
 
-                info!(generation = _generation, commit = ?_commit, intent_hash = ?_intent_hash, "Publish request");
+                info!(generation, ?commit, ?intent_hash, "Publish request");
 
                 // TODO: Implement actual publishing logic
                 if let Ok(result_builder) = results.get().get_result() {
@@ -81,10 +81,10 @@ impl commands::master_capnp::master::Server for Server {
     ) -> ::capnp::capability::Promise<(), ::capnp::Error> {
         match params.get() {
             Ok(p) => {
-                let _worker_id = p.get_worker_id();
-                let _last_seen_generation = p.get_last_seen_generation();
+                let worker_id = p.get_worker_id();
+                let last_seen_generation = p.get_last_seen_generation();
 
-                debug!(worker_id = ?_worker_id, last_seen_generation = _last_seen_generation, "Getting assignment");
+                debug!(?worker_id, last_seen_generation, "Getting assignment");
 
                 // TODO: Implement assignment retrieval
                 if let Ok(mut result_builder) = results.get().get_result() {
@@ -104,12 +104,12 @@ impl commands::master_capnp::master::Server for Server {
     ) -> ::capnp::capability::Promise<(), ::capnp::Error> {
         match params.get() {
             Ok(p) => {
-                let _worker_id = p.get_worker_id();
-                let _observed_generation = p.get_observed_generation();
+                let worker_id = p.get_worker_id();
+                let observed_generation = p.get_observed_generation();
                 let _running_vms = p.get_running_vms();
                 let _metrics = p.get_metrics();
 
-                debug!(worker_id = ?_worker_id, observed_generation = _observed_generation, "Worker pushing data");
+                debug!(?worker_id, observed_generation, "Worker pushing data");
 
                 // TODO: Implement state observation logic
                 if let Ok(result_builder) = results.get().get_result() {
@@ -139,8 +139,8 @@ impl commands::master_capnp::master::Server for Server {
     ) -> ::capnp::capability::Promise<(), ::capnp::Error> {
         match params.get() {
             Ok(p) => {
-                let _worker_id = p.get_worker_id();
-                debug!(worker_id = ?_worker_id, "Getting worker capability");
+                let worker_id = p.get_worker_id();
+                debug!(?worker_id, "Getting worker capability");
 
                 // TODO: Lookup worker capability from registered workers
                 // For now, this is unimplemented - need to store worker capabilities when they connect
@@ -158,8 +158,8 @@ impl commands::master_capnp::master::Server for Server {
     ) -> ::capnp::capability::Promise<(), ::capnp::Error> {
         match params.get() {
             Ok(p) => {
-                let _vm_id = p.get_vm_id();
-                debug!(vm_id = ?_vm_id, "Getting VM capability");
+                let vm_id = p.get_vm_id();
+                debug!(?vm_id, "Getting VM capability");
 
                 // TODO: Lookup VM capability from registered workers
                 // For now, this is unimplemented - need to store worker/vm capabilities

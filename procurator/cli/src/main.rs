@@ -1,5 +1,6 @@
 mod cli;
 mod init;
+mod testing;
 
 use cli::Cli;
 

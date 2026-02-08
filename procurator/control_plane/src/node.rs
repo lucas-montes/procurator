@@ -22,11 +22,10 @@ impl Node {
 
     /// Main loop that processes messages from the server and sends command to the workers and orchestrates tasks
     pub async fn run(mut self) {
+        tracing::info!(peers=?self.peers_addr, "Node started with peers");
         while let Some(message) = self.node_channel.recv().await {
             match message.event() {
-                NodeEvent::Apply { file, name } => {
-                    // let _ = self.worker_channel.send(ControlPlaneMessage::Create).await;
-                }
+                NodeEvent::Apply => todo!(),
             }
         }
     }

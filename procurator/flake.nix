@@ -59,6 +59,10 @@
           exec ${pkgs.cargo}/bin/cargo run --manifest-path="$CARGO_MANIFEST_DIR/procurator/Cargo.toml" -p cli -- "$@"
         '';
 
+        pcr-test = pkgs.writeShellScriptBin "pcr-test" ''
+          exec ${pkgs.cargo}/bin/cargo run --manifest-path="$CARGO_MANIFEST_DIR/procurator/Cargo.toml" -p cli --bin pcr-test -- "$@"
+        '';
+
       in {
         packages = {
           inherit cache ci_service procurator cli;
@@ -74,6 +78,7 @@
               capnproto
 
               pcr-dev
+              pcr-test
             ];
 
             shellHook = ''
