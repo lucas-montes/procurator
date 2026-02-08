@@ -3,9 +3,11 @@ use std::net::SocketAddr;
 
 use capnp_rpc::{RpcSystem, rpc_twoparty_capnp, twoparty};
 use futures::AsyncReadExt;
+use tracing::{info, debug, instrument};
 
 use crate::dto::NodeMessenger;
 
+#[derive(Clone)]
 pub struct Server {
     messenger: NodeMessenger,
 }
@@ -17,21 +19,16 @@ impl Server {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn serve(self, addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+        info!(addr = %addr, "Starting server");
         let listener = tokio::net::TcpListener::bind(&addr).await?;
-        // Server implements all three interfaces directly
-        let publisher_client: commands::desired_state_publisher::Client = capnp_rpc::new_client(PublisherImpl {
-            messenger: self.messenger.clone(),
-        });
-        let master_client: commands::master_control::Client = capnp_rpc::new_client(MasterControlImpl {
-            messenger: self.messenger.clone(),
-        });
-        let worker_client: commands::worker_control::Client = capnp_rpc::new_client(WorkerControlImpl {
-            messenger: self.messenger.clone(),
-        });
+
+        let client: commands::master_capnp::master::Client = capnp_rpc::new_client(self);
 
         loop {
-            let (stream, _) = listener.accept().await?;
+            let (stream, peer_addr) = listener.accept().await?;
+            debug!(peer_addr = %peer_addr, "New connection");
             stream.set_nodelay(true)?;
             let (reader, writer) =
                 tokio_util::compat::TokioAsyncReadCompatExt::compat(stream).split();
@@ -44,90 +41,132 @@ impl Server {
 
             // TODO: Determine which client to provide based on connection context
             // For now, defaulting to master_control for CLI connections
-            let rpc_system = RpcSystem::new(Box::new(network), Some(master_client.clone().client));
+            let rpc_system = RpcSystem::new(Box::new(network), Some(client.clone().client));
 
             tokio::task::spawn_local(rpc_system);
         }
     }
 }
 
-// ============================================================================
-// Interface Implementations
-// ============================================================================
-
-struct PublisherImpl {
-    messenger: NodeMessenger,
-}
-
-impl commands::desired_state_publisher::Server for PublisherImpl {
-    fn publish_desired_state(
+impl commands::master_capnp::master::Server for Server {
+    fn publish_state(
         &mut self,
-        _params: commands::desired_state_publisher::PublishDesiredStateParams,
-        _results: commands::desired_state_publisher::PublishDesiredStateResults,
-    ) -> capnp::capability::Promise<(), capnp::Error> {
-        // TODO: Use messenger to send to Node
-        capnp::capability::Promise::err(capnp::Error::unimplemented("not implemented".into()))
+        params: commands::master_capnp::master::PublishStateParams,
+        mut results: commands::master_capnp::master::PublishStateResults,
+    ) -> ::capnp::capability::Promise<(), ::capnp::Error> {
+        match params.get() {
+            Ok(p) => {
+                let _commit = p.get_commit();
+                let _generation = p.get_generation();
+                let _intent_hash = p.get_intent_hash();
+                let _vm_specs = p.get_vm_specs();
+
+                info!(generation = _generation, commit = ?_commit, intent_hash = ?_intent_hash, "Publish request");
+
+                // TODO: Implement actual publishing logic
+                if let Ok(result_builder) = results.get().get_result() {
+                    let _ = result_builder.init_ok();
+                }
+
+                ::capnp::capability::Promise::ok(())
+            }
+            Err(e) => ::capnp::capability::Promise::err(e),
+        }
     }
-}
 
-// ============================================================================
-// Sub-server implementations
-// ============================================================================
+    fn get_assignment(
+        &mut self,
+        params: commands::master_capnp::master::GetAssignmentParams,
+        mut results: commands::master_capnp::master::GetAssignmentResults,
+    ) -> ::capnp::capability::Promise<(), ::capnp::Error> {
+        match params.get() {
+            Ok(p) => {
+                let _worker_id = p.get_worker_id();
+                let _last_seen_generation = p.get_last_seen_generation();
 
+                debug!(worker_id = ?_worker_id, last_seen_generation = _last_seen_generation, "Getting assignment");
 
-struct MasterControlImpl {
-    messenger: NodeMessenger,
-}
+                // TODO: Implement assignment retrieval
+                if let Ok(mut result_builder) = results.get().get_result() {
+                    let _ = result_builder.set_err("not implemented");
+                }
 
-impl commands::master_control::Server for MasterControlImpl {
+                ::capnp::capability::Promise::ok(())
+            }
+            Err(e) => ::capnp::capability::Promise::err(e),
+        }
+    }
+
+    fn push_data(
+        &mut self,
+        params: commands::master_capnp::master::PushDataParams,
+        mut results: commands::master_capnp::master::PushDataResults,
+    ) -> ::capnp::capability::Promise<(), ::capnp::Error> {
+        match params.get() {
+            Ok(p) => {
+                let _worker_id = p.get_worker_id();
+                let _observed_generation = p.get_observed_generation();
+                let _running_vms = p.get_running_vms();
+                let _metrics = p.get_metrics();
+
+                debug!(worker_id = ?_worker_id, observed_generation = _observed_generation, "Worker pushing data");
+
+                // TODO: Implement state observation logic
+                if let Ok(result_builder) = results.get().get_result() {
+                    let _ = result_builder.init_ok();
+                }
+
+                ::capnp::capability::Promise::ok(())
+            }
+            Err(e) => ::capnp::capability::Promise::err(e),
+        }
+    }
+
     fn get_cluster_status(
         &mut self,
-        _params: commands::master_control::GetClusterStatusParams,
-        _results: commands::master_control::GetClusterStatusResults,
-    ) -> capnp::capability::Promise<(), capnp::Error> {
-        // TODO: Use messenger to send to Node
-        capnp::capability::Promise::err(capnp::Error::unimplemented("not implemented".into()))
+        _params: commands::master_capnp::master::GetClusterStatusParams,
+        _results: commands::master_capnp::master::GetClusterStatusResults,
+    ) -> ::capnp::capability::Promise<(), ::capnp::Error> {
+        debug!("Getting cluster status");
+        // TODO: Implement cluster status retrieval
+        ::capnp::capability::Promise::ok(())
     }
 
     fn get_worker(
         &mut self,
-        _params: commands::master_control::GetWorkerParams,
-        _results: commands::master_control::GetWorkerResults,
-    ) -> capnp::capability::Promise<(), capnp::Error> {
-        // TODO: Use messenger to send to Node
-        capnp::capability::Promise::err(capnp::Error::unimplemented("not implemented".into()))
+        params: commands::master_capnp::master::GetWorkerParams,
+        _results: commands::master_capnp::master::GetWorkerResults,
+    ) -> ::capnp::capability::Promise<(), ::capnp::Error> {
+        match params.get() {
+            Ok(p) => {
+                let _worker_id = p.get_worker_id();
+                debug!(worker_id = ?_worker_id, "Getting worker capability");
+
+                // TODO: Lookup worker capability from registered workers
+                // For now, this is unimplemented - need to store worker capabilities when they connect
+                let error = capnp::Error::failed("Worker lookup not yet implemented".to_string());
+                ::capnp::capability::Promise::err(error)
+            }
+            Err(e) => ::capnp::capability::Promise::err(e),
+        }
     }
 
     fn get_vm(
         &mut self,
-        _params: commands::master_control::GetVmParams,
-        _results: commands::master_control::GetVmResults,
-    ) -> capnp::capability::Promise<(), capnp::Error> {
-        // TODO: Use messenger to send to Node
-        capnp::capability::Promise::err(capnp::Error::unimplemented("not implemented".into()))
-    }
-}
+        params: commands::master_capnp::master::GetVmParams,
+        _results: commands::master_capnp::master::GetVmResults,
+    ) -> ::capnp::capability::Promise<(), ::capnp::Error> {
+        match params.get() {
+            Ok(p) => {
+                let _vm_id = p.get_vm_id();
+                debug!(vm_id = ?_vm_id, "Getting VM capability");
 
-struct WorkerControlImpl {
-    messenger: NodeMessenger,
-}
-
-impl commands::worker_control::Server for WorkerControlImpl {
-    fn get_assignment(
-        &mut self,
-        _params: commands::worker_control::GetAssignmentParams,
-        _results: commands::worker_control::GetAssignmentResults,
-    ) -> capnp::capability::Promise<(), capnp::Error> {
-        // TODO: Use messenger to send to Node
-        capnp::capability::Promise::err(capnp::Error::unimplemented("not implemented".into()))
-    }
-
-    fn push_observed_state(
-        &mut self,
-        _params: commands::worker_control::PushObservedStateParams,
-        _results: commands::worker_control::PushObservedStateResults,
-    ) -> capnp::capability::Promise<(), capnp::Error> {
-        // TODO: Use messenger to send to Node
-        capnp::capability::Promise::err(capnp::Error::unimplemented("not implemented".into()))
+                // TODO: Lookup VM capability from registered workers
+                // For now, this is unimplemented - need to store worker/vm capabilities
+                let error = capnp::Error::failed("VM lookup not yet implemented".to_string());
+                ::capnp::capability::Promise::err(error)
+            }
+            Err(e) => ::capnp::capability::Promise::err(e),
+        }
     }
 }
