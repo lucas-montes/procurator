@@ -8,7 +8,6 @@ mod dto;
 mod node;
 mod scheduler;
 mod server;
-mod state;
 
 pub async fn main(_hostname: String, addr: SocketAddr, peers_addr: Vec<SocketAddr>) {
     let (tx, rx) = channel(100);
@@ -16,10 +15,13 @@ pub async fn main(_hostname: String, addr: SocketAddr, peers_addr: Vec<SocketAdd
     let node = Node::new(rx, peers_addr);
     let server = Server::new(tx);
 
-    task::spawn(node.run()).await.expect("Node task panicked");
+    tracing::info!(?addr, "Starting control plane server",);
+
+    let node_task = task::spawn(node.run());
 
     task::LocalSet::new()
         .run_until(async move {
+            tracing::info!("Internal localset server");
             let resutl = task::spawn_local(server.serve(addr)).await;
             match resutl {
                 Ok(Ok(())) => tracing::info!("Control plane server stopped gracefully"),
@@ -28,4 +30,8 @@ pub async fn main(_hostname: String, addr: SocketAddr, peers_addr: Vec<SocketAdd
             }
         })
         .await;
+
+    if let Err(err) = node_task.await {
+        tracing::error!(?err, "Node task panicked");
+    }
 }
