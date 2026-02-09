@@ -1,8 +1,5 @@
-{ lib, ... }:
-
-with lib;
-
-let
+{lib, ...}:
+with lib; let
   memoryType = types.submodule {
     options = {
       amount = mkOption {
@@ -11,7 +8,7 @@ let
         description = "Memory amount";
       };
       unit = mkOption {
-        type = types.enum [ "MB" "GB" ];
+        type = types.enum ["MB" "GB"];
         default = "GB";
         description = "Memory unit";
       };
@@ -19,7 +16,11 @@ let
   };
 in {
   options.cluster.vms = mkOption {
-    type = types.attrsOf (types.submodule ({ name, config, ... }: {
+    type = types.attrsOf (types.submodule ({
+      name,
+      config,
+      ...
+    }: {
       options = {
         cpu = mkOption {
           type = types.float;
