@@ -43,6 +43,11 @@ You need to add yourself (or some user) to the trusted users in the nix.settings
 
 We don't need the cli to have an apply command, let's use gitops practices to have the repohub, or some other service to run the nix commands to make derivations and all the shenanigans so we can send paths and hashes to the control-plane
 
+
+To manage the state of the cluster, should we go pull or push based?
+A pull based makes it "easier", as we just send a new derivation or nar to the build cache and nodes pull the configs, no need to have a master that looks over them.
+However with a push basaed approach we have something more deterministic, we can have rollbacks if some node fail because we'll have a confirmation of the switch.
+
 ## Components
 *Project*: A set of services or repos. For a SOA (service oriented architecture) we would probably have multiple services separated in different repos
 *Repo*: A regular repo, with one or more services in it. If can be a monorepo with multiple services or a single service that can run independently.
