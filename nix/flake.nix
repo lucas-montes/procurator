@@ -18,7 +18,7 @@
     flake-utils,
     ...
   }:
-    # Generate outputs for all default systems (x86_64-linux, aarch64-linux, x86_64-darwin, aarch64-darwin)
+  # Generate outputs for all default systems (x86_64-linux, aarch64-linux, x86_64-darwin, aarch64-darwin)
     flake-utils.lib.eachDefaultSystem (
       system: let
         # Apply rust-overlay to nixpkgs to get rust-bin attribute
@@ -66,10 +66,10 @@
           };
 
         # Build all Rust binaries from the workspace
-        cache = mkRustPackage "cache";              # Binary cache service
-        ci_service = mkRustPackage "ci_service";    # CI/CD pipeline service
-        procurator = mkRustPackage "procurator";    # Main orchestrator binary
-        cli = mkRustPackage "cli";                  # Command-line interface
+        cache = mkRustPackage "cache"; # Binary cache service
+        ci_service = mkRustPackage "ci_service"; # CI/CD pipeline service
+        procurator = mkRustPackage "procurator"; # Main orchestrator binary
+        cli = mkRustPackage "cli"; # Command-line interface
 
         # Wrapper scripts for running procurator in different modes
         # These allow the same binary to be invoked with different semantics
@@ -109,33 +109,34 @@
 
           # Convenience module: imports all service modules at once
           # Use this to enable all procurator services in a single import
-          default = { imports = [
-            (import ./modules/procurator-worker.nix)
-            (import ./modules/procurator-control-plane.nix)
-            (import ./modules/cache.nix)
-            (import ./modules/ci-service.nix)
-            (import ./modules/repohub.nix)
-          ]; };
+          default = {
+            imports = [
+              (import ./modules/procurator-worker.nix)
+              (import ./modules/procurator-control-plane.nix)
+              (import ./modules/cache.nix)
+              (import ./modules/ci-service.nix)
+              (import ./modules/repohub.nix)
+            ];
+          };
         };
 
         # Library functions: reusable Nix functions for cluster management
-        lib.evalCluster = { clusterConfig }:
-          let
-            # Evaluate the cluster configuration using NixOS module system
-            # This validates the config and provides error/warning messages
-            eval = lib.evalModules {
-              modules = [
-                self.nixosModules.cluster
-                clusterConfig
-              ];
-            };
-          in {
-            # The evaluated cluster configuration (VMs, deployment settings, etc.)
-            config = eval.config.cluster;
-            # Module system metadata: errors, warnings, and evaluation info
-            # Check _module.warnings and _module.errors for validation results
-            _module = eval._module;
+        lib.evalCluster = {clusterConfig}: let
+          # Evaluate the cluster configuration using NixOS module system
+          # This validates the config and provides error/warning messages
+          eval = lib.evalModules {
+            modules = [
+              self.nixosModules.cluster
+              clusterConfig
+            ];
           };
+        in {
+          # The evaluated cluster configuration (VMs, deployment settings, etc.)
+          config = eval.config.cluster;
+          # Module system metadata: errors, warnings, and evaluation info
+          # Check _module.warnings and _module.errors for validation results
+          _module = eval._module;
+        };
 
         # Packages: built derivations that can be installed or run
         # Access with: nix build '.#cache', nix build '.#procurator', etc.
@@ -149,13 +150,13 @@
         # These wrap packages to make them directly executable
         # Usage: nix run '.#cache', nix run '.#procurator-worker', etc.
         apps = {
-          cache = flake-utils.lib.mkApp { drv = cache; };
-          ci_service = flake-utils.lib.mkApp { drv = ci_service; };
-          procurator = flake-utils.lib.mkApp { drv = procurator; };
-          procurator-worker = flake-utils.lib.mkApp { drv = procurator-worker; };
-          procurator-control-plane = flake-utils.lib.mkApp { drv = procurator-control-plane; };
+          cache = flake-utils.lib.mkApp {drv = cache;};
+          ci_service = flake-utils.lib.mkApp {drv = ci_service;};
+          procurator = flake-utils.lib.mkApp {drv = procurator;};
+          procurator-worker = flake-utils.lib.mkApp {drv = procurator-worker;};
+          procurator-control-plane = flake-utils.lib.mkApp {drv = procurator-control-plane;};
           # Default app when running 'nix run' without a specific target
-          default = flake-utils.lib.mkApp { drv = procurator-control-plane; };
+          default = flake-utils.lib.mkApp {drv = procurator-control-plane;};
         };
 
         # Development shell: environment for working on procurator
@@ -164,13 +165,13 @@
           mkShell {
             # Tools and dependencies available in the dev shell
             buildInputs = [
-              cargo-watch       # Auto-rebuild on file changes
-              pkg-config        # For linking system libraries
-              rust-bin-custom   # Rust toolchain with rust-analyzer support
-              capnproto         # Cap'n Proto schema compiler
+              cargo-watch # Auto-rebuild on file changes
+              pkg-config # For linking system libraries
+              rust-bin-custom # Rust toolchain with rust-analyzer support
+              capnproto # Cap'n Proto schema compiler
 
-              pcr-dev           # Development CLI (uses cargo run)
-              pcr-test          # Test CLI (uses cargo run)
+              pcr-dev # Development CLI (uses cargo run)
+              pcr-test # Test CLI (uses cargo run)
             ];
 
             # Shell initialization script

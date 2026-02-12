@@ -14,6 +14,8 @@ how to use [jepsen](https://github.com/aphyr/distsys-class)
 learn about [distributed](https://github.com/jepsen-io/maelstrom)
 
 
+[this vmm seems to have a nicer api than cloud-hypervisor](https://github.com/kata-containers/kata-containers/blob/main/src/dragonball/src/api/v1/vmm_action.rs)
+
 more things to check:
 
 https://github.com/DarthSim/overmind
