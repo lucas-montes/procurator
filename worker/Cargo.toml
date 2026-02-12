@@ -14,3 +14,26 @@ tokio-util.workspace = true
 uuid.workspace = true
 commands.workspace = true
 futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# Cloud Hypervisor dependencies
+vmm = { path = "../../cloud-hypervisor/vmm" }
+hypervisor = { path = "../../cloud-hypervisor/hypervisor" }
+libc = "0.2.181"
+kvm-bindings = "0.12.1"
+kvm-ioctls = "0.22.1"
+linux-loader = "0.13.1"
+mshv-bindings = "0.6.7"
+mshv-ioctls = "0.6.7"
+seccompiler = "0.5.0"
+vfio-bindings = { version = "0.6.0", default-features = false }
+vfio-ioctls = { version = "0.5.1", default-features = false }
+vfio_user = { version = "0.1.1", default-features = false }
+vhost = { version = "0.14.0", default-features = false }
+vhost-user-backend = { version = "0.20.0", default-features = false }
+virtio-bindings = "0.2.6"
+virtio-queue = "0.16.0"
+vm-fdt = "0.3.0"
+vm-memory = "0.16.1"
+vmm-sys-util = "0.14.0"
