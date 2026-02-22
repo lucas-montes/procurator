@@ -16,6 +16,8 @@ learn about [distributed](https://github.com/jepsen-io/maelstrom)
 
 [this vmm seems to have a nicer api than cloud-hypervisor](https://github.com/kata-containers/kata-containers/blob/main/src/dragonball/src/api/v1/vmm_action.rs)
 
+configs for kernel:https://github.com/cloud-hypervisor/cloud-hypervisor/issues/7058#issuecomment-2869408095
+
 more things to check:
 
 https://github.com/DarthSim/overmind

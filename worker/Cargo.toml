@@ -24,8 +24,4 @@ workspace = true
 
 
 [build-dependencies]
-prettyplease = "0.2.22"
-progenitor = { git = "https://github.com/oxidecomputer/progenitor" }
-syn = "2.0"
-serde_yaml = "0.9"
 oas3 = { version = "0.20.1", features = ["yaml-spec"] }

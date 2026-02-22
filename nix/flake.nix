@@ -172,6 +172,8 @@
 
               pcr-dev # Development CLI (uses cargo run)
               pcr-test # Test CLI (uses cargo run)
+
+              openapi-generator-cli
             ];
 
             # Shell initialization script

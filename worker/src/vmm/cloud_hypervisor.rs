@@ -2,15 +2,13 @@
 //!
 //! Communicates with cloud-hypervisor via REST API over unix socket
 
-use crate::vmm::{
-    NetworkConfig, VmConfig, VmInfo, VmMetrics, VmState, Vmm, Error, Result,
-};
+use crate::vmm::Vmm;
+use commands::common_capnp::vm_spec;
 
 use hyperlocal::{UnixClientExt, Uri as UnixUri};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::borrow::Cow;
 
 /// Cloud Hypervisor VMM implementation - stateless REST client
 #[derive(Clone)]
@@ -38,56 +36,63 @@ impl CloudHypervisor {
         UnixUri::new(&self.socket_path, endpoint).into()
     }
 
-    /// Convert VmConfig to cloud-hypervisor's JSON payload
-    fn to_ch_config(&self, config: &VmConfig) -> ChVmConfig {
-        ChVmConfig {
-            cpus: ChCpusConfig {
-                boot_vcpus: config.cpus(),
-                max_vcpus: config.cpus(),
-            },
-            memory: ChMemoryConfig {
-                size: config.memory_mb() * 1024 * 1024, // Convert MB to bytes
-            },
-            payload: Some(ChPayloadConfig {
-                kernel: config.kernel_path().to_string(),
-                cmdline: config.cmdline().map(|s| s.to_string()),
-                initramfs: None,
-            }),
-            disks: config
-                .disks()
-                .iter()
-                .map(|path| ChDiskConfig {
-                    path: path.clone(),
-                    readonly: Some(false),
-                    direct: Some(true),
-                })
-                .collect(),
-            net: config.net().map(|net| {
-                vec![ChNetConfig {
-                    tap: net.tap().map(|s| s.to_string()),
-                    ip: net.ip().map(|s| s.to_string()),
-                    mask: net.mask().map(|s| s.to_string()),
-                    mac: net.mac().map(|s| s.to_string()),
-                }]
-            }),
-            rng: Some(ChRngConfig {
-                src: "/dev/urandom".to_string(),
-            }),
-            console: Some(ChConsoleConfig {
-                mode: "Off".to_string(),
-            }),
-            serial: Some(ChSerialConfig {
-                mode: "Null".to_string(),
-            }),
+}
+
+/// Cloud Hypervisor specific error types
+#[derive(Debug)]
+pub enum ChError {
+    Communication(String),
+    VmNotFound(String),
+    VmAlreadyExists(String),
+    InvalidConfig(String),
+    OperationFailed(String),
+    Serialization(serde_json::Error),
+    Io(std::io::Error),
+}
+
+impl std::fmt::Display for ChError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ChError::Communication(msg) => write!(f, "Communication error: {}", msg),
+            ChError::VmNotFound(id) => write!(f, "VM not found: {}", id),
+            ChError::VmAlreadyExists(id) => write!(f, "VM already exists: {}", id),
+            ChError::InvalidConfig(msg) => write!(f, "Invalid configuration: {}", msg),
+            ChError::OperationFailed(msg) => write!(f, "Operation failed: {}", msg),
+            ChError::Serialization(err) => write!(f, "Serialization error: {}", err),
+            ChError::Io(err) => write!(f, "IO error: {}", err),
         }
     }
 }
 
+impl std::error::Error for ChError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ChError::Serialization(err) => Some(err),
+            ChError::Io(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+impl From<serde_json::Error> for ChError {
+    fn from(err: serde_json::Error) -> Self {
+        ChError::Serialization(err)
+    }
+}
+
+impl From<std::io::Error> for ChError {
+    fn from(err: std::io::Error) -> Self {
+        ChError::Io(err)
+    }
+}
+
 impl Vmm for CloudHypervisor {
-    async fn create(&self, config: VmConfig, boot: bool) -> Result<()> {
-        // Prepare the cloud-hypervisor config
-        let ch_config = self.to_ch_config(&config);
-        let body = serde_json::to_string(&ch_config)?;
+    type Config = ChVmConfig<'static>;
+    type Info = ChVmInfo;
+    type Error = ChError;
+
+    async fn create(&self, config: Self::Config, boot: bool) -> Result<(), Self::Error> {
+        let body = serde_json::to_string(&config)?;
 
         // Create VM via REST API
         let uri = self.build_uri("/api/v1/vm.create");
@@ -96,20 +101,20 @@ impl Vmm for CloudHypervisor {
             .uri(uri)
             .header("Content-Type", "application/json")
             .body(hyper::Body::from(body))
-            .map_err(|e| Error::Communication(e.to_string()))?;
+            .map_err(|e| ChError::Communication(e.to_string()))?;
 
         let resp = self
             .client
             .request(req)
             .await
-            .map_err(|e| Error::Communication(e.to_string()))?;
+            .map_err(|e| ChError::Communication(e.to_string()))?;
 
         if !resp.status().is_success() {
             let body_bytes = hyper::body::to_bytes(resp.into_body())
                 .await
-                .map_err(|e| Error::Communication(e.to_string()))?;
+                .map_err(|e| ChError::Communication(e.to_string()))?;
             let error_msg = String::from_utf8_lossy(&body_bytes);
-            return Err(Error::OperationFailed(format!(
+            return Err(ChError::OperationFailed(format!(
                 "Failed to create VM: {}",
                 error_msg
             )));
@@ -122,30 +127,30 @@ impl Vmm for CloudHypervisor {
                 .method(hyper::Method::PUT)
                 .uri(uri)
                 .body(hyper::Body::empty())
-                .map_err(|e| Error::Communication(e.to_string()))?;
+                .map_err(|e| ChError::Communication(e.to_string()))?;
 
             let resp = self
                 .client
                 .request(req)
                 .await
-                .map_err(|e| Error::Communication(e.to_string()))?;
+                .map_err(|e| ChError::Communication(e.to_string()))?;
 
             if !resp.status().is_success() {
-                return Err(Error::OperationFailed("Failed to boot VM".into()));
+                return Err(ChError::OperationFailed("Failed to boot VM".into()));
             }
         }
 
         Ok(())
     }
 
-    async fn delete(&self, vm_id: &str) -> Result<()> {
+    async fn delete(&self, vm_id: &str) -> Result<(), Self::Error> {
         // Try to shutdown first (may fail if already shut down, that's ok)
         let uri = self.build_uri("/api/v1/vm.shutdown");
         let req = hyper::Request::builder()
             .method(hyper::Method::PUT)
             .uri(uri)
             .body(hyper::Body::empty())
-            .map_err(|e| Error::Communication(e.to_string()))?;
+            .map_err(|e| ChError::Communication(e.to_string()))?;
 
         let _ = self.client.request(req).await;
 
@@ -155,269 +160,276 @@ impl Vmm for CloudHypervisor {
             .method(hyper::Method::PUT)
             .uri(uri)
             .body(hyper::Body::empty())
-            .map_err(|e| Error::Communication(e.to_string()))?;
+            .map_err(|e| ChError::Communication(e.to_string()))?;
 
         let resp = self
             .client
             .request(req)
             .await
-            .map_err(|e| Error::Communication(e.to_string()))?;
+            .map_err(|e| ChError::Communication(e.to_string()))?;
 
         if !resp.status().is_success() {
-            return Err(Error::OperationFailed("Failed to delete VM".into()));
+            return Err(ChError::OperationFailed("Failed to delete VM".into()));
         }
 
         Ok(())
     }
 
-    async fn info(&self, vm_id: &str) -> Result<VmInfo> {
+    async fn info(&self, vm_id: &str) -> Result<Self::Info, Self::Error> {
         // Query VM info from cloud-hypervisor
         let uri = self.build_uri("/api/v1/vm.info");
         let req = hyper::Request::builder()
             .method(hyper::Method::GET)
             .uri(uri)
             .body(hyper::Body::empty())
-            .map_err(|e| Error::Communication(e.to_string()))?;
+            .map_err(|e| ChError::Communication(e.to_string()))?;
 
         let resp = self
             .client
             .request(req)
             .await
-            .map_err(|e| Error::Communication(e.to_string()))?;
+            .map_err(|e| ChError::Communication(e.to_string()))?;
 
         if !resp.status().is_success() {
-            return Err(Error::OperationFailed(
+            return Err(ChError::OperationFailed(
                 "Failed to get VM info".into(),
             ));
         }
 
         let body_bytes = hyper::body::to_bytes(resp.into_body())
             .await
-            .map_err(|e| Error::Communication(e.to_string()))?;
+            .map_err(|e| ChError::Communication(e.to_string()))?;
 
-        let ch_info: ChVmInfo = serde_json::from_slice(&body_bytes)?;
+        // Deserialize - Cow will be Owned since we're deserializing from bytes
+        let ch_info = serde_json::from_slice(&body_bytes)?;
 
-        // Extract config from response
-        let mut config = VmConfig::new(
-            vm_id.to_string(),
-            ch_info.config.cpus.boot_vcpus,
-            ch_info.config.memory.size / 1024 / 1024,
-            ch_info.config.payload.as_ref().map(|p| p.kernel.clone()).unwrap_or_default(),
-        );
-
-        if let Some(ref payload) = ch_info.config.payload {
-            if let Some(ref cmdline) = payload.cmdline {
-                config = config.with_cmdline(cmdline.clone());
-            }
-        }
-
-        config = config.with_disks(
-            ch_info.config.disks.iter().map(|d| d.path.clone()).collect()
-        );
-
-        if let Some(nets) = ch_info.config.net.as_ref() {
-            if let Some(n) = nets.first() {
-                let mut net_config = NetworkConfig::new();
-                if let Some(ref ip) = n.ip {
-                    net_config = net_config.with_ip(ip.clone());
-                }
-                if let Some(ref mask) = n.mask {
-                    net_config = net_config.with_mask(mask.clone());
-                }
-                if let Some(ref mac) = n.mac {
-                    net_config = net_config.with_mac(mac.clone());
-                }
-                if let Some(ref tap) = n.tap {
-                    net_config = net_config.with_tap(tap.clone());
-                }
-                config = config.with_network(net_config);
-            }
-        }
-
-        // Query VM counters for metrics
-        let uri = self.build_uri("/api/v1/vm.counters");
-        let req = hyper::Request::builder()
-            .method(hyper::Method::GET)
-            .uri(uri)
-            .body(hyper::Body::empty())
-            .map_err(|e| Error::Communication(e.to_string()))?;
-
-        let counters_resp = self.client.request(req).await;
-
-        let metrics = if let Ok(resp) = counters_resp {
-            if resp.status().is_success() {
-                let body_bytes = hyper::body::to_bytes(resp.into_body())
-                    .await
-                    .ok();
-
-                body_bytes.and_then(|bytes| {
-                    serde_json::from_slice::<ChVmCounters>(&bytes)
-                        .ok()
-                        .map(|counters| VmMetrics::new(
-                            vec![0.0; config.cpus() as usize], // CH doesn't expose CPU %
-                            0, // memory_used_bytes - Would need /proc parsing in guest
-                            config.memory_mb() * 1024 * 1024,
-                            counters
-                                .block
-                                .as_ref()
-                                .and_then(|b| b.read_bytes)
-                                .unwrap_or(0),
-                            counters
-                                .block
-                                .as_ref()
-                                .and_then(|b| b.write_bytes)
-                                .unwrap_or(0),
-                            counters
-                                .net
-                                .as_ref()
-                                .and_then(|n| n.rx_bytes)
-                                .unwrap_or(0),
-                            counters
-                                .net
-                                .as_ref()
-                                .and_then(|n| n.tx_bytes)
-                                .unwrap_or(0),
-                        ))
-                })
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        let mut vm_info = VmInfo::new(
-            vm_id.to_string(),
-            ch_info.state.parse().unwrap_or(VmState::Unknown),
-            config,
-        );
-
-        if let Some(metrics) = metrics {
-            vm_info = vm_info.with_metrics(metrics);
-        }
-
-        Ok(vm_info)
+        Ok(ch_info)
     }
 
-    async fn list(&self) -> Result<Vec<String>> {
+    async fn list(&self) -> Result<Vec<String>, Self::Error> {
         // Cloud Hypervisor doesn't provide a list endpoint
         // This would need to be tracked externally or use a different approach
         Ok(vec![])
     }
 }
 
-// Cloud Hypervisor API data structures
+// Cloud Hypervisor API data structures with lifetime support for zero-copy
 
-#[derive(Serialize, Deserialize)]
-struct ChVmConfig {
-    cpus: ChCpusConfig,
-    memory: ChMemoryConfig,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ChVmConfig<'a> {
+    pub cpus: ChCpusConfig,
+    pub memory: ChMemoryConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
-    payload: Option<ChPayloadConfig>,
+    pub payload: Option<ChPayloadConfig<'a>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    disks: Vec<ChDiskConfig>,
+    #[serde(borrow)]
+    pub disks: Vec<ChDiskConfig<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    net: Option<Vec<ChNetConfig>>,
+    #[serde(borrow)]
+    pub net: Option<Vec<ChNetConfig<'a>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    rng: Option<ChRngConfig>,
+    pub rng: Option<ChRngConfig<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    console: Option<ChConsoleConfig>,
+    pub console: Option<ChConsoleConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    serial: Option<ChSerialConfig>,
+    pub serial: Option<ChSerialConfig>,
 }
 
-#[derive(Serialize, Deserialize)]
-struct ChCpusConfig {
-    boot_vcpus: u8,
-    max_vcpus: u8,
+
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ChCpusConfig {
+    pub boot_vcpus: u8,
+    pub max_vcpus: u8,
 }
 
-#[derive(Serialize, Deserialize)]
-struct ChMemoryConfig {
-    size: u64,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ChMemoryConfig {
+    pub size: u64,
 }
 
-#[derive(Serialize, Deserialize)]
-struct ChPayloadConfig {
-    kernel: String,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ChPayloadConfig<'a> {
+    #[serde(borrow)]
+    pub kernel: Cow<'a, str>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    cmdline: Option<String>,
+    #[serde(borrow)]
+    pub cmdline: Option<Cow<'a, str>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    initramfs: Option<String>,
+    #[serde(borrow)]
+    pub initramfs: Option<Cow<'a, str>>,
 }
 
-#[derive(Serialize, Deserialize)]
-struct ChDiskConfig {
-    path: String,
+
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ChDiskConfig<'a> {
+    #[serde(borrow)]
+    pub path: Cow<'a, str>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    readonly: Option<bool>,
+    pub readonly: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    direct: Option<bool>,
+    pub direct: Option<bool>,
 }
 
-#[derive(Serialize, Deserialize)]
-struct ChNetConfig {
+
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ChNetConfig<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    tap: Option<String>,
+    #[serde(borrow)]
+    pub tap: Option<Cow<'a, str>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    ip: Option<String>,
+    #[serde(borrow)]
+    pub ip: Option<Cow<'a, str>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    mask: Option<String>,
+    #[serde(borrow)]
+    pub mask: Option<Cow<'a, str>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    mac: Option<String>,
+    #[serde(borrow)]
+    pub mac: Option<Cow<'a, str>>,
 }
 
-#[derive(Serialize, Deserialize)]
-struct ChRngConfig {
-    src: String,
+
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ChRngConfig<'a> {
+    #[serde(borrow)]
+    pub src: Cow<'a, str>,
 }
 
-#[derive(Serialize, Deserialize)]
-struct ChConsoleConfig {
-    mode: String,
+
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ChConsoleConfig {
+    pub mode: String,
 }
 
-#[derive(Serialize, Deserialize)]
-struct ChSerialConfig {
-    mode: String,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ChSerialConfig {
+    pub mode: String,
 }
 
-#[derive(Deserialize)]
-struct ChVmInfo {
-    state: String,
-    config: ChVmConfig,
+// Owned version of config for VM info responses
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ChVmConfigOwned {
+    pub cpus: ChCpusConfig,
+    pub memory: ChMemoryConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload: Option<ChPayloadConfigOwned>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub disks: Vec<ChDiskConfigOwned>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub net: Option<Vec<ChNetConfigOwned>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rng: Option<ChRngConfigOwned>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub console: Option<ChConsoleConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub serial: Option<ChSerialConfig>,
 }
 
-#[derive(Deserialize)]
-struct ChVmCounters {
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ChPayloadConfigOwned {
+    pub kernel: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cmdline: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initramfs: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ChDiskConfigOwned {
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub readonly: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direct: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ChNetConfigOwned {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tap: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ip: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mask: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mac: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ChRngConfigOwned {
+    pub src: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChVmInfo {
+    pub state: String,
+    pub config: ChVmConfigOwned,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_actual_size: Option<u64>,
+}
+
+
+
+#[derive(Debug, Deserialize)]
+pub struct ChVmCounters {
     #[serde(rename = "block")]
-    block: Option<ChBlockCounters>,
+    pub block: Option<ChBlockCounters>,
     #[serde(rename = "net")]
-    net: Option<ChNetCounters>,
+    pub net: Option<ChNetCounters>,
 }
 
-#[derive(Deserialize)]
-struct ChBlockCounters {
-    read_bytes: Option<u64>,
-    write_bytes: Option<u64>,
+#[derive(Debug, Deserialize)]
+pub struct ChBlockCounters {
+    pub read_bytes: Option<u64>,
+    pub write_bytes: Option<u64>,
 }
 
-#[derive(Deserialize)]
-struct ChNetCounters {
-    rx_bytes: Option<u64>,
-    tx_bytes: Option<u64>,
+#[derive(Debug, Deserialize)]
+pub struct ChNetCounters {
+    pub rx_bytes: Option<u64>,
+    pub tx_bytes: Option<u64>,
 }
 
-impl std::str::FromStr for VmState {
-    type Err = ();
 
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "created" => Ok(VmState::Created),
-            "running" => Ok(VmState::Running),
-            "paused" => Ok(VmState::Paused),
-            "shutdown" => Ok(VmState::Shutdown),
-            _ => Ok(VmState::Unknown),
-        }
+impl<'a> TryFrom<vm_spec::Reader<'a>> for ChVmConfig<'a> {
+    type Error = capnp::Error;
+
+    fn try_from(spec: vm_spec::Reader<'a>) -> Result<Self, Self::Error> {
+        let cpu = spec.get_cpu();
+        let memory_bytes = spec.get_memory_bytes();
+        let store_path = spec.get_store_path()?.to_str()?;
+
+        // Convert fractional CPU to boot_vcpus (round up)
+        let boot_vcpus = cpu.ceil() as u8;
+
+        Ok(ChVmConfig {
+            cpus: ChCpusConfig {
+                boot_vcpus,
+                max_vcpus: boot_vcpus,
+            },
+            memory: ChMemoryConfig {
+                size: memory_bytes,
+            },
+            payload: Some(ChPayloadConfig {
+                kernel: Cow::Borrowed(store_path),
+                cmdline: None, // Could be populated from spec if needed
+                initramfs: None,
+            }),
+            disks: Vec::new(), // TODO: Map from spec if needed
+            net: None, // TODO: Map from networkAllowedDomains
+            rng: Some(ChRngConfig {
+                src: Cow::Borrowed("/dev/urandom"),
+            }),
+            console: Some(ChConsoleConfig {
+                mode: "Off".to_string(),
+            }),
+            serial: Some(ChSerialConfig {
+                mode: "Null".to_string(),
+            }),
+        })
     }
 }
