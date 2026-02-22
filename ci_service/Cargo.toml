@@ -16,3 +16,6 @@ tower-http = { version = "0.5", features = ["trace"] }
 chrono.workspace = true
 futures.workspace = true
 repo_outils.workspace = true
+
+[lints]
+workspace = true

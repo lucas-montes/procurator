@@ -9,3 +9,6 @@ tokio.workspace = true
 
 [build-dependencies]
 capnpc = "0.20.1"
+
+[lints]
+workspace = true

@@ -6,16 +6,19 @@ use futures::AsyncReadExt;
 use tracing::{debug, info, instrument};
 
 use crate::dto::NodeMessenger;
+use crate::vmm::Vmm;
 
 #[derive(Clone)]
-pub struct Server {
+pub struct Server<V: Vmm > {
     messenger: NodeMessenger,
+    vmm: V,
 }
 
-impl Server {
-    pub fn new(messenger: impl Into<NodeMessenger>) -> Self {
+impl<V: Vmm > Server<V> {
+    pub fn new(messenger: impl Into<NodeMessenger>, vmm: V) -> Self {
         Server {
             messenger: messenger.into(),
+            vmm,
         }
     }
 
@@ -48,7 +51,7 @@ impl Server {
     }
 }
 
-impl commands::worker_capnp::worker::Server for Server {
+impl<V: Vmm> commands::worker_capnp::worker::Server for Server<V> {
     fn read(
         &mut self,
         _params: commands::worker_capnp::worker::ReadParams,
@@ -75,8 +78,29 @@ impl commands::worker_capnp::worker::Server for Server {
     ) -> ::capnp::capability::Promise<(), ::capnp::Error> {
         debug!("Worker.list_vms called");
 
-        let _ = results.get().init_vms(0);
-        ::capnp::capability::Promise::ok(())
+        let hyprv = self.vmm.clone();
+        ::capnp::capability::Promise::from_future(async move {
+            match hyprv.list().await {
+                Ok(vm_ids) => {
+                    let mut vms = results.get().init_vms(vm_ids.len() as u32);
+                    for (i, vm_id) in vm_ids.iter().enumerate() {
+                        let mut vm_status = vms.reborrow().get(i as u32);
+                        vm_status.set_id(vm_id);
+                        vm_status.set_worker_id("worker-local");
+                        vm_status.set_desired_hash("");
+                        vm_status.set_observed_hash("");
+                        vm_status.set_status("running");
+                        vm_status.set_drifted(false);
+                        vm_status.init_metrics();
+                    }
+                    Ok(())
+                }
+                Err(e) => {
+                    tracing::error!(error = ?e, "Failed to list VMs");
+                    Err(::capnp::Error::failed(format!("Failed to list VMs: {e:?}")))
+                }
+            }
+        })
     }
 
     fn get_vm(
@@ -100,7 +124,7 @@ impl commands::worker_capnp::worker::Server for Server {
     }
 }
 
-impl commands::worker_capnp::worker::vm::Server for Server {
+impl<V: Vmm> commands::worker_capnp::worker::vm::Server for Server<V> {
     fn read(
         &mut self,
         _params: commands::worker_capnp::worker::vm::ReadParams,
@@ -108,17 +132,20 @@ impl commands::worker_capnp::worker::vm::Server for Server {
     ) -> ::capnp::capability::Promise<(), ::capnp::Error> {
         debug!("Worker.Vm.read called");
 
-        if let Ok(mut data) = results.get().get_data() {
-            data.set_id("vm-unknown");
-            data.set_worker_id("worker-unknown");
-            data.set_desired_hash("");
-            data.set_observed_hash("");
-            data.set_status("unknown");
-            data.set_drifted(false);
-            data.init_metrics();
-        }
-
-        ::capnp::capability::Promise::ok(())
+        // In real implementation, vm_id would be extracted from params or stored in a VM-specific struct
+        // For now, returning placeholder data
+        ::capnp::capability::Promise::from_future(async move {
+            if let Ok(mut data) = results.get().get_data() {
+                data.set_id("vm-unknown");
+                data.set_worker_id("worker-unknown");
+                data.set_desired_hash("");
+                data.set_observed_hash("");
+                data.set_status("unknown");
+                data.set_drifted(false);
+                data.init_metrics();
+            }
+            Ok(())
+        })
     }
 
     fn get_logs(

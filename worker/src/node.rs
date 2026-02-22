@@ -3,20 +3,28 @@ use std::net::SocketAddr;
 use tokio::sync::mpsc::Receiver;
 
 use crate::dto::{NodeEvent, NodeMessage};
+use crate::vmm::Vmm;
 
 ///! Node that handles communications between the server and the logic handled by the control plane.
 
-pub struct Node {
+pub struct Node<V: Vmm> {
     /// Channel to receive messages from the server
     node_channel: Receiver<NodeMessage>,
     master_addr: SocketAddr,
+    /// VMM backend for managing virtual machines
+    vmm: V,
 }
 
-impl Node {
-    pub fn new(node_channel: Receiver<NodeMessage>, master_addr: SocketAddr) -> Self {
+impl<V: Vmm> Node<V> {
+    pub fn new(
+        node_channel: Receiver<NodeMessage>,
+        master_addr: SocketAddr,
+        vmm: V,
+    ) -> Self {
         Node {
             node_channel,
             master_addr,
+            vmm,
         }
     }
 

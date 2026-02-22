@@ -1,36 +1,32 @@
+pub mod dto;
+pub mod node;
+pub mod server;
+pub mod vmm;
+
 use std::net::SocketAddr;
 
-use tokio::{sync::mpsc::channel, task};
+use node::Node;
+use server::Server;
+use tokio::sync::mpsc;
 
-use crate::{node::Node, server::Server};
+pub async fn main(_hostname: String, listen_addr: SocketAddr, master_addr: SocketAddr) {
+    let (node_tx, node_rx) = mpsc::channel(100);
 
-mod dto;
-mod node;
-mod server;
+    // TODO: Make socket path configurable
+    let socket_path = "/tmp/cloud-hypervisor.sock";
+    let vmm = vmm::cloud_hypervisor::CloudHypervisor::new(socket_path);
 
-pub async fn main(_hostname: String, addr: SocketAddr, master_addr: SocketAddr) {
-    let (tx, rx) = channel(100);
+    let server = Server::new(node_tx.clone(), vmm.clone());
+    let node = Node::new(node_rx, master_addr, vmm);
 
-    let node = Node::new(rx, master_addr);
-    let server = Server::new(tx);
-
-    tracing::info!(?addr, "Starting worker server",);
-
-    let node_task = task::spawn(node.run());
-
-    task::LocalSet::new()
-        .run_until(async move {
-            tracing::info!("Internal localset server");
-            let resutl = task::spawn_local(server.serve(addr)).await;
-            match resutl {
-                Ok(Ok(())) => tracing::info!("Worker server stopped gracefully"),
-                Ok(Err(err)) => tracing::error!(?err, "Error starting worker server"),
-                Err(err) => tracing::error!(?err, "Worker server task panicked"),
+    tokio::select! {
+        result = server.serve(listen_addr) => {
+            if let Err(e) = result {
+                tracing::error!(error = ?e, "Server failed");
             }
-        })
-        .await;
-
-    if let Err(err) = node_task.await {
-        tracing::error!(?err, "Node task panicked");
+        }
+        _ = node.run() => {
+            tracing::info!("Node stopped");
+        }
     }
 }

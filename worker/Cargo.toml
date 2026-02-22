@@ -4,13 +4,28 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-tracing.workspace = true
-tracing-subscriber.workspace = true
-tracing-appender.workspace = true
 capnp.workspace = true
 capnp-rpc.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
-uuid.workspace = true
-commands.workspace = true
 futures.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+commands.workspace = true
+
+# VMM dependencies
+hyper = { version = "0.14", features = ["client", "http1", "stream"] }
+hyperlocal = "0.8"
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
+
+
+[build-dependencies]
+prettyplease = "0.2.22"
+progenitor = { git = "https://github.com/oxidecomputer/progenitor" }
+syn = "2.0"
+serde_yaml = "0.9"
+oas3 = { version = "0.20.1", features = ["yaml-spec"] }

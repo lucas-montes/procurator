@@ -16,3 +16,6 @@ dockerfile-parser = "0.9.0"
 # We could use those two to read/write Nix code directly
 ser_nix = "0.1.2"
 # tvix_serde = { git = "https://github.com/tvlfyi/tvix", branch = "canon", package = "tvix-serde" }
+
+[lints]
+workspace = true
