@@ -87,18 +87,13 @@ pub async fn test_publish(
         let mut vm_specs = request.get().init_vm_specs(num_vms as u32);
         for i in 0..num_vms {
             let mut vm = vm_specs.reborrow().get(i as u32);
-            vm.set_id(&format!("vm-{}", i));
-            vm.set_name(&format!("test-vm-{}", i));
-            vm.set_store_path(&format!("/nix/store/fakehash-vm-{}", i));
-            vm.set_content_hash(&format!("sha256:fakehash{}", i));
-            vm.set_cpu(1.0);
-            vm.set_memory_bytes(1024 * 1024 * 1024); // 1GB
+            vm.set_toplevel(&format!("/nix/store/fakehash-nixos-system-vm-{}", i));
             vm.set_kernel_path(&format!("/nix/store/kernel-{}/bzImage", i));
             vm.set_initrd_path(&format!("/nix/store/initrd-{}/initrd", i));
             vm.set_disk_image_path(&format!("/nix/store/disk-{}/nixos.raw", i));
             vm.set_cmdline("console=ttyS0 root=/dev/vda rw");
-            let _labels = vm.reborrow().init_labels(0);
-            vm.reborrow().set_replicas(1);
+            vm.set_cpu(1);
+            vm.set_memory_mb(1024);
             let _domains = vm.init_network_allowed_domains(0);
         }
     }

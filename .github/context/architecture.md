@@ -71,7 +71,7 @@ The worker is the most complex component. It manages N cloud-hypervisor VM proce
 - Holds only a `CommandSender` (wraps `mpsc::Sender<Message>`) — no VMM reference, no state
 - Each RPC method: build a `CommandPayload`, call `sender.request(payload)`, `await` the response
 - Freely cloneable by capnp-rpc (Clone just clones the inner Sender)
-- Two RPC methods: `read` (worker status) and `listVms` (list VMs)
+- Four RPC methods: `read` (worker status), `listVms` (list VMs), `createVm` (takes VmSpec, returns VM ID), `deleteVm` (takes VM ID)
 
 ### Node<B: VmmBackend>
 
@@ -93,7 +93,7 @@ The worker is the most complex component. It manages N cloud-hypervisor VM proce
 
 - **`Vmm`** — per-VM client (one instance = one VM = one socket). Methods: `create`, `boot`, `shutdown`, `delete`, `info`, `pause`, `resume`, `counters`, `ping`. Associated types: `Config`, `Info`, `Error`.
 - **`VmmProcess`** — handle to the OS process backing one VM. Methods: `kill`, `cleanup`.
-- **`VmmBackend`** — factory that spawns VMM processes and builds configs. Methods: `spawn`, `build_config`. Associated types: `Client: Vmm`, `Process: VmmProcess`.
+- **`VmmBackend`** — factory that spawns VMM processes and builds configs. Methods: `prepare` (default no-op, override for nix copy), `spawn`, `build_config`. Associated types: `Client: Vmm`, `Process: VmmProcess`.
 
 Production implementations: `CloudHypervisor` (Vmm), `ChProcess` (VmmProcess), `CloudHypervisorBackend` (VmmBackend).
 
@@ -124,16 +124,16 @@ There is no multi-VM endpoint. To run 5 VMs, you spawn 5 CH processes, each with
 
 ```
 1. Receive CreateVm command with VmSpec (from capnp)
-2. Ensure Nix closure is in local store: `nix copy --from <cache> <store_path>`
-3. Resolve store path → kernel bzImage + disk image + initramfs paths
-4. Allocate socket path: /run/procurator/vms/{vm_id}.sock
-5. Set up networking: create TAP device for this VM
-6. Spawn CH process: cloud-hypervisor --api-socket <socket>
-7. Wait for socket to appear (poll with backoff)
-8. Send vm.create REST call with VmConfig (kernel, disk, net, etc.)
-9. Send vm.boot REST call
-10. Record VmHandle in HashMap
+2. Generate UUIDv7 VM ID (time-sortable, unique)
+3. backend.prepare(spec) — ensure Nix closure is local (nix copy, default: no-op)
+4. backend.spawn(vm_id) — spawn CH process, wait for socket, return (Client, Process, socket_path)
+5. backend.build_config(spec) — resolve store paths → kernel/disk/initrd config
+6. client.create(config) — send vm.create REST call
+7. client.boot() — send vm.boot REST call
+8. Record VmHandle { client, process, spec, socket_path } in HashMap
 ```
+
+If any step (3–7) fails, no VmHandle is recorded — no orphan state.
 
 ### VM Deletion
 
@@ -160,9 +160,9 @@ The worker bridges Nix store paths and CH configs:
 
 All inter-service RPC uses **Cap'n Proto**:
 
-- `commands/schema/common.capnp` — Shared data types (VmSpec with 13 fields, WorkerStatus, etc.)
+- `commands/schema/common.capnp` — Shared data types (VmSpec with 8 fields: toplevel, kernelPath, initrdPath, diskImagePath, cmdline, cpu, memoryMb, networkAllowedDomains; WorkerStatus, etc.)
 - `commands/schema/master.capnp` — Control plane interface (publishState, getAssignment, pushData, getClusterStatus, getWorker)
-- `commands/schema/worker.capnp` — Worker interface (read, listVms)
+- `commands/schema/worker.capnp` — Worker interface (read, listVms, createVm, deleteVm)
 - Generated Rust code lives in `commands/src/lib.rs` via `build.rs`
 
 ### Why Cap'n Proto
@@ -194,6 +194,35 @@ CLI                          Worker Server         Node<B> / VmManager<B>  CH Pr
 Note: The Server sends `CommandPayload` variants through a `CommandSender` (wraps mpsc).
 The Node feeds them to VmManager, which replies via the embedded oneshot channel.
 
+## Nix → Worker Pipeline
+
+How a Nix flake definition becomes a running VM:
+
+```
+1. User defines VM in flake.nix using mkVmImage { cpu = 2; memoryMb = 1024; ... }
+2. Nix evaluates → produces vmSpec attrset (8 camelCase fields matching capnp VmSpec)
+3. mkVmImage also produces vmSpecJson derivation (pkgs.writeText of toJSON vmSpec)
+4. CLI reads the JSON: nix build .#my-vm-spec --print-out-paths → /nix/store/...-vm-spec.json
+5. CLI deserializes JSON → VmSpec (serde: #[serde(rename_all = "camelCase")])
+6. CLI sends createVm RPC with VmSpec fields via capnp
+7. Worker receives → VmManager.handle_create():
+   a. Generate UUIDv7 VM ID
+   b. backend.prepare(&spec)  — ensure Nix closure is in local store
+   c. backend.spawn(vm_id)    — spawn CH process
+   d. backend.build_config(&spec)  — VmSpec paths → CH config
+   e. client.create(config)   — REST: vm.create
+   f. client.boot()           — REST: vm.boot
+   g. Record VmHandle in HashMap
+8. Worker returns VM ID to CLI
+```
+
+### Key Design Points
+
+- **VmSpec is the contract** between Nix, CLI, and Worker. 8 fields, camelCase, no optionals.
+- **JSON is the serialization format** between Nix and CLI. Cap'n Proto is the wire format between CLI and Worker.
+- **`prepare()` is the extension point** for Nix store integration. Default no-op; production backend overrides for `nix copy --from <cache>`.
+- **No path guessing** — every path (kernel, initrd, disk) is an explicit field in VmSpec, set by Nix during eval.
+
 ## Directory Layout (worker crate)
 
 ```
@@ -204,9 +233,11 @@ worker/src/
 ├── node.rs              # Owns Receiver<Message> + VmManager<B>, processes commands
 ├── vm_manager.rs        # Single-owner VM state, generic over VmmBackend
 ├── dto.rs               # CommandPayload/CommandResponse enums, VmSpec/VmInfo/WorkerInfo
-│                        #   (all structs have private fields, constructors, getters)
+│                        #   (private fields, constructors, getters; VmSpec has #[derive(Deserialize)])
+├── vm_manager_tests.rs  # Unit tests: create/delete/list/status/failure injection/prepare/JSON deser
 └── vmm/
     ├── mod.rs           # Re-exports
-    ├── interface.rs     # Three traits: Vmm, VmmProcess, VmmBackend
-    └── cloud_hypervisor.rs  # Production backend: CloudHypervisor, ChProcess, CloudHypervisorBackend
+    ├── interface.rs     # Three traits: Vmm, VmmProcess, VmmBackend (with prepare())
+    ├── cloud_hypervisor.rs  # Production backend: CloudHypervisor, ChProcess, CloudHypervisorBackend
+    └── mock.rs          # Test backend: MockBackend, MockVmm, MockProcess (failure injection)
 ```

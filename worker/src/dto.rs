@@ -6,6 +6,7 @@
 
 use std::fmt;
 
+use serde::Deserialize;
 use tokio::sync::{mpsc, oneshot};
 
 // ─── Error type that crosses the channel ───────────────────────────────────
@@ -53,89 +54,69 @@ impl From<VmError> for capnp::Error {
 
 /// Internal representation of a VM's desired configuration.
 /// Built from capnp VmSpec in the Server, consumed by Node/VmManager.
-#[derive(Debug, Clone)]
+/// Also deserializable from the JSON produced by the Nix `vmSpecJson` output.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VmSpec {
-    id: String,
-    name: String,
-    store_path: String,
-    content_hash: String,
-    cpu: f32,
-    memory_bytes: u64,
+    toplevel: String,
     kernel_path: String,
-    initrd_path: Option<String>,
+    initrd_path: String,
     disk_image_path: String,
-    cmdline: Option<String>,
+    cmdline: String,
+    cpu: u32,
+    memory_mb: u32,
     network_allowed_domains: Vec<String>,
 }
 
 impl VmSpec {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        id: String,
-        name: String,
-        store_path: String,
-        content_hash: String,
-        cpu: f32,
-        memory_bytes: u64,
+        toplevel: String,
         kernel_path: String,
-        initrd_path: Option<String>,
+        initrd_path: String,
         disk_image_path: String,
-        cmdline: Option<String>,
+        cmdline: String,
+        cpu: u32,
+        memory_mb: u32,
         network_allowed_domains: Vec<String>,
     ) -> Self {
         Self {
-            id,
-            name,
-            store_path,
-            content_hash,
-            cpu,
-            memory_bytes,
+            toplevel,
             kernel_path,
             initrd_path,
             disk_image_path,
             cmdline,
+            cpu,
+            memory_mb,
             network_allowed_domains,
         }
     }
 
-    pub fn id(&self) -> &str {
-        &self.id
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn store_path(&self) -> &str {
-        &self.store_path
-    }
-
-    pub fn content_hash(&self) -> &str {
-        &self.content_hash
-    }
-
-    pub fn cpu(&self) -> f32 {
-        self.cpu
-    }
-
-    pub fn memory_bytes(&self) -> u64 {
-        self.memory_bytes
+    pub fn toplevel(&self) -> &str {
+        &self.toplevel
     }
 
     pub fn kernel_path(&self) -> &str {
         &self.kernel_path
     }
 
-    pub fn initrd_path(&self) -> Option<&str> {
-        self.initrd_path.as_deref()
+    pub fn initrd_path(&self) -> &str {
+        &self.initrd_path
     }
 
     pub fn disk_image_path(&self) -> &str {
         &self.disk_image_path
     }
 
-    pub fn cmdline(&self) -> Option<&str> {
-        self.cmdline.as_deref()
+    pub fn cmdline(&self) -> &str {
+        &self.cmdline
+    }
+
+    pub fn cpu(&self) -> u32 {
+        self.cpu
+    }
+
+    pub fn memory_mb(&self) -> u32 {
+        self.memory_mb
     }
 
     pub fn network_allowed_domains(&self) -> &[String] {
@@ -289,6 +270,7 @@ pub enum CommandPayload {
 #[derive(Debug)]
 pub enum CommandResponse {
     Unit,
+    VmId(String),
     VmList(Vec<VmInfo>),
     WorkerInfo(WorkerInfo),
 }
@@ -301,6 +283,13 @@ pub struct Message {
 }
 
 impl Message {
+    pub fn from_parts(
+        data: CommandPayload,
+        reply: oneshot::Sender<Result<CommandResponse, VmError>>,
+    ) -> Self {
+        Self { data, reply }
+    }
+
     pub fn into_parts(self) -> (CommandPayload, oneshot::Sender<Result<CommandResponse, VmError>>) {
         (self.data, self.reply)
     }

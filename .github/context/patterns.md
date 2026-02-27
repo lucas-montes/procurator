@@ -140,6 +140,8 @@ Both the Master and Worker use flat interfaces — all methods are top-level on 
 interface Worker {
     read @0 () -> (data :Common.WorkerStatus);
     listVms @1 () -> (vms :List(Common.VmStatus));
+    createVm @2 (spec :Common.VmSpec) -> (id :Text);
+    deleteVm @3 (id :Text) -> ();
 }
 ```
 
@@ -149,18 +151,26 @@ interface Worker {
 
 All message types that cross the channel boundary (VmSpec, VmInfo, WorkerInfo, etc.) have **private fields** with explicit constructors (`new()`) and getters. This enforces construction through validated paths and prevents partial initialization.
 
+VmSpec additionally derives `Deserialize` with `#[serde(rename_all = "camelCase")]` so it can be deserialized directly from the JSON produced by Nix's `vmSpecJson` derivation. The 8 fields match the capnp VmSpec schema exactly.
+
 ```rust
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VmSpec {
-    id: String,
-    name: String,
+    toplevel: String,
     kernel_path: String,
-    // ... all private
+    initrd_path: String,
+    disk_image_path: String,
+    cmdline: String,
+    cpu: u32,
+    memory_mb: u32,
+    network_allowed_domains: Vec<String>,
 }
 
 impl VmSpec {
-    pub fn new(id: String, name: String, ...) -> Self { ... }
-    pub fn id(&self) -> &str { &self.id }
+    pub fn toplevel(&self) -> &str { &self.toplevel }
     pub fn kernel_path(&self) -> &str { &self.kernel_path }
+    // ... getters for all 8 fields
 }
 ```
 
@@ -236,10 +246,13 @@ async fn wait_for_socket(path: &Path, timeout: Duration) -> Result<()> {
 CH configs are built from explicit VmSpec paths — no path guessing:
 
 ```
-VmSpec.kernelPath    = "/nix/store/kernel-abc/bzImage"
-VmSpec.diskImagePath = "/nix/store/disk-abc/nixos.raw"
-VmSpec.initrdPath    = "/nix/store/initrd-abc/initrd"  (optional)
-VmSpec.cmdline       = "console=ttyS0 root=/dev/vda rw"  (optional)
+VmSpec.kernelPath              = "/nix/store/kernel-abc/bzImage"
+VmSpec.diskImagePath           = "/nix/store/disk-abc/nixos.raw"
+VmSpec.initrdPath              = "/nix/store/initrd-abc/initrd"
+VmSpec.cmdline                 = "console=ttyS0 root=/dev/vda rw init=/sbin/init"
+VmSpec.cpu                     = 2        (u32)
+VmSpec.memoryMb                = 1024     (u32)
+VmSpec.networkAllowedDomains   = ["api.openai.com"]
 ```
 
 The `CloudHypervisorBackend::build_config()` reads these directly from the VmSpec getters.
@@ -263,8 +276,19 @@ Inner errors are wrapped, never leaked across boundaries. The Server converts `V
 
 ## Testing Patterns
 
+### Rust Unit Tests
+
 - **VmManager tests:** create a `mpsc::channel`, send `CommandPayload` messages, assert `CommandResponse` — no network needed
-- **Backend testability:** `VmManager<B>` is generic over `VmmBackend`. Tests can provide a mock backend that returns stub `Vmm` clients and `VmmProcess` handles without touching real hypervisors, sockets, or filesystem.
+- **Backend testability:** `VmManager<B>` is generic over `VmmBackend`. Tests use `MockBackend` (in `vmm/mock.rs`) with:
+  - `MockCallTracker` — counts calls to each trait method (prepares, spawns, creates, boots, etc.)
+  - `MockBackendConfig` — failure injection: set `prepare_error`, `spawn_error`, `create_error`, `boot_error` etc. to force specific failures
+  - All mock types are `Send + 'static` for async compatibility
+- **JSON deserialization tests:** validate the Nix → Rust contract by deserializing sample JSON with camelCase keys and asserting field values
 - **Integration tests:** spin up the full Server + Node + VmManager, connect a capnp client
 - **CLI test binaries:** `pcr-test` (master), `pcr-worker-test` (worker) for manual end-to-end testing against running servers
-- **Unit tests:** in `#[cfg(test)] mod tests` blocks within each module
+- **Unit tests:** in `#[cfg(test)] mod tests` blocks within each module, or in dedicated `_tests.rs` files
+
+### Nix Tests
+
+- **Fast test (pure eval, no build):** `nix/flake-vmm/test-vm-spec.nix` — validates vmSpec field names, types, defaults, JSON round-trip using hand-built attrsets. Runs in ~1s: `nix eval --json -f ./nix/flake-vmm/test-vm-spec.nix`
+- **Slow test (full NixOS eval):** `nix flake check ./nix/flake-vmm` — calls `mkVmImage` for real, builds actual kernel/initrd derivations, validates vmSpecJson with `jq`. ~30-60s first run, cached after. Lives in `flake.nix` as `checks.x86_64-linux.vm-spec`.

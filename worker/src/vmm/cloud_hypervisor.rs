@@ -571,14 +571,14 @@ impl VmmBackend for CloudHypervisorBackend {
     }
 
     fn build_config(&self, spec: &VmSpec) -> ChVmConfig {
-        let boot_vcpus = spec.cpu().ceil() as u8;
+        let boot_vcpus = spec.cpu() as u8;
 
         // Use the explicit paths from the Nix-built vmSpec.
         // These are separate store paths for kernel, initrd, and disk image.
         let kernel_path = spec.kernel_path().to_string();
         let disk_path = spec.disk_image_path().to_string();
-        let initrd_path = spec.initrd_path().map(|s| s.to_string());
-        let cmdline = spec.cmdline().map(|s| s.to_string());
+        let initrd_path = spec.initrd_path().to_string();
+        let cmdline = spec.cmdline().to_string();
 
         ChVmConfig {
             cpus: ChCpusConfig {
@@ -586,12 +586,12 @@ impl VmmBackend for CloudHypervisorBackend {
                 max_vcpus: boot_vcpus,
             },
             memory: ChMemoryConfig {
-                size: spec.memory_bytes(),
+                size: u64::from(spec.memory_mb()) * 1024 * 1024,
             },
             payload: Some(ChPayloadConfig {
                 kernel: kernel_path,
-                cmdline,
-                initramfs: initrd_path,
+                cmdline: Some(cmdline),
+                initramfs: Some(initrd_path),
             }),
             disks: vec![ChDiskConfig {
                 path: disk_path,

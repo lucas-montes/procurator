@@ -92,6 +92,22 @@ pub trait VmmBackend: Send + 'static {
     /// The process handle this backend produces.
     type Process: VmmProcess;
 
+    /// Ensure the VM's artifacts (kernel, disk image, initrd) are available
+    /// on the local filesystem before spawning.
+    ///
+    /// Production: may run `nix copy --from <cache> <store-path>` to pull
+    /// closures from a binary cache.
+    /// Tests: no-op (paths don't need to exist).
+    ///
+    /// Default implementation does nothing — override when the backend
+    /// needs to fetch artifacts before it can use them.
+    fn prepare(
+        &self,
+        _spec: &VmSpec,
+    ) -> impl std::future::Future<Output = Result<(), VmError>> + Send {
+        std::future::ready(Ok(()))
+    }
+
     /// Spawn a new VMM process for the given VM and return a client + process handle.
     ///
     /// Responsibilities (for a real backend):

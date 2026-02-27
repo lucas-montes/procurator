@@ -4,6 +4,9 @@ pub mod server;
 pub mod vm_manager;
 pub mod vmm;
 
+#[cfg(test)]
+mod vm_manager_tests;
+
 use std::net::SocketAddr;
 
 use node::Node;

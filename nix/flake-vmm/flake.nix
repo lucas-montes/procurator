@@ -54,7 +54,18 @@
 #         sshAuthorizedKeys = [ "ssh-ed25519 AAAA..." ];
 #         hostname = "my-sandbox";
 #         allowedDomains = [ "api.openai.com" ];
+#         cpu = 2;
+#         memoryMb = 1024;
 #       }).image;
+#
+#     # Get the JSON spec for the CLI:
+#     packages.x86_64-linux.my-vm-spec =
+#       ch-vmm.lib.x86_64-linux.mkVmSpecJson {
+#         hostname = "my-sandbox";
+#         cpu = 2;
+#         memoryMb = 1024;
+#         allowedDomains = [ "api.openai.com" ];
+#       };
 #
 #     # Or: run any derivation as a VM workload (gitops pattern):
 #     packages.x86_64-linux.my-workload =
@@ -139,13 +150,15 @@
         #   autoShutdown     - power off VM when entrypoint exits (default: false)
         #   files            - attrset of {path = content} to inject into the image
         #   allowedDomains   - list of domain names the VM can reach ([] = all)
+        #   cpu              - number of vCPUs (default: 1)
+        #   memoryMb         - RAM in megabytes (default: 512)
         #
         # Returns: an attrset with:
         #   - image: the ext4 disk image derivation
         #   - nixos: the full NixOS system (for kernel/initrd access)
         #   - toplevel: the system.build.toplevel derivation
-        #   - networkSetupScript: host-side script with baked-in domain allowlist
-        #   - vmSpec: all metadata needed to launch (kernel, initrd, image, cmdline, etc.)
+        #   - vmSpec: attrset matching capnp VmSpec (for CLI/worker consumption)
+        #   - vmSpecJson: a derivation producing vm-spec.json
         mkVmImage = {
           extraPackages ? (_: []),
           sshAuthorizedKeys ? [],
@@ -156,6 +169,8 @@
           autoShutdown ? false,
           files ? {},
           allowedDomains ? [],
+          cpu ? 1,
+          memoryMb ? 512,
         }: let
           # Build a NixOS system with our VM module + user overrides
           nixos = nixpkgs.lib.nixosSystem {
@@ -265,19 +280,25 @@
             '';
           };
           # ── VM spec ─────────────────────────────────────────────────
-          # All the metadata a node/orchestrator needs to launch this VM.
-          # The host-module.nix reads allowedDomains to configure nftables.
+          # Matches the capnp VmSpec schema exactly — these are the fields
+          # the CLI sends to the worker's createVm RPC.
           vmSpec = {
-            inherit hostname;
-            kernel = "${nixos.config.system.build.kernel}/${nixos.config.system.boot.loader.kernelFile}";
-            initrd = "${nixos.config.system.build.initialRamdisk}/${nixos.config.system.boot.loader.initrdFile}";
-            inherit image;
-            inherit allowedDomains;
+            toplevel = toString toplevel;
+            kernelPath = "${nixos.config.system.build.kernel}/${nixos.config.system.boot.loader.kernelFile}";
+            initrdPath = "${nixos.config.system.build.initialRamdisk}/${nixos.config.system.boot.loader.initrdFile}";
+            diskImagePath = toString image;
             cmdline = "console=ttyS0 root=/dev/vda rw init=/sbin/init";
-            inherit entrypoint autoShutdown;
+            inherit cpu memoryMb;
+            networkAllowedDomains = allowedDomains;
           };
 
-        in { inherit image nixos toplevel vmSpec; };
+          # ── VM spec as JSON ──────────────────────────────────────────
+          # A derivation that produces vm-spec.json, consumable by the CLI:
+          #   nix build .#my-vm-spec && cat result
+          #   pcr create-vm --spec $(nix build .#my-vm-spec --print-out-paths)
+          vmSpecJson = pkgs.writeText "vm-spec.json" (builtins.toJSON vmSpec);
+
+        in { inherit image nixos toplevel vmSpec vmSpecJson; };
 
         # ── mkVmFromDrv: run any derivation in a VM ───────────────
         # The core platform primitive for the gitops workflow.
@@ -298,6 +319,8 @@
         #   files         - extra files to inject (default: {})
         #   sshAuthorizedKeys - SSH keys for debugging (default: [])
         #   hostname     - VM hostname (default: drv.pname or "workload-vm")
+        #   cpu          - number of vCPUs (default: 1)
+        #   memoryMb     - RAM in megabytes (default: 512)
         #
         # Usage (in a consuming flake):
         #   ch-vmm.lib.x86_64-linux.mkVmFromDrv {
@@ -313,6 +336,8 @@
           allowedDomains ? [],
           sshAuthorizedKeys ? [],
           hostname ? (drv.pname or "workload-vm"),
+          cpu ? 1,
+          memoryMb ? 512,
         }: let
           # Default entrypoint: try bin/<pname>, fall back to bin/<name>
           defaultEntrypoint =
@@ -324,7 +349,7 @@
 
           resolvedEntrypoint = if entrypoint != null then entrypoint else defaultEntrypoint;
         in mkVmImage {
-          inherit sshAuthorizedKeys hostname autoShutdown files allowedDomains;
+          inherit sshAuthorizedKeys hostname autoShutdown files allowedDomains cpu memoryMb;
           entrypoint = resolvedEntrypoint;
           extraPackages = p: [ drv ] ++ (extraPackages p);
         };
@@ -586,7 +611,14 @@
         #     drv = myApp;
         #     autoShutdown = true;
         #   }
-        lib = { inherit mkVmImage mkVmFromDrv; };
+        # ── mkVmSpecJson: convenience wrapper ──────────────────
+        # Build a VM image and return just the JSON spec derivation.
+        # Usage:
+        #   nix build .#vm-spec --print-out-paths
+        #   pcr create-vm --spec /nix/store/...-vm-spec.json
+        mkVmSpecJson = args: (mkVmImage args).vmSpecJson;
+
+        lib = { inherit mkVmImage mkVmFromDrv mkVmSpecJson; };
 
         # ── Packages ─────────────────────────────────────────────────
         packages = {
@@ -603,6 +635,9 @@
           # The VM launcher script
           vm-runner = runVM;
 
+          # The default VM spec as JSON (for CLI consumption)
+          vm-spec = default.vmSpecJson;
+
           # ── Workload demo ────────────────────────────────────────
           # Sample derivation and VM image showing mkVmFromDrv in action
           sample-workload = sampleWorkload;
@@ -610,6 +645,148 @@
           workload-demo-runner = workloadDemoVM;
 
           default = runVM;
+        };
+
+        # ── Checks (slow tests — full NixOS eval) ────────────────────
+        # Run with: nix flake check ./nix/flake-vmm
+        # Or build individually: nix build ./nix/flake-vmm#checks.x86_64-linux.vm-spec
+        #
+        # These tests call mkVmImage for real, triggering a full NixOS
+        # eval. They validate that the vmSpec output matches the capnp
+        # schema after building actual kernel/initrd/disk derivations.
+        # ~30-60s on first run, cached after that.
+        checks = let
+          # Build a real VM with custom params
+          testVm = mkVmImage {
+            hostname = "test-vm";
+            cpu = 2;
+            memoryMb = 1024;
+            allowedDomains = [ "api.openai.com" "github.com" ];
+          };
+
+          spec = testVm.vmSpec;
+
+          # The expected field names (sorted, matching capnp VmSpec)
+          expectedFields = [ "cmdline" "cpu" "diskImagePath" "initrdPath" "kernelPath" "memoryMb" "networkAllowedDomains" "toplevel" ];
+
+          specJson = builtins.toJSON spec;
+        in {
+          # Validates vmSpec shape from a real mkVmImage call.
+          vm-spec = pkgs.runCommand "check-vm-spec" {
+            passAsFile = [ "specContent" ];
+            specContent = specJson;
+            nativeBuildInputs = [ pkgs.jq ];
+          } ''
+            set -euo pipefail
+
+            echo "=== vmSpec contract test (full NixOS eval) ==="
+            echo ""
+
+            # ── 1. Parse JSON successfully ──────────────────────────
+            echo "1. Parsing vmSpec JSON..."
+            jq . < "$specContentPath" > /dev/null
+            echo "   OK: valid JSON"
+
+            # ── 2. Exactly 8 fields ─────────────────────────────────
+            echo "2. Checking field count..."
+            count=$(jq 'keys | length' < "$specContentPath")
+            if [ "$count" != "8" ]; then
+              echo "   FAIL: expected 8 fields, got $count"
+              jq 'keys' < "$specContentPath"
+              exit 1
+            fi
+            echo "   OK: 8 fields"
+
+            # ── 3. Required fields present ──────────────────────────
+            echo "3. Checking required fields..."
+            for field in ${builtins.concatStringsSep " " expectedFields}; do
+              if ! jq -e ".$field" < "$specContentPath" > /dev/null 2>&1; then
+                echo "   FAIL: missing field '$field'"
+                exit 1
+              fi
+            done
+            echo "   OK: all required fields present"
+
+            # ── 4. String fields are non-empty strings ──────────────
+            echo "4. Checking string field types..."
+            for field in toplevel kernelPath initrdPath diskImagePath cmdline; do
+              val=$(jq -r ".$field" < "$specContentPath")
+              if [ -z "$val" ] || [ "$val" = "null" ]; then
+                echo "   FAIL: '$field' is empty or null"
+                exit 1
+              fi
+            done
+            echo "   OK: all string fields non-empty"
+
+            # ── 5. Integer fields are numbers ───────────────────────
+            echo "5. Checking integer fields..."
+            for field in cpu memoryMb; do
+              typ=$(jq -r ".$field | type" < "$specContentPath")
+              if [ "$typ" != "number" ]; then
+                echo "   FAIL: '$field' is $typ, expected number"
+                exit 1
+              fi
+            done
+            echo "   OK: cpu and memoryMb are numbers"
+
+            # ── 6. Custom values propagated ─────────────────────────
+            echo "6. Checking custom values..."
+            cpu=$(jq '.cpu' < "$specContentPath")
+            mem=$(jq '.memoryMb' < "$specContentPath")
+            domains=$(jq '.networkAllowedDomains | length' < "$specContentPath")
+            if [ "$cpu" != "2" ]; then
+              echo "   FAIL: cpu expected 2, got $cpu"
+              exit 1
+            fi
+            if [ "$mem" != "1024" ]; then
+              echo "   FAIL: memoryMb expected 1024, got $mem"
+              exit 1
+            fi
+            if [ "$domains" != "2" ]; then
+              echo "   FAIL: networkAllowedDomains expected 2 entries, got $domains"
+              exit 1
+            fi
+            echo "   OK: cpu=2, memoryMb=1024, 2 domains"
+
+            # ── 7. Store paths have /nix/store/ prefix ──────────────
+            echo "7. Checking Nix store path format..."
+            for field in toplevel kernelPath initrdPath diskImagePath; do
+              val=$(jq -r ".$field" < "$specContentPath")
+              case "$val" in
+                /nix/store/*) ;;
+                *)
+                  echo "   FAIL: '$field' = '$val' (not a /nix/store/ path)"
+                  exit 1
+                  ;;
+              esac
+            done
+            echo "   OK: all paths are /nix/store/ paths"
+
+            # ── 8. networkAllowedDomains is a list of strings ───────
+            echo "8. Checking domain list..."
+            first=$(jq -r '.networkAllowedDomains[0]' < "$specContentPath")
+            second=$(jq -r '.networkAllowedDomains[1]' < "$specContentPath")
+            if [ "$first" != "api.openai.com" ]; then
+              echo "   FAIL: first domain expected 'api.openai.com', got '$first'"
+              exit 1
+            fi
+            if [ "$second" != "github.com" ]; then
+              echo "   FAIL: second domain expected 'github.com', got '$second'"
+              exit 1
+            fi
+            echo "   OK: domains match"
+
+            echo ""
+            echo "=== All vmSpec contract tests passed ==="
+            echo ""
+            echo "vmSpec JSON:"
+            jq . < "$specContentPath"
+
+            # Write marker file (nix checks need an output)
+            mkdir -p $out
+            cp "$specContentPath" $out/vm-spec.json
+            echo "PASS" > $out/result
+          '';
         };
 
         # ── Apps ─────────────────────────────────────────────────────

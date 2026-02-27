@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use tracing::{info, instrument, warn};
+use uuid::Uuid;
 
 use crate::dto::{
     CommandPayload, CommandResponse, Message, VmError, VmInfo,
@@ -78,7 +79,7 @@ impl<B: VmmBackend> VmManager<B> {
         let (data, reply) = msg.into_parts();
         match data {
             CommandPayload::Create(spec) => {
-                let result = self.handle_create(spec).await.map(|_| CommandResponse::Unit);
+                let result = self.handle_create(spec).await.map(CommandResponse::VmId);
                 let _ = reply.send(result);
             }
             CommandPayload::Delete(vm_id) => {
@@ -104,32 +105,31 @@ impl<B: VmmBackend> VmManager<B> {
 
     // ─── Command handlers ──────────────────────────────────────────────
 
-    #[instrument(skip(self), fields(vm_id = %spec.id()))]
-    async fn handle_create(&mut self, spec: VmSpec) -> Result<(), VmError> {
-        if self.vms.contains_key(spec.id()) {
-            return Err(VmError::AlreadyExists(spec.id().to_string()));
-        }
+    #[instrument(skip(self), fields(toplevel = %spec.toplevel()))]
+    async fn handle_create(&mut self, spec: VmSpec) -> Result<String, VmError> {
+        let vm_id = Uuid::now_v7().to_string();
+        info!(vm_id = %vm_id, toplevel = %spec.toplevel(), "Creating VM");
 
-        let vm_id = spec.id().to_string();
-        info!(vm_id = %vm_id, store_path = %spec.store_path(), "Creating VM");
+        // 1. Ensure artifacts are available locally (e.g. nix copy from cache)
+        self.backend.prepare(&spec).await?;
 
-        // 1. Spawn the VMM process via the backend
+        // 2. Spawn the VMM process via the backend
         let (client, process, socket_path) = self.backend.spawn(&vm_id).await?;
 
-        // 2. Build backend-specific config from the platform-agnostic spec
+        // 3. Build backend-specific config from the platform-agnostic spec
         let vmm_config = self.backend.build_config(&spec);
 
-        // 3. Create the VM definition via the client
+        // 4. Create the VM definition via the client
         client.create(vmm_config).await.map_err(|e| {
             VmError::Hypervisor(format!("vm.create failed: {e}"))
         })?;
 
-        // 4. Boot the VM
+        // 5. Boot the VM
         client.boot().await.map_err(|e| {
             VmError::Hypervisor(format!("vm.boot failed: {e}"))
         })?;
 
-        // 5. Record in our table
+        // 6. Record in our table
         let handle = VmHandle {
             spec,
             client,
@@ -140,7 +140,7 @@ impl<B: VmmBackend> VmManager<B> {
         self.vms.insert(vm_id.clone(), handle);
 
         info!(vm_id = %vm_id, "VM created and booted");
-        Ok(())
+        Ok(vm_id)
     }
 
     #[instrument(skip(self))]
@@ -201,12 +201,13 @@ impl<B: VmmBackend> VmManager<B> {
     // ─── Helpers ───────────────────────────────────────────────────────
 
     fn build_vm_info(&self, vm_id: &str, handle: &VmHandle<B>) -> VmInfo {
+        let toplevel_hash = handle.spec.toplevel().to_string();
         VmInfo::new(
             vm_id.to_string(),
             self.config.worker_id.clone(),
             handle.status.clone(),
-            handle.spec.content_hash().to_string(),
-            handle.spec.content_hash().to_string(), // TODO: compute from running state
+            toplevel_hash.clone(),
+            toplevel_hash, // TODO: compute from running state
             VmMetrics::default(),
         )
     }

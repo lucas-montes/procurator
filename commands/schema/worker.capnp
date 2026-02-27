@@ -6,4 +6,6 @@ using Common = import "common.capnp";
 interface Worker {
   read @0 () -> (data :Common.WorkerStatus);
   listVms @1 () -> (vms :List(Common.VmStatus));
+  createVm @2 (spec :Common.VmSpec) -> (id :Text);
+  deleteVm @3 (id :Text) -> ();
 }

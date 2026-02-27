@@ -15,19 +15,14 @@ struct Result(Ok, Err) {
 
 # Desired state for a single VM (output of Nix evaluation)
 struct VmSpec {
-  id @0 :Text;                      # Unique VM logical ID
-  name @1 :Text;                    # Human-readable name
-  storePath @2 :Text;               # /nix/store/... path to VM closure root
-  contentHash @3 :Text;             # Hash of VM image for drift detection
-  cpu @4 :Float32;                  # Fractional vCPUs (0.5, 1.0, etc.)
-  memoryBytes @5 :UInt64;           # RAM in bytes
-  labels @6 :List(Label);           # For scheduling constraints/affinity
-  replicas @7 :UInt32;              # How many copies should run
-  networkAllowedDomains @8 :List(Text);  # If empty, no network (isolated)
-  kernelPath @9 :Text;              # /nix/store/... path to kernel (bzImage)
-  initrdPath @10 :Text;             # /nix/store/... path to initramfs (optional)
-  diskImagePath @11 :Text;          # /nix/store/... path to root disk image
-  cmdline @12 :Text;                # Kernel command line (e.g. "console=ttyS0 root=/dev/vda")
+  toplevel @0 :Text;                # /nix/store/...-nixos-system (for nix copy)
+  kernelPath @1 :Text;              # /nix/store/... path to kernel (bzImage)
+  initrdPath @2 :Text;              # /nix/store/... path to initramfs
+  diskImagePath @3 :Text;           # /nix/store/... path to root disk image
+  cmdline @4 :Text;                 # Kernel command line (e.g. "console=ttyS0 root=/dev/vda")
+  cpu @5 :UInt32;                   # Number of vCPUs
+  memoryMb @6 :UInt32;              # RAM in megabytes
+  networkAllowedDomains @7 :List(Text);  # Domains the VM can reach (empty = isolated)
 }
 
 struct Label {

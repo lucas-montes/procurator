@@ -229,8 +229,39 @@ The VmManager directly instantiated CloudHypervisor clients and managed CH proce
 **Trait summary:**
 - `Vmm`: create, boot, shutdown, delete, info, pause, resume, counters, ping. Associated types: Config, Info, Error.
 - `VmmProcess`: kill, cleanup.
-- `VmmBackend`: spawn(spec) → (Client, Process), build_config(spec) → Config.
+- `VmmBackend`: prepare(spec), spawn(vm_id) → (Client, Process, PathBuf), build_config(spec) → Config.
 
 **Tradeoffs:**
 - More type parameters — `VmManager<B>`, `Node<B>`, `VmHandle<B>`. Contained to the worker crate internals.
 - `impl Trait` in trait methods (RPITIT) requires Rust edition 2024. We're already on edition 2024.
+
+---
+
+## ADR-010: prepare() on VmmBackend instead of separate ArtifactResolver trait
+
+**Status:** Accepted
+
+**Context:**
+Before a VM can be spawned, the worker must ensure that the Nix closure (kernel, disk image, initrd) is available in the local store. In the typical deployment flow: Nix builds on CI → pushes to a binary cache → worker needs to `nix copy --from <cache> <store_path>` before it can use the paths.
+
+The question: where does this "ensure artifacts are local" logic live?
+
+**Options considered:**
+
+1. **Separate `VmArtifactResolver` trait** — a second generic on VmManager: `VmManager<B: VmmBackend, R: VmArtifactResolver>`. The resolver trait has one method: `resolve(spec) → Result<ResolvedSpec>`. Clean separation of concerns, but doubles the generics.
+2. **Method on VmmBackend** — add `prepare(&self, spec: &VmSpec) -> Result<(), VmError>` to the existing VmmBackend trait with a default no-op. Production backend overrides to run `nix copy`. Tests get the no-op for free.
+3. **Standalone function** — a free function called by VmManager before spawn. Not mockable, not overridable per-backend.
+
+**Decision:** Option 2 — `prepare()` on `VmmBackend` with default no-op.
+
+**Rationale:**
+- **Avoids premature abstraction:** We have exactly one backend (CloudHypervisor). A second generic parameter adds type complexity for a single implementation. If we ever need to mix-and-match resolvers and backends independently, we can extract the trait then.
+- **No double generics:** `VmManager<B>` stays single-generic. No `VmManager<B, R>`, no extra PhantomData, no dual trait bounds propagating through Node and lib.rs.
+- **Default no-op keeps tests trivial:** MockBackend inherits the default no-op (or overrides it for failure injection testing), without needing a separate MockResolver.
+- **Semantically correct:** "prepare the environment for this spec" IS a backend concern — different backends may need different preparation (nix copy for CH, OCI pull for containers, nothing for local dev).
+- **Easily overridable:** CloudHypervisorBackend can override `prepare()` later to run `nix copy --from <cache> <store_paths>` without changing VmManager or any other code.
+- **Call order is clear:** VmManager's `handle_create` calls `prepare()` → `spawn()` → `build_config()` → `create()` → `boot()`. The prepare step runs before any process is spawned, so failures are clean (no orphan processes).
+
+**Tradeoffs:**
+- Couples artifact resolution to the backend. If we need the same resolution logic for multiple backends, we'd duplicate it. Acceptable for now — we have one backend.
+- The default no-op could silently hide a missing override. Mitigated by integration tests that actually exercise the Nix path.
