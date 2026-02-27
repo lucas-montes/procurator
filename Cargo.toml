@@ -50,8 +50,8 @@ serde_json.workspace = true
 members = ["cli", "commands", "control_plane", "worker", "ci_service", "cache", "repo_outils", "repohub", "autonix"]
 
 [workspace.lints.clippy]
-all = { level = "allow" }
-pedantic = { level = "allow" }
+all = { level = "deny" }
+pedantic = { level = "deny" }
 
 [workspace.lints.rust]
-warnings = "allow"
+warnings = "warn"

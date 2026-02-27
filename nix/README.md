@@ -25,17 +25,15 @@ git push
 Generate a serializable desired state from the flake (source‑of‑truth config only):
 
 ```nu
-cd /home/lucas/Projects/procurator/example
-nix eval --json ".#blueprintJSON" > blueprint.json
+nix eval --json "example#blueprintJSON" > blueprint.json
 ```
 
 ### 3) CI/CD builds system closures and detects changes
 Build the NixOS system closures for each VM. If nothing changed, Nix reuses cached results. Then compare new store paths to the previous deployment artifact to decide whether to deploy.
 
 ```nu
-cd /home/lucas/Projects/procurator/example
 for vm in control-plane-1 worker-1 worker-2 {
-  let closure = (nix build --no-link --print-out-paths $".#nixosConfigurations.($vm).config.system.build.toplevel")
+  let closure = (nix build --no-link --print-out-paths $"example#nixosConfigurations.($vm).config.system.build.toplevel")
   print $"($vm) => ($closure)"
 }
 

@@ -1,40 +1,52 @@
+//! Node — single owner of all VM state and logic.
+//!
+//! The Node holds the VmManager and a channel receiver. It processes
+//! commands from the Server sequentially. No locks — the Node is the
+//! only task that touches VmManager.
+//!
+//! Generic over [`VmmBackend`] so the entire stack can be tested
+//! without real hypervisors.
+
 use std::net::SocketAddr;
 
 use tokio::sync::mpsc::Receiver;
+use tracing::info;
 
-use crate::dto::{NodeEvent, NodeMessage};
-use crate::vmm::Vmm;
+use crate::dto::Message;
+use crate::vm_manager::{VmManager, VmManagerConfig};
+use crate::vmm::VmmBackend;
 
-///! Node that handles communications between the server and the logic handled by the control plane.
-
-pub struct Node<V: Vmm> {
-    /// Channel to receive messages from the server
-    node_channel: Receiver<NodeMessage>,
+pub struct Node<B: VmmBackend> {
+    /// Channel to receive commands from the Server
+    commands: Receiver<Message>,
+    /// Control plane address (for future reconciliation)
     master_addr: SocketAddr,
-    /// VMM backend for managing virtual machines
-    vmm: V,
+    /// Owns all VM state — generic over the VMM backend
+    manager: VmManager<B>,
 }
 
-impl<V: Vmm> Node<V> {
+impl<B: VmmBackend> Node<B> {
     pub fn new(
-        node_channel: Receiver<NodeMessage>,
+        commands: Receiver<Message>,
         master_addr: SocketAddr,
-        vmm: V,
+        backend: B,
+        manager_config: VmManagerConfig,
     ) -> Self {
         Node {
-            node_channel,
+            commands,
             master_addr,
-            vmm,
+            manager: VmManager::new(backend, manager_config),
         }
     }
 
-    /// Main loop that processes messages from the server and sends command to the workers and orchestrates tasks
+    /// Main loop — process commands until the channel is closed.
     pub async fn run(mut self) {
-        tracing::info!(master_addr=?self.master_addr, "Node started with master addr");
-        while let Some(message) = self.node_channel.recv().await {
-            match message.event() {
-                NodeEvent::Apply => todo!(),
-            }
+        info!(master_addr = ?self.master_addr, "Node started");
+
+        while let Some(cmd) = self.commands.recv().await {
+            self.manager.handle(cmd).await;
         }
+
+        info!("Node command channel closed, shutting down");
     }
 }

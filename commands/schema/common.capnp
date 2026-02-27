@@ -17,13 +17,17 @@ struct Result(Ok, Err) {
 struct VmSpec {
   id @0 :Text;                      # Unique VM logical ID
   name @1 :Text;                    # Human-readable name
-  storePath @2 :Text;               # /nix/store/... path to VM image
+  storePath @2 :Text;               # /nix/store/... path to VM closure root
   contentHash @3 :Text;             # Hash of VM image for drift detection
   cpu @4 :Float32;                  # Fractional vCPUs (0.5, 1.0, etc.)
   memoryBytes @5 :UInt64;           # RAM in bytes
   labels @6 :List(Label);           # For scheduling constraints/affinity
   replicas @7 :UInt32;              # How many copies should run
   networkAllowedDomains @8 :List(Text);  # If empty, no network (isolated)
+  kernelPath @9 :Text;              # /nix/store/... path to kernel (bzImage)
+  initrdPath @10 :Text;             # /nix/store/... path to initramfs (optional)
+  diskImagePath @11 :Text;          # /nix/store/... path to root disk image
+  cmdline @12 :Text;                # Kernel command line (e.g. "console=ttyS0 root=/dev/vda")
 }
 
 struct Label {
@@ -97,23 +101,4 @@ struct ClusterStatus {
   convergencePercent @2 :UInt32;    # % of desired state realized
   workers @3 :List(WorkerStatus);
   vms @4 :List(VmStatus);
-}
-
-struct VmLogs {
-  logs @0 :Text;
-  truncated @1 :Bool;     # If tailLines was used and more exist
-}
-
-struct ExecOutput {
-  stdout @0 :Text;
-  stderr @1 :Text;
-  exitCode @2 :Int32;
-}
-
-struct ConnectionInfo {
-  vmId @0 :Text;
-  workerHost @1 :Text;    # Worker machine hostname/IP
-  sshPort @2 :UInt16;     # SSH port forwarded from VM
-  consolePort @3 :UInt16; # Serial console port (optional)
-  username @4 :Text;      # Default SSH username
 }

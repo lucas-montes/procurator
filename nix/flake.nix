@@ -11,38 +11,41 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = {
-    self,
-    nixpkgs,
-    rust-overlay,
-    flake-utils,
-    ...
-  }:
-  # Generate outputs for all default systems (x86_64-linux, aarch64-linux, x86_64-darwin, aarch64-darwin)
+  outputs =
+    {
+      self,
+      nixpkgs,
+      rust-overlay,
+      flake-utils,
+      ...
+    }:
+    # Generate outputs for all default systems (x86_64-linux, aarch64-linux, x86_64-darwin, aarch64-darwin)
     flake-utils.lib.eachDefaultSystem (
-      system: let
+      system:
+      let
         # Apply rust-overlay to nixpkgs to get rust-bin attribute
-        overlays = [(import rust-overlay)];
+        overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs {
           inherit system overlays;
         };
         # Custom Rust toolchain with rust-src for IDE support (rust-analyzer)
         rust-bin-custom = pkgs.rust-bin.stable.latest.default.override {
-          extensions = ["rust-src"];
+          extensions = [ "rust-src" ];
         };
-        # Nixpkgs library for module evaluation and utility functions
         # Nixpkgs library for module evaluation and utility functions
         lib = nixpkgs.lib;
 
         # Helper function to build Rust packages from cargo workspaces
         # Takes a cargo directory name and builds that specific workspace member
-        mkRustPackage = cargoDir: let
-          # Read Cargo.toml to extract package name and version
-          cargoPath = ../${cargoDir}/Cargo.toml;
-          cargoToml = builtins.fromTOML (builtins.readFile cargoPath);
-          pname = cargoToml.package.name;
-          version = cargoToml.package.version;
-        in
+        mkRustPackage =
+          cargoDir:
+          let
+            # Read Cargo.toml to extract package name and version
+            cargoPath = ../${cargoDir}/Cargo.toml;
+            cargoToml = builtins.fromTOML (builtins.readFile cargoPath);
+            pname = cargoToml.package.name;
+            version = cargoToml.package.version;
+          in
           pkgs.rustPlatform.buildRustPackage {
             inherit pname version;
             # Source is the entire workspace root (required for cargo workspace)
@@ -54,13 +57,22 @@
             };
 
             # Only build and install this specific workspace member
-            cargoBuildFlags = ["-p" pname];
-            cargoInstallFlags = ["-p" pname];
+            cargoBuildFlags = [
+              "-p"
+              pname
+            ];
+            cargoInstallFlags = [
+              "-p"
+              pname
+            ];
 
             # Build-time dependencies for compilation
-            nativeBuildInputs = [pkgs.pkg-config pkgs.capnproto];
+            nativeBuildInputs = [
+              pkgs.pkg-config
+              pkgs.capnproto
+            ];
             # Runtime library dependencies
-            buildInputs = [pkgs.openssl];
+            buildInputs = [ pkgs.openssl ];
             # Skip tests during build (run separately if needed)
             doCheck = false;
           };
@@ -84,13 +96,14 @@
         # Development scripts using cargo run for faster iteration
         # These use the source code directly instead of building derivations
         pcr-dev = pkgs.writeShellScriptBin "pcr" ''
-          exec ${pkgs.cargo}/bin/cargo run --manifest-path="$CARGO_MANIFEST_DIR/procurator/Cargo.toml" -p cli -- "$@"
+          exec ${pkgs.cargo}/bin/cargo run --manifest-path="$CARGO_MANIFEST_DIR/Cargo.toml" -p cli -- "$@"
         '';
 
         pcr-test = pkgs.writeShellScriptBin "pcr-test" ''
-          exec ${pkgs.cargo}/bin/cargo run --manifest-path="$CARGO_MANIFEST_DIR/procurator/Cargo.toml" -p cli --bin pcr-test -- "$@"
+          exec ${pkgs.cargo}/bin/cargo run --manifest-path="$CARGO_MANIFEST_DIR/Cargo.toml" -p cli --bin pcr-test -- "$@"
         '';
-      in {
+      in
+      {
         # NixOS modules: importable configuration modules for NixOS systems
         # These define options and services that can be used in nixosConfigurations
         nixosModules = {
@@ -121,27 +134,35 @@
         };
 
         # Library functions: reusable Nix functions for cluster management
-        lib.evalCluster = {clusterConfig}: let
-          # Evaluate the cluster configuration using NixOS module system
-          # This validates the config and provides error/warning messages
-          eval = lib.evalModules {
-            modules = [
-              self.nixosModules.cluster
-              clusterConfig
-            ];
+        lib.evalCluster =
+          { clusterConfig }:
+          let
+            # Evaluate the cluster configuration using NixOS module system
+            # This validates the config and provides error/warning messages
+            eval = lib.evalModules {
+              modules = [
+                self.nixosModules.cluster
+                clusterConfig
+              ];
+            };
+          in
+          {
+            # The evaluated cluster configuration (VMs, deployment settings, etc.)
+            config = eval.config.cluster;
+            # Module system metadata: errors, warnings, and evaluation info
+            # Check _module.warnings and _module.errors for validation results
+            _module = eval._module;
           };
-        in {
-          # The evaluated cluster configuration (VMs, deployment settings, etc.)
-          config = eval.config.cluster;
-          # Module system metadata: errors, warnings, and evaluation info
-          # Check _module.warnings and _module.errors for validation results
-          _module = eval._module;
-        };
 
         # Packages: built derivations that can be installed or run
         # Access with: nix build '.#cache', nix build '.#procurator', etc.
         packages = {
-          inherit cache ci_service procurator cli;
+          inherit
+            cache
+            ci_service
+            procurator
+            cli
+            ;
           # Default package when running 'nix build' without a specific target
           default = procurator;
         };
@@ -150,18 +171,19 @@
         # These wrap packages to make them directly executable
         # Usage: nix run '.#cache', nix run '.#procurator-worker', etc.
         apps = {
-          cache = flake-utils.lib.mkApp {drv = cache;};
-          ci_service = flake-utils.lib.mkApp {drv = ci_service;};
-          procurator = flake-utils.lib.mkApp {drv = procurator;};
-          procurator-worker = flake-utils.lib.mkApp {drv = procurator-worker;};
-          procurator-control-plane = flake-utils.lib.mkApp {drv = procurator-control-plane;};
+          cache = flake-utils.lib.mkApp { drv = cache; };
+          ci_service = flake-utils.lib.mkApp { drv = ci_service; };
+          procurator = flake-utils.lib.mkApp { drv = procurator; };
+          procurator-worker = flake-utils.lib.mkApp { drv = procurator-worker; };
+          procurator-control-plane = flake-utils.lib.mkApp { drv = procurator-control-plane; };
           # Default app when running 'nix run' without a specific target
-          default = flake-utils.lib.mkApp {drv = procurator-control-plane;};
+          default = flake-utils.lib.mkApp { drv = procurator-control-plane; };
         };
 
         # Development shell: environment for working on procurator
         # Enter with: nix develop
-        devShells.default = with pkgs;
+        devShells.default =
+          with pkgs;
           mkShell {
             # Tools and dependencies available in the dev shell
             buildInputs = [

@@ -13,3 +13,4 @@ Rules:
 - If you suggest something that deviates from the documented patterns, explain why
 - When the context is unclear or missing, ask before assuming
 - Treat context/ files as the source of truth for how this project works
+- Always ask more questions to clarify requirements and verify assumptions and edge cases

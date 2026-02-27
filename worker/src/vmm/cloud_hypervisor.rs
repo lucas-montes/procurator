@@ -1,17 +1,26 @@
-//! Cloud Hypervisor VMM backend implementation
+//! Cloud Hypervisor VMM backend implementation.
 //!
-//! Communicates with cloud-hypervisor via REST API over unix socket
+//! Three types work together:
+//!
+//! - [`CloudHypervisor`] — per-VM REST client (implements [`Vmm`]).
+//! - [`ChProcess`] — handle to one `cloud-hypervisor` OS process (implements [`VmmProcess`]).
+//! - [`CloudHypervisorBackend`] — factory that spawns CH processes (implements [`VmmBackend`]).
 
-use crate::vmm::Vmm;
-use commands::common_capnp::vm_spec;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use hyperlocal::{UnixClientExt, Uri as UnixUri};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
-use std::borrow::Cow;
+use tokio::process::{Child, Command};
+use tracing::debug;
 
-/// Cloud Hypervisor VMM implementation - stateless REST client
-#[derive(Clone)]
+use crate::dto::{VmError, VmSpec};
+use crate::vmm::{Vmm, VmmBackend, VmmProcess};
+
+// ─── Per-VM REST client ───────────────────────────────────────────────────
+
+/// Stateless HTTP client to a single CH unix socket.
+/// One instance per VM (created by [`CloudHypervisorBackend::spawn`]).
 pub struct CloudHypervisor {
     /// Path to the unix socket for the cloud-hypervisor API
     socket_path: PathBuf,
@@ -40,7 +49,7 @@ impl CloudHypervisor {
 
 /// Cloud Hypervisor specific error types
 #[derive(Debug)]
-pub enum ChError {
+pub enum Error {
     Communication(String),
     VmNotFound(String),
     VmAlreadyExists(String),
@@ -50,287 +59,316 @@ pub enum ChError {
     Io(std::io::Error),
 }
 
-impl std::fmt::Display for ChError {
+impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ChError::Communication(msg) => write!(f, "Communication error: {}", msg),
-            ChError::VmNotFound(id) => write!(f, "VM not found: {}", id),
-            ChError::VmAlreadyExists(id) => write!(f, "VM already exists: {}", id),
-            ChError::InvalidConfig(msg) => write!(f, "Invalid configuration: {}", msg),
-            ChError::OperationFailed(msg) => write!(f, "Operation failed: {}", msg),
-            ChError::Serialization(err) => write!(f, "Serialization error: {}", err),
-            ChError::Io(err) => write!(f, "IO error: {}", err),
+            Error::Communication(msg) => write!(f, "Communication error: {}", msg),
+            Error::VmNotFound(id) => write!(f, "VM not found: {}", id),
+            Error::VmAlreadyExists(id) => write!(f, "VM already exists: {}", id),
+            Error::InvalidConfig(msg) => write!(f, "Invalid configuration: {}", msg),
+            Error::OperationFailed(msg) => write!(f, "Operation failed: {}", msg),
+            Error::Serialization(err) => write!(f, "Serialization error: {}", err),
+            Error::Io(err) => write!(f, "IO error: {}", err),
         }
     }
 }
 
-impl std::error::Error for ChError {
+impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            ChError::Serialization(err) => Some(err),
-            ChError::Io(err) => Some(err),
+            Error::Serialization(err) => Some(err),
+            Error::Io(err) => Some(err),
             _ => None,
         }
     }
 }
 
-impl From<serde_json::Error> for ChError {
+impl From<serde_json::Error> for Error {
     fn from(err: serde_json::Error) -> Self {
-        ChError::Serialization(err)
+        Error::Serialization(err)
     }
 }
 
-impl From<std::io::Error> for ChError {
+impl From<std::io::Error> for Error {
     fn from(err: std::io::Error) -> Self {
-        ChError::Io(err)
+        Error::Io(err)
     }
 }
 
 impl Vmm for CloudHypervisor {
-    type Config = ChVmConfig<'static>;
+    type Config = ChVmConfig;
     type Info = ChVmInfo;
-    type Error = ChError;
+    type Error = Error;
 
-    async fn create(&self, config: Self::Config, boot: bool) -> Result<(), Self::Error> {
+    async fn create(&self, config: Self::Config) -> Result<(), Self::Error> {
         let body = serde_json::to_string(&config)?;
 
-        // Create VM via REST API
         let uri = self.build_uri("/api/v1/vm.create");
         let req = hyper::Request::builder()
             .method(hyper::Method::PUT)
             .uri(uri)
             .header("Content-Type", "application/json")
             .body(hyper::Body::from(body))
-            .map_err(|e| ChError::Communication(e.to_string()))?;
+            .map_err(|e| Error::Communication(e.to_string()))?;
 
         let resp = self
             .client
             .request(req)
             .await
-            .map_err(|e| ChError::Communication(e.to_string()))?;
+            .map_err(|e| Error::Communication(e.to_string()))?;
 
         if !resp.status().is_success() {
             let body_bytes = hyper::body::to_bytes(resp.into_body())
                 .await
-                .map_err(|e| ChError::Communication(e.to_string()))?;
+                .map_err(|e| Error::Communication(e.to_string()))?;
             let error_msg = String::from_utf8_lossy(&body_bytes);
-            return Err(ChError::OperationFailed(format!(
+            return Err(Error::OperationFailed(format!(
                 "Failed to create VM: {}",
                 error_msg
             )));
         }
 
-        // Boot if requested
-        if boot {
-            let uri = self.build_uri("/api/v1/vm.boot");
-            let req = hyper::Request::builder()
-                .method(hyper::Method::PUT)
-                .uri(uri)
-                .body(hyper::Body::empty())
-                .map_err(|e| ChError::Communication(e.to_string()))?;
+        Ok(())
+    }
 
-            let resp = self
-                .client
-                .request(req)
+    async fn boot(&self) -> Result<(), Self::Error> {
+        let uri = self.build_uri("/api/v1/vm.boot");
+        let req = hyper::Request::builder()
+            .method(hyper::Method::PUT)
+            .uri(uri)
+            .body(hyper::Body::empty())
+            .map_err(|e| Error::Communication(e.to_string()))?;
+
+        let resp = self
+            .client
+            .request(req)
+            .await
+            .map_err(|e| Error::Communication(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let body_bytes = hyper::body::to_bytes(resp.into_body())
                 .await
-                .map_err(|e| ChError::Communication(e.to_string()))?;
-
-            if !resp.status().is_success() {
-                return Err(ChError::OperationFailed("Failed to boot VM".into()));
-            }
+                .map_err(|e| Error::Communication(e.to_string()))?;
+            let error_msg = String::from_utf8_lossy(&body_bytes);
+            return Err(Error::OperationFailed(format!(
+                "Failed to boot VM: {}",
+                error_msg
+            )));
         }
 
         Ok(())
     }
 
-    async fn delete(&self, vm_id: &str) -> Result<(), Self::Error> {
-        // Try to shutdown first (may fail if already shut down, that's ok)
+    async fn shutdown(&self) -> Result<(), Self::Error> {
         let uri = self.build_uri("/api/v1/vm.shutdown");
         let req = hyper::Request::builder()
             .method(hyper::Method::PUT)
             .uri(uri)
             .body(hyper::Body::empty())
-            .map_err(|e| ChError::Communication(e.to_string()))?;
-
-        let _ = self.client.request(req).await;
-
-        // Delete the VM
-        let uri = self.build_uri("/api/v1/vm.delete");
-        let req = hyper::Request::builder()
-            .method(hyper::Method::PUT)
-            .uri(uri)
-            .body(hyper::Body::empty())
-            .map_err(|e| ChError::Communication(e.to_string()))?;
+            .map_err(|e| Error::Communication(e.to_string()))?;
 
         let resp = self
             .client
             .request(req)
             .await
-            .map_err(|e| ChError::Communication(e.to_string()))?;
+            .map_err(|e| Error::Communication(e.to_string()))?;
 
         if !resp.status().is_success() {
-            return Err(ChError::OperationFailed("Failed to delete VM".into()));
+            let body_bytes = hyper::body::to_bytes(resp.into_body())
+                .await
+                .map_err(|e| Error::Communication(e.to_string()))?;
+            let error_msg = String::from_utf8_lossy(&body_bytes);
+            return Err(Error::OperationFailed(format!(
+                "Failed to shutdown VM: {}",
+                error_msg
+            )));
         }
 
         Ok(())
     }
 
-    async fn info(&self, vm_id: &str) -> Result<Self::Info, Self::Error> {
-        // Query VM info from cloud-hypervisor
-        let uri = self.build_uri("/api/v1/vm.info");
+    async fn delete(&self) -> Result<(), Self::Error> {
+        let uri = self.build_uri("/api/v1/vm.delete");
         let req = hyper::Request::builder()
-            .method(hyper::Method::GET)
+            .method(hyper::Method::PUT)
             .uri(uri)
             .body(hyper::Body::empty())
-            .map_err(|e| ChError::Communication(e.to_string()))?;
+            .map_err(|e| Error::Communication(e.to_string()))?;
 
         let resp = self
             .client
             .request(req)
             .await
-            .map_err(|e| ChError::Communication(e.to_string()))?;
+            .map_err(|e| Error::Communication(e.to_string()))?;
 
         if !resp.status().is_success() {
-            return Err(ChError::OperationFailed(
+            let body_bytes = hyper::body::to_bytes(resp.into_body())
+                .await
+                .map_err(|e| Error::Communication(e.to_string()))?;
+            let error_msg = String::from_utf8_lossy(&body_bytes);
+            return Err(Error::OperationFailed(format!(
+                "Failed to delete VM: {}",
+                error_msg
+            )));
+        }
+
+        Ok(())
+    }
+
+    async fn info(&self) -> Result<Self::Info, Self::Error> {
+        let uri = self.build_uri("/api/v1/vm.info");
+        let req = hyper::Request::builder()
+            .method(hyper::Method::GET)
+            .uri(uri)
+            .body(hyper::Body::empty())
+            .map_err(|e| Error::Communication(e.to_string()))?;
+
+        let resp = self
+            .client
+            .request(req)
+            .await
+            .map_err(|e| Error::Communication(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            return Err(Error::OperationFailed(
                 "Failed to get VM info".into(),
             ));
         }
 
         let body_bytes = hyper::body::to_bytes(resp.into_body())
             .await
-            .map_err(|e| ChError::Communication(e.to_string()))?;
+            .map_err(|e| Error::Communication(e.to_string()))?;
 
-        // Deserialize - Cow will be Owned since we're deserializing from bytes
         let ch_info = serde_json::from_slice(&body_bytes)?;
 
         Ok(ch_info)
     }
 
-    async fn list(&self) -> Result<Vec<String>, Self::Error> {
-        // Cloud Hypervisor doesn't provide a list endpoint
-        // This would need to be tracked externally or use a different approach
-        Ok(vec![])
+    async fn pause(&self) -> Result<(), Self::Error> {
+        let uri = self.build_uri("/api/v1/vm.pause");
+        let req = hyper::Request::builder()
+            .method(hyper::Method::PUT)
+            .uri(uri)
+            .body(hyper::Body::empty())
+            .map_err(|e| Error::Communication(e.to_string()))?;
+
+        let resp = self
+            .client
+            .request(req)
+            .await
+            .map_err(|e| Error::Communication(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            return Err(Error::OperationFailed("Failed to pause VM".into()));
+        }
+
+        Ok(())
+    }
+
+    async fn resume(&self) -> Result<(), Self::Error> {
+        let uri = self.build_uri("/api/v1/vm.resume");
+        let req = hyper::Request::builder()
+            .method(hyper::Method::PUT)
+            .uri(uri)
+            .body(hyper::Body::empty())
+            .map_err(|e| Error::Communication(e.to_string()))?;
+
+        let resp = self
+            .client
+            .request(req)
+            .await
+            .map_err(|e| Error::Communication(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            return Err(Error::OperationFailed("Failed to resume VM".into()));
+        }
+
+        Ok(())
+    }
+
+    async fn counters(&self) -> Result<Self::Info, Self::Error> {
+        let uri = self.build_uri("/api/v1/vm.counters");
+        let req = hyper::Request::builder()
+            .method(hyper::Method::GET)
+            .uri(uri)
+            .body(hyper::Body::empty())
+            .map_err(|e| Error::Communication(e.to_string()))?;
+
+        let resp = self
+            .client
+            .request(req)
+            .await
+            .map_err(|e| Error::Communication(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            return Err(Error::OperationFailed("Failed to get VM counters".into()));
+        }
+
+        let body_bytes = hyper::body::to_bytes(resp.into_body())
+            .await
+            .map_err(|e| Error::Communication(e.to_string()))?;
+
+        let counters = serde_json::from_slice(&body_bytes)?;
+        Ok(counters)
+    }
+
+    async fn ping(&self) -> Result<(), Self::Error> {
+        let uri = self.build_uri("/api/v1/vmm.ping");
+        let req = hyper::Request::builder()
+            .method(hyper::Method::GET)
+            .uri(uri)
+            .body(hyper::Body::empty())
+            .map_err(|e| Error::Communication(e.to_string()))?;
+
+        let resp = self
+            .client
+            .request(req)
+            .await
+            .map_err(|e| Error::Communication(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            return Err(Error::Communication("VMM ping failed".into()));
+        }
+
+        Ok(())
     }
 }
 
-// Cloud Hypervisor API data structures with lifetime support for zero-copy
+// Cloud Hypervisor API data structures — all owned, no lifetimes.
+// These get serialized to JSON for CH REST calls. The allocation cost
+// is negligible vs spawning a process.
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ChVmConfig<'a> {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChVmConfig {
     pub cpus: ChCpusConfig,
     pub memory: ChMemoryConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub payload: Option<ChPayloadConfig<'a>>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    #[serde(borrow)]
-    pub disks: Vec<ChDiskConfig<'a>>,
+    pub payload: Option<ChPayloadConfig>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub disks: Vec<ChDiskConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(borrow)]
-    pub net: Option<Vec<ChNetConfig<'a>>>,
+    pub net: Option<Vec<ChNetConfig>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub rng: Option<ChRngConfig<'a>>,
+    pub rng: Option<ChRngConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub console: Option<ChConsoleConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub serial: Option<ChSerialConfig>,
 }
 
-
-
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChCpusConfig {
     pub boot_vcpus: u8,
     pub max_vcpus: u8,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChMemoryConfig {
     pub size: u64,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ChPayloadConfig<'a> {
-    #[serde(borrow)]
-    pub kernel: Cow<'a, str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(borrow)]
-    pub cmdline: Option<Cow<'a, str>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(borrow)]
-    pub initramfs: Option<Cow<'a, str>>,
-}
-
-
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ChDiskConfig<'a> {
-    #[serde(borrow)]
-    pub path: Cow<'a, str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub readonly: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub direct: Option<bool>,
-}
-
-
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ChNetConfig<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(borrow)]
-    pub tap: Option<Cow<'a, str>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(borrow)]
-    pub ip: Option<Cow<'a, str>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(borrow)]
-    pub mask: Option<Cow<'a, str>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(borrow)]
-    pub mac: Option<Cow<'a, str>>,
-}
-
-
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ChRngConfig<'a> {
-    #[serde(borrow)]
-    pub src: Cow<'a, str>,
-}
-
-
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ChConsoleConfig {
-    pub mode: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ChSerialConfig {
-    pub mode: String,
-}
-
-// Owned version of config for VM info responses
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ChVmConfigOwned {
-    pub cpus: ChCpusConfig,
-    pub memory: ChMemoryConfig,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub payload: Option<ChPayloadConfigOwned>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub disks: Vec<ChDiskConfigOwned>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub net: Option<Vec<ChNetConfigOwned>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rng: Option<ChRngConfigOwned>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub console: Option<ChConsoleConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub serial: Option<ChSerialConfig>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ChPayloadConfigOwned {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChPayloadConfig {
     pub kernel: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cmdline: Option<String>,
@@ -338,8 +376,8 @@ pub struct ChPayloadConfigOwned {
     pub initramfs: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ChDiskConfigOwned {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChDiskConfig {
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub readonly: Option<bool>,
@@ -347,8 +385,8 @@ pub struct ChDiskConfigOwned {
     pub direct: Option<bool>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ChNetConfigOwned {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChNetConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tap: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -359,20 +397,28 @@ pub struct ChNetConfigOwned {
     pub mac: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ChRngConfigOwned {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChRngConfig {
     pub src: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChConsoleConfig {
+    pub mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChSerialConfig {
+    pub mode: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ChVmInfo {
     pub state: String,
-    pub config: ChVmConfigOwned,
+    pub config: ChVmConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_actual_size: Option<u64>,
 }
-
-
 
 #[derive(Debug, Deserialize)]
 pub struct ChVmCounters {
@@ -394,35 +440,167 @@ pub struct ChNetCounters {
     pub tx_bytes: Option<u64>,
 }
 
+// ─── Process handle ───────────────────────────────────────────────────────
 
-impl<'a> TryFrom<vm_spec::Reader<'a>> for ChVmConfig<'a> {
-    type Error = capnp::Error;
+/// Handle to one `cloud-hypervisor` OS process.
+///
+/// Owns the [`Child`] and the socket path. Cleans up both on [`VmmProcess::cleanup`].
+pub struct ChProcess {
+    child: Child,
+    socket_path: PathBuf,
+}
 
-    fn try_from(spec: vm_spec::Reader<'a>) -> Result<Self, Self::Error> {
-        let cpu = spec.get_cpu();
-        let memory_bytes = spec.get_memory_bytes();
-        let store_path = spec.get_store_path()?.to_str()?;
+impl VmmProcess for ChProcess {
+    async fn kill(&mut self) -> Result<(), VmError> {
+        self.child
+            .kill()
+            .await
+            .map_err(|e| VmError::ProcessFailed(format!("Failed to kill CH process: {e}")))
+    }
 
-        // Convert fractional CPU to boot_vcpus (round up)
-        let boot_vcpus = cpu.ceil() as u8;
+    async fn cleanup(&mut self) -> Result<(), VmError> {
+        if self.socket_path.exists() {
+            let _ = tokio::fs::remove_file(&self.socket_path).await;
+        }
+        Ok(())
+    }
+}
 
-        Ok(ChVmConfig {
+// ─── Backend factory ──────────────────────────────────────────────────────
+
+/// Configuration for [`CloudHypervisorBackend`].
+pub struct CloudHypervisorConfig {
+    /// Directory where VM sockets are created (e.g. `/tmp/procurator/vms/`)
+    pub socket_dir: PathBuf,
+    /// Path to the `cloud-hypervisor` binary
+    pub ch_binary: PathBuf,
+    /// How long to wait for a CH socket to appear after spawning
+    pub socket_timeout: Duration,
+}
+
+impl Default for CloudHypervisorConfig {
+    fn default() -> Self {
+        Self {
+            socket_dir: PathBuf::from("/tmp/procurator/vms"),
+            ch_binary: PathBuf::from("cloud-hypervisor"),
+            socket_timeout: Duration::from_secs(5),
+        }
+    }
+}
+
+/// Factory that spawns `cloud-hypervisor` processes and creates
+/// [`CloudHypervisor`] REST clients.
+///
+/// This is the production implementation of [`VmmBackend`].
+pub struct CloudHypervisorBackend {
+    config: CloudHypervisorConfig,
+}
+
+impl CloudHypervisorBackend {
+    pub fn new(config: CloudHypervisorConfig) -> Self {
+        Self { config }
+    }
+
+    /// Poll for a unix socket to appear on disk with exponential backoff.
+    async fn wait_for_socket(path: &Path, timeout: Duration) -> Result<(), VmError> {
+        let start = std::time::Instant::now();
+        let mut delay = Duration::from_millis(10);
+
+        while start.elapsed() < timeout {
+            if path.exists() {
+                debug!(path = %path.display(), "Socket ready");
+                return Ok(());
+            }
+            tokio::time::sleep(delay).await;
+            delay = (delay * 2).min(Duration::from_millis(500));
+        }
+
+        Err(VmError::ProcessFailed(format!(
+            "Socket {} did not appear within {:?}",
+            path.display(),
+            timeout,
+        )))
+    }
+}
+
+impl VmmBackend for CloudHypervisorBackend {
+    type Client = CloudHypervisor;
+    type Process = ChProcess;
+
+    async fn spawn(
+        &self,
+        vm_id: &str,
+    ) -> Result<(CloudHypervisor, ChProcess, PathBuf), VmError> {
+        // 1. Ensure socket directory exists
+        tokio::fs::create_dir_all(&self.config.socket_dir)
+            .await
+            .map_err(|e| VmError::ProcessFailed(format!("Failed to create socket dir: {e}")))?;
+
+        // 2. Build socket path
+        let socket_path = self.config.socket_dir.join(format!("{vm_id}.sock"));
+
+        // 3. Clean up stale socket if present
+        if socket_path.exists() {
+            let _ = tokio::fs::remove_file(&socket_path).await;
+        }
+
+        // 4. Spawn the CH process
+        let child = Command::new(&self.config.ch_binary)
+            .arg("--api-socket")
+            .arg(&socket_path)
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| {
+                VmError::ProcessFailed(format!(
+                    "Failed to spawn {}: {e}",
+                    self.config.ch_binary.display()
+                ))
+            })?;
+
+        // 5. Wait for socket to appear
+        Self::wait_for_socket(&socket_path, self.config.socket_timeout).await?;
+
+        // 6. Create the REST client and process handle
+        let client = CloudHypervisor::new(&socket_path);
+        let process = ChProcess {
+            child,
+            socket_path: socket_path.clone(),
+        };
+
+        Ok((client, process, socket_path))
+    }
+
+    fn build_config(&self, spec: &VmSpec) -> ChVmConfig {
+        let boot_vcpus = spec.cpu().ceil() as u8;
+
+        // Use the explicit paths from the Nix-built vmSpec.
+        // These are separate store paths for kernel, initrd, and disk image.
+        let kernel_path = spec.kernel_path().to_string();
+        let disk_path = spec.disk_image_path().to_string();
+        let initrd_path = spec.initrd_path().map(|s| s.to_string());
+        let cmdline = spec.cmdline().map(|s| s.to_string());
+
+        ChVmConfig {
             cpus: ChCpusConfig {
                 boot_vcpus,
                 max_vcpus: boot_vcpus,
             },
             memory: ChMemoryConfig {
-                size: memory_bytes,
+                size: spec.memory_bytes(),
             },
             payload: Some(ChPayloadConfig {
-                kernel: Cow::Borrowed(store_path),
-                cmdline: None, // Could be populated from spec if needed
-                initramfs: None,
+                kernel: kernel_path,
+                cmdline,
+                initramfs: initrd_path,
             }),
-            disks: Vec::new(), // TODO: Map from spec if needed
-            net: None, // TODO: Map from networkAllowedDomains
+            disks: vec![ChDiskConfig {
+                path: disk_path,
+                readonly: Some(false),
+                direct: None,
+            }],
+            net: None,
             rng: Some(ChRngConfig {
-                src: Cow::Borrowed("/dev/urandom"),
+                src: "/dev/urandom".to_string(),
             }),
             console: Some(ChConsoleConfig {
                 mode: "Off".to_string(),
@@ -430,6 +608,6 @@ impl<'a> TryFrom<vm_spec::Reader<'a>> for ChVmConfig<'a> {
             serial: Some(ChSerialConfig {
                 mode: "Null".to_string(),
             }),
-        })
+        }
     }
 }

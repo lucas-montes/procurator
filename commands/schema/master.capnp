@@ -31,7 +31,4 @@ interface Master {
 
   # CLI gets worker capability
   getWorker @4 (workerId :Text) -> (worker :WorkerModule.Worker);
-
-  # CLI gets VM capability
-  getVm @5 (vmId :Text) -> (vm :WorkerModule.Worker.Vm);
 }

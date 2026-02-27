@@ -93,6 +93,10 @@ pub async fn test_publish(
             vm.set_content_hash(&format!("sha256:fakehash{}", i));
             vm.set_cpu(1.0);
             vm.set_memory_bytes(1024 * 1024 * 1024); // 1GB
+            vm.set_kernel_path(&format!("/nix/store/kernel-{}/bzImage", i));
+            vm.set_initrd_path(&format!("/nix/store/initrd-{}/initrd", i));
+            vm.set_disk_image_path(&format!("/nix/store/disk-{}/nixos.raw", i));
+            vm.set_cmdline("console=ttyS0 root=/dev/vda rw");
             let _labels = vm.reborrow().init_labels(0);
             vm.reborrow().set_replicas(1);
             let _domains = vm.init_network_allowed_domains(0);
@@ -285,37 +289,6 @@ pub async fn test_get_worker(
         }
         Err(e) => {
             error!(error = ?e, "✗ getWorker failed (expected - not implemented)");
-            return Err(e.into());
-        }
-    }
-
-    Ok(())
-}
-
-/// Test Master.getVm() interface
-pub async fn test_get_vm(
-    addr: SocketAddr,
-    vm_id: String,
-) -> Result<(), Box<dyn std::error::Error>> {
-    info!(vm_id = %vm_id, "Testing Master.getVm()");
-
-    let master = connect_to_master(addr).await?;
-
-    let mut request = master.get_vm_request();
-
-    request.get().set_vm_id(&vm_id);
-
-    info!("Sending getVm request...");
-    match request.send().promise.await {
-        Ok(response) => {
-            let _vm = response.get()?.get_vm()?;
-            info!("✓ Got VM capability");
-
-            // Could test calling methods on the VM capability here
-            // For example: vm.read_request().send().promise.await?
-        }
-        Err(e) => {
-            error!(error = ?e, "✗ getVm failed (expected - not implemented)");
             return Err(e.into());
         }
     }

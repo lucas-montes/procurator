@@ -1,6 +1,7 @@
 pub mod dto;
 pub mod node;
 pub mod server;
+pub mod vm_manager;
 pub mod vmm;
 
 use std::net::SocketAddr;
@@ -8,16 +9,23 @@ use std::net::SocketAddr;
 use node::Node;
 use server::Server;
 use tokio::sync::mpsc;
+use vm_manager::VmManagerConfig;
+use vmm::cloud_hypervisor::{CloudHypervisorBackend, CloudHypervisorConfig};
+
+use crate::dto::CommandSender;
 
 pub async fn main(_hostname: String, listen_addr: SocketAddr, master_addr: SocketAddr) {
-    let (node_tx, node_rx) = mpsc::channel(100);
+    let (cmd_tx, cmd_rx) = mpsc::channel(100);
 
-    // TODO: Make socket path configurable
-    let socket_path = "/tmp/cloud-hypervisor.sock";
-    let vmm = vmm::cloud_hypervisor::CloudHypervisor::new(socket_path);
+    // Server only holds the sending end — no VMM, no state
+    let server = Server::new(CommandSender::new(cmd_tx));
 
-    let server = Server::new(node_tx.clone(), vmm.clone());
-    let node = Node::new(node_rx, master_addr, vmm);
+    // Backend handles process spawning, socket management, config building
+    let backend = CloudHypervisorBackend::new(CloudHypervisorConfig::default());
+
+    // Node owns the receiving end + VmManager with all VM state
+    let manager_config = VmManagerConfig::default();
+    let node = Node::new(cmd_rx, master_addr, backend, manager_config);
 
     tokio::select! {
         result = server.serve(listen_addr) => {

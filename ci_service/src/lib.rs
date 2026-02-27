@@ -9,4 +9,6 @@ pub use config::Config;
 pub use database::Database;
 pub use job_queue::JobQueue;
 pub use worker::Worker;
+
+#[cfg(feature = "web")]
 pub use api::{AppState, routes};

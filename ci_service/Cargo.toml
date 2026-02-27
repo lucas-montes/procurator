@@ -3,10 +3,14 @@ name = "ci_service"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["web"]
+web = ["axum"]
+
 [dependencies]
 tokio = { workspace = true, features = ["signal"] }
 tokio-stream = "0.1"
-axum.workspace = true
+axum= { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true

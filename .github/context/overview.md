@@ -1,102 +1,80 @@
-# Procurator - Distributed VM Orchestration System
+# Procurator — Nix-Native VM Orchestrator
 
-## Architecture Overview
+## What This Is
 
-Procurator is a GitOps-driven VM orchestration platform that uses NixOS and cloud-hypervisor to manage distributed workloads. The system follows a control plane + worker pattern with declarative cluster configuration.
+A GitOps-driven VM orchestrator. Think Kubernetes, but replacing containers and YAML with Nix closures and cloud-hypervisor VMs. Git commits produce immutable VM images via Nix; the system continuously reconciles running VMs to match.
 
-### Core Components
+**Core invariant:** The cluster converges to a set of Nix derivations produced from a Git commit, evaluated outside the cluster, scheduled deterministically, and executed immutably.
 
-**Control Plane** (`control_plane/`): Master node managing cluster state via Cap'n Proto RPC
-- Receives desired state from CI/CD (`publishState`)
-- Assigns VMs to workers (`getAssignment`)
-- Collects observability data (`pushData`)
-- Exposes CLI inspection interface (`getClusterStatus`)
+## Tech Stack
 
-**Workers** (`worker/`): Bare-metal nodes running VMs via cloud-hypervisor
-- Pull assignments from control plane
-- Launch/manage microVMs based on NixOS closures
-- Push metrics and observed state back to master
-- Located at `worker/src/vmm/cloud_hypervisor.rs`
+- **Language:** Rust (edition 2024)
+- **Async runtime:** Tokio
+- **RPC:** Cap'n Proto (schemas in `commands/schema/`, zero-copy, capability-based)
+- **Hypervisor:** Cloud Hypervisor (one process per VM, REST API over unix socket)
+- **Package/Image system:** Nix (flakes, closures, binary cache, content-addressed store)
+- **VM images:** NixOS minimal (built by `nix/flake-vmm/`, 500-700MB with kernel + SSH)
+- **Logging:** `tracing` (structured JSON)
+- **Persistence:** SQLite (repohub), in-memory (control plane — desired state is reconstructable from Git)
 
-**Autonix** (`autonix/`): Repository analyzer that detects languages, dependencies, and services
-- Scans codebases to extract configuration (`autonix/src/repo/scan.rs`)
-- Generates Nix flakes automatically (`autonix/src/repo/flake.rs`)
-- Maps languages, lockfiles, containers, CI/CD configs (`autonix/src/mapping/`)
+## Components
 
-**CI Service** (`ci_service/`): Build and test pipeline orchestrator
-- Runs tests, linting, validation on pushed code
-- Publishes built closures to binary cache
-- Triggers deployments to control plane
+| Crate | Role | Status |
+|-------|------|--------|
+| `worker` | Manages CH processes on a host, serves RPC for VM lifecycle | **Active focus** |
+| `control_plane` | Stores desired state, schedules VMs to workers | Scaffolded |
+| `cli` | Read-only inspection + manual RPC testing (`pcr-test`) | Scaffolded |
+| `ci_service` | Evaluates Nix, builds closures, publishes to cache, notifies control plane | Scaffolded |
+| `repohub` | Web UI for repo/project management | Scaffolded |
+| `autonix` | Scans repos, detects stack, generates Nix flakes | Working |
+| `commands` | Cap'n Proto schemas + generated Rust code | Working |
+| `repo_outils` | Git and Nix utility functions | Working |
+| `nix/flake-vmm` | NixOS VM image builder + host networking modules | Working |
 
-**Repohub** (`repohub/`): Web UI for project/repo management
-- SQLite-backed repository tracking
-- Manages users, projects, repositories
-- Displays flake configs and build status
+## Current Focus: Worker + VMM
 
-**CLI** (`cli/`): Command-line interface for cluster inspection
-- `pcr-test` binary for manual RPC testing (`cli/TESTING.md`)
-- Interactive TUI for cluster visualization (`cli/src/interactive/`)
+The immediate goal is a working worker that can spin up and manage cloud-hypervisor VMs, callable from the CLI for testing.
+
+**Architecture:** Server (stateless RPC) → CommandSender → Node → VmManager<B: VmmBackend> (single-owner state, generic over backend) → CH processes (one per VM). See `context/architecture.md` for the full component diagram.
+
+**Key decisions:** No locks (actor model), all dto structs have private fields with constructor + getters, VmManager is generic over `VmmBackend` for testability, one CH process per VM. See `context/decisions.md` for all ADRs.
 
 ## Communication Protocol
 
 All inter-service RPC uses **Cap'n Proto** schemas in `commands/schema/`:
-- `common.capnp`: Shared types (VmSpec, WorkerMetrics, Generation)
-- `master.capnp`: Control plane interface (Master capability)
-- `worker.capnp`: Worker interface (Worker capability)
+- `common.capnp`: Shared data types (VmSpec with 13 fields including kernelPath/initrdPath/diskImagePath/cmdline, WorkerStatus, VmMetrics, etc.)
+- `master.capnp`: Control plane interface (publishState, getAssignment, pushData, getClusterStatus, getWorker)
+- `worker.capnp`: Worker interface — flat, two methods: `read` (worker status), `listVms` (list VMs)
 
-Build step: `capnpc` compiles `.capnp` files to Rust in `build.rs` (see `commands/build.rs`, `worker/build.rs`)
+Build step: `capnpc` compiles `.capnp` → Rust in `commands/build.rs`.
 
-## GitOps Workflow
+## GitOps Workflow (full loop, future)
 
-1. **Edit flake**: User modifies `example/flake.nix` defining cluster topology
-2. **CI evaluates**: `nix eval --json ".#blueprintJSON" > blueprint.json` serializes desired state
-3. **CI builds closures**: `nix build ".#nixosConfigurations.<vm>.config.system.build.toplevel"`
-4. **Publish to cache**: `attic push` or `nix copy --to ssh-ng://cache` distributes binaries
-5. **Notify control plane**: CI calls `publishState()` RPC with generation + store paths
-6. **Control plane schedules**: Assigns VMs to workers based on resources/constraints
-7. **Workers pull & activate**: `nix copy --from <cache>` + `switch-to-configuration test`
-8. **Health checks**: Workers validate deployment, rollback on failure
+```
+Git push → CI evaluates Nix → builds closures → publishes to cache
+  → notifies control plane → schedules to workers → workers pull & boot VMs
+```
 
-See `nix/README.md` for detailed command reference.
+No `apply` command. Git is the only write interface. See `context/decisions.md` ADR-008.
 
 ## Nix Integration
 
-**Key Modules** (`nix/modules/`):
-- `cluster.nix`: Defines `cluster.vms` topology with CPU/memory/deployment config
-- `procurator-control-plane.nix`: Systemd service for master node
-- `procurator-worker.nix`: Systemd service for worker nodes
-- Workers reference control plane by name: `services.procurator.worker.master = "control-plane-1"`
+- **VM images:** Built by `nix/flake-vmm/flake.nix` — `mkVmImage` / `mkVmFromDrv`
+- **Host networking:** `nix/flake-vmm/host-module.nix` — bridge, TAP, NAT, domain allowlisting
+- **Guest config:** `nix/flake-vmm/vm-module.nix` — systemd, SSH, virtio, workload entrypoint
+- **Cluster definition:** `nix/modules/cluster.nix` — declarative VM topology
+- **Store paths:** Workers pull closures with `nix copy --from <cache>`. Content-addressed = deterministic drift detection.
 
-**Store Paths vs Closures**: A closure is a store path + all dependencies. Workers pull complete closures from cache to avoid rebuilding. See `nix/README.md` for cache protocol details.
+## Development
 
-## Development Workflow
-
-### Building
-```bash
+```nushell
 cargo build                    # Build all workspace members
-cargo build -p control_plane   # Build specific crate
-cargo build --bin pcr-test     # Build CLI test binary
-```
-
-### Testing
-```bash
-cargo test                     # Run unit tests (see repo_outils, autonix tests)
-cargo run --bin pcr-test -- state publish -c abc123 -g 1 -i def456 -n 3  # Manual RPC test
-```
-
-### Running Services
-```bash
-# Control plane
-cd control_plane && cargo run
-
-# Worker
-cd worker && cargo run
-
-# Repohub UI
-cd repohub && cargo run  # Starts on localhost:3001
-
-# Test CLI
-cd cli && cargo run --bin pcr-test -- control status
+cargo build -p worker          # Build worker only
+cargo run -p worker            # Run worker (listens on 127.0.0.1:6000)
+cargo run --bin pcr-test       # CLI test binary (master)
+cargo run --bin pcr-worker-test # CLI test binary (worker)
+cargo test                     # Run unit tests
+cargo check --workspace        # Type-check all crates
 ```
 
 ## Conventions
@@ -119,7 +97,10 @@ cd cli && cargo run --bin pcr-test -- control status
 - `commands/schema/*.capnp`: RPC interface definitions
 - `autonix/src/repo/analysis.rs`: Core repository analysis logic
 - `control_plane/src/scheduler.rs`: VM-to-worker assignment logic (TODO)
-- `worker/src/vmm/cloud_hypervisor.rs`: VMM interaction layer
+- `worker/src/vmm/interface.rs`: Three VMM abstraction traits (Vmm, VmmProcess, VmmBackend)
+- `worker/src/vmm/cloud_hypervisor.rs`: CloudHypervisor production backend
+- `worker/src/vm_manager.rs`: Single-owner VM state, generic over VmmBackend
+- `worker/src/dto.rs`: Private-field message types with constructors and getters
 
 ## Common Pitfalls
 

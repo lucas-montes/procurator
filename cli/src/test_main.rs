@@ -103,13 +103,6 @@ enum ControlCommands {
         #[arg(short, long)]
         worker_id: String,
     },
-
-    /// Get a specific VM capability
-    GetVm {
-        /// VM ID to retrieve
-        #[arg(short, long)]
-        vm_id: String,
-    },
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -176,10 +169,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 ControlCommands::GetWorker { worker_id } => {
                     testing::test_get_worker(cli.addr, worker_id).await?;
-                }
-
-                ControlCommands::GetVm { vm_id } => {
-                    testing::test_get_vm(cli.addr, vm_id).await?;
                 }
             },
         }

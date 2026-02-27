@@ -150,23 +150,4 @@ impl commands::master_capnp::master::Server for Server {
             Err(e) => ::capnp::capability::Promise::err(e),
         }
     }
-
-    fn get_vm(
-        &mut self,
-        params: commands::master_capnp::master::GetVmParams,
-        _results: commands::master_capnp::master::GetVmResults,
-    ) -> ::capnp::capability::Promise<(), ::capnp::Error> {
-        match params.get() {
-            Ok(p) => {
-                let vm_id = p.get_vm_id();
-                debug!(?vm_id, "Getting VM capability");
-
-                // TODO: Lookup VM capability from registered workers
-                // For now, this is unimplemented - need to store worker/vm capabilities
-                let error = capnp::Error::failed("VM lookup not yet implemented".to_string());
-                ::capnp::capability::Promise::err(error)
-            }
-            Err(e) => ::capnp::capability::Promise::err(e),
-        }
-    }
 }

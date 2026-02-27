@@ -1,6 +1,6 @@
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use dockerfile_parser::{Dockerfile, Instruction, ShellOrExecExpr};
 
@@ -17,8 +17,8 @@ pub enum ContainerFile {
     Containerfile,
 
     // Development environment
-    Skaffold,  // skaffold.yaml
-    Tiltfile,  // Tiltfile
+    Skaffold, // skaffold.yaml
+    Tiltfile, // Tiltfile
 }
 
 impl TryFrom<&str> for ContainerFile {
@@ -418,14 +418,15 @@ fn parse_dockerfile(path: &Path) -> Result<ParsedContainerFile, ParseError> {
                     ShellOrExecExpr::Shell(s) => s.to_string(),
                     ShellOrExecExpr::Exec(arr) => arr.as_str_vec().join(" "),
                 };
-                result.system_packages.extend(extract_packages_from_run(&command_str));
+                result
+                    .system_packages
+                    .extend(extract_packages_from_run(&command_str));
             }
             Instruction::Env(env_inst) => {
                 for var in env_inst.vars {
-                    result.environment.insert(
-                        var.key.content.clone(),
-                        var.value.to_string(),
-                    );
+                    result
+                        .environment
+                        .insert(var.key.content.clone(), var.value.to_string());
                 }
             }
             Instruction::Cmd(cmd_inst) => {
@@ -452,10 +453,9 @@ fn parse_dockerfile(path: &Path) -> Result<ParsedContainerFile, ParseError> {
             }
             Instruction::Label(label_inst) => {
                 for label in label_inst.labels {
-                    result.labels.insert(
-                        label.name.content.clone(),
-                        label.value.content.clone(),
-                    );
+                    result
+                        .labels
+                        .insert(label.name.content.clone(), label.value.content.clone());
                 }
             }
             Instruction::Misc(misc) => {
@@ -765,6 +765,8 @@ fn parse_tiltfile(_path: &Path) -> Result<ParsedContainerFile, ParseError> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     #[test]
@@ -830,7 +832,9 @@ mod tests {
     fn test_parse_dockerfile() {
         let path = fixtures_path().join("Dockerfile");
         let container_file = ContainerFile::Dockerfile;
-        let result = container_file.parse(&path).expect("Failed to parse Dockerfile");
+        let result = container_file
+            .parse(&path)
+            .expect("Failed to parse Dockerfile");
 
         // Check base image (first stage)
         assert!(result.base_image.is_some());
@@ -843,15 +847,20 @@ mod tests {
         // Check all build stages (multi-stage build)
         assert_eq!(result.build_stages.len(), 2);
         assert_eq!(result.build_stages[0].name, "rust");
-        assert_eq!(result.build_stages[0].stage_name, Some("builder".to_string()));
+        assert_eq!(
+            result.build_stages[0].stage_name,
+            Some("builder".to_string())
+        );
         assert_eq!(result.build_stages[1].name, "alpine");
         assert_eq!(result.build_stages[1].tag, Some("3.18".to_string()));
         assert_eq!(result.build_stages[1].stage_name, None);
 
         // Check system packages
         assert!(!result.system_packages.is_empty());
-        assert!(result.system_packages.contains(&"openssl".to_string()) ||
-                result.system_packages.contains(&"openssl-dev".to_string()));
+        assert!(
+            result.system_packages.contains(&"openssl".to_string())
+                || result.system_packages.contains(&"openssl-dev".to_string())
+        );
         assert!(result.system_packages.contains(&"curl".to_string()));
 
         // Check exposed ports
@@ -861,7 +870,10 @@ mod tests {
 
         // Check environment variables
         assert!(result.environment.contains_key("RUST_LOG"));
-        assert_eq!(result.environment.get("RUST_LOG"), Some(&"info".to_string()));
+        assert_eq!(
+            result.environment.get("RUST_LOG"),
+            Some(&"info".to_string())
+        );
         assert!(result.environment.contains_key("APP_PORT"));
         assert!(result.environment.contains_key("DATABASE_URL"));
 
@@ -889,13 +901,19 @@ mod tests {
     fn test_parse_docker_compose() {
         let path = fixtures_path().join("docker-compose.yml");
         let container_file = ContainerFile::DockerCompose;
-        let result = container_file.parse(&path).expect("Failed to parse docker-compose.yml");
+        let result = container_file
+            .parse(&path)
+            .expect("Failed to parse docker-compose.yml");
 
         // Check services
         assert_eq!(result.services.len(), 5);
 
         // Check API service
-        let api = result.services.iter().find(|s| s.name == "api").expect("API service not found");
+        let api = result
+            .services
+            .iter()
+            .find(|s| s.name == "api")
+            .expect("API service not found");
         assert!(api.build.is_some());
         let build = api.build.as_ref().unwrap();
         assert_eq!(build.context, ".");
@@ -905,8 +923,16 @@ mod tests {
         assert_eq!(build.args.get("API_VERSION"), Some(&"v2".to_string()));
 
         assert_eq!(api.ports.len(), 2);
-        assert!(api.ports.iter().any(|p| p.container == 8080 && p.host == Some(8080)));
-        assert!(api.ports.iter().any(|p| p.container == 9090 && p.host == Some(9090)));
+        assert!(
+            api.ports
+                .iter()
+                .any(|p| p.container == 8080 && p.host == Some(8080))
+        );
+        assert!(
+            api.ports
+                .iter()
+                .any(|p| p.container == 9090 && p.host == Some(9090))
+        );
 
         assert!(api.environment.contains_key("DATABASE_URL"));
         assert!(api.environment.contains_key("REDIS_URL"));
@@ -925,19 +951,37 @@ mod tests {
         assert_eq!(healthcheck.retries, Some(3));
 
         // Check worker service
-        let worker = result.services.iter().find(|s| s.name == "worker").expect("Worker service not found");
+        let worker = result
+            .services
+            .iter()
+            .find(|s| s.name == "worker")
+            .expect("Worker service not found");
         assert_eq!(worker.image, Some("myapp:latest".to_string()));
         assert_eq!(worker.restart, Some("always".to_string()));
 
         // Check database service
-        let db = result.services.iter().find(|s| s.name == "db").expect("DB service not found");
+        let db = result
+            .services
+            .iter()
+            .find(|s| s.name == "db")
+            .expect("DB service not found");
         assert_eq!(db.image, Some("postgres:15-alpine".to_string()));
-        assert_eq!(db.environment.get("POSTGRES_PASSWORD"), Some(&"password".to_string()));
-        assert_eq!(db.environment.get("POSTGRES_DB"), Some(&"myapp".to_string()));
+        assert_eq!(
+            db.environment.get("POSTGRES_PASSWORD"),
+            Some(&"password".to_string())
+        );
+        assert_eq!(
+            db.environment.get("POSTGRES_DB"),
+            Some(&"myapp".to_string())
+        );
         assert!(!db.volumes.is_empty());
 
         // Check cache service (redis)
-        let cache = result.services.iter().find(|s| s.name == "cache").expect("Cache service not found");
+        let cache = result
+            .services
+            .iter()
+            .find(|s| s.name == "cache")
+            .expect("Cache service not found");
         assert_eq!(cache.image, Some("redis:7-alpine".to_string()));
 
         // Check port with Long format
@@ -948,7 +992,11 @@ mod tests {
         assert_eq!(redis_port.protocol, Some("tcp".to_string()));
 
         // Check nginx service
-        let nginx = result.services.iter().find(|s| s.name == "nginx").expect("Nginx service not found");
+        let nginx = result
+            .services
+            .iter()
+            .find(|s| s.name == "nginx")
+            .expect("Nginx service not found");
         assert_eq!(nginx.image, Some("nginx:alpine".to_string()));
         assert_eq!(nginx.depends_on, vec!["api".to_string()]);
 
