@@ -299,3 +299,47 @@ The original `nix/flake-vmm/flake.nix` mixed all concerns in one 800-line file: 
 **Tradeoffs:**
 - Two function calls instead of one (`mkVmProfile` then `mkVmImage`) — more verbose but fully explicit
 - Old `flake-vmm/` has been deleted — all functionality is in `nix/lib/` and `nix/modules/`
+
+---
+
+## ADR-012: Worker receives pre-resolved VmSpec, not a flake path
+
+**Status:** Accepted
+
+**Context:**
+The worker's `createVm` RPC accepts a `VmSpec` with 8 pre-resolved fields (toplevel, kernelPath, initrdPath, diskImagePath, cmdline, cpu, memoryMb, networkAllowedDomains). An alternative would be sending a flake reference (e.g. `github:org/project#vm-web`) and having the worker evaluate the flake itself to derive those fields.
+
+**Options considered:**
+
+1. **Pre-resolved VmSpec** — CI/user evaluates the flake, builds the closure, pushes to cache. Worker receives concrete Nix store paths.
+2. **Flake reference** — Worker receives a flake URI, evaluates it, builds/substitutes as needed, extracts paths.
+3. **Toplevel-only** — Worker receives just the NixOS system closure path and derives kernel/initrd/disk from internal symlinks.
+
+**Decision:** Option 1 — pre-resolved VmSpec with explicit store paths.
+
+**Rationale:**
+- **Separation of concerns.** Evaluation and building happen in CI or on the user's machine. The worker is a pure executor — "the worker is dumb" (vision.md, principle #5). Workers can be minimal machines without Nix tooling.
+- **No redundant work.** CI already evaluated and built everything. The worker only does `nix copy --from <cache>` to pull pre-built store paths. Option 2 would re-evaluate the flake on every worker.
+- **Determinism.** The control plane knows *exactly* which content-addressed store paths to deploy. A flake reference is mutable (a branch can advance between evaluation and deployment). VmSpec contains immutable paths.
+- **Speed.** `nix copy` of pre-built paths is fast. Flake evaluation + potential builds on the worker would add latency to every VM creation.
+- **Testability.** The mock backend doesn't need Nix at all — VmSpec is just data. If the worker evaluated flakes, all 22 unit tests would need a Nix sandbox.
+- **Security.** Workers don't need access to source code or flake inputs. They only see opaque store paths.
+
+**Why not option 3 (toplevel-only):**
+- Would couple the worker to NixOS closure internals (reading symlinks inside `/nix/store/...-nixos-system-*`).
+- Loses the ability to run non-NixOS VMs (e.g., a raw kernel+initrd without a full NixOS system closure).
+- Less explicit — hidden resolution logic vs. stated paths.
+
+**Pipeline flow:**
+```
+flake (source of truth)
+  → CI evaluates & builds
+    → cache stores artifacts
+      → control plane receives desired state (store paths + topology)
+        → worker receives VmSpec (individual paths)
+          → prepare (nix copy) → spawn → build_config → create → boot
+```
+
+**Tradeoffs:**
+- The caller (CI/control plane) must resolve all 8 fields before sending. More work upstream, but that's where the intelligence belongs.
+- If the VmSpec schema changes, both the evaluator (Nix lib) and the worker must be updated in sync. Mitigated by Cap'n Proto schema versioning.

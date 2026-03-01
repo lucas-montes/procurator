@@ -12,6 +12,7 @@ use std::net::SocketAddr;
 use node::Node;
 use server::Server;
 use tokio::sync::mpsc;
+use tokio::task;
 use vm_manager::VmManagerConfig;
 use vmm::cloud_hypervisor::{CloudHypervisorBackend, CloudHypervisorConfig};
 
@@ -30,14 +31,21 @@ pub async fn main(_hostname: String, listen_addr: SocketAddr, master_addr: Socke
     let manager_config = VmManagerConfig::default();
     let node = Node::new(cmd_rx, master_addr, backend, manager_config);
 
-    tokio::select! {
-        result = server.serve(listen_addr) => {
-            if let Err(e) = result {
-                tracing::error!(error = ?e, "Server failed");
+    let node_task = task::spawn(node.run());
+
+    // capnp-rpc requires spawn_local, which needs a LocalSet context
+    task::LocalSet::new()
+        .run_until(async move {
+            let result = task::spawn_local(server.serve(listen_addr)).await;
+            match result {
+                Ok(Ok(())) => tracing::info!("Worker server stopped gracefully"),
+                Ok(Err(err)) => tracing::error!(?err, "Worker server failed"),
+                Err(err) => tracing::error!(?err, "Worker server task panicked"),
             }
-        }
-        _ = node.run() => {
-            tracing::info!("Node stopped");
-        }
+        })
+        .await;
+
+    if let Err(err) = node_task.await {
+        tracing::error!(?err, "Node task panicked");
     }
 }

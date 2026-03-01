@@ -1,19 +1,23 @@
-//! Testing CLI for manually testing the Master server
+//! Testing CLI for manually testing Procurator RPC interfaces during development.
 //!
-//! This binary provides commands to connect to a running Master server
-//! and test each of the RPC interfaces (State, Worker, Control)
+//! Covers all Worker RPC methods defined in worker.capnp:
+//! - read: fetch worker status
+//! - list-vms: list all managed VMs
+//! - create-vm: create a VM from a spec (JSON file or individual flags)
+//! - delete-vm: destroy a VM by ID
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
-mod testing;
+mod worker_client;
 
 #[derive(Debug, Parser)]
 #[command(name = "pcr-test", version = "0.1.0")]
-#[command(about = "Test client for Procurator Master server")]
+#[command(about = "Development test client for Procurator Worker server")]
 struct Cli {
-    /// Master server address (e.g., 127.0.0.1:5000)
-    #[arg(short, long, default_value = "127.0.0.1:5000")]
+    /// Worker server address
+    #[arg(short, long, default_value = "127.0.0.1:6000")]
     addr: SocketAddr,
 
     #[command(subcommand)]
@@ -22,87 +26,62 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Test Master.State interface (CD platform operations)
-    State {
-        #[command(subcommand)]
-        command: StateCommands,
-    },
+    /// Fetch worker status (Worker.read)
+    Read,
 
-    /// Test Master.Worker interface (worker synchronization)
-    Worker {
-        #[command(subcommand)]
-        command: WorkerCommands,
-    },
+    /// List all VMs (Worker.listVms)
+    ListVms,
 
-    /// Test Master.Control interface (CLI inspection)
-    Control {
-        #[command(subcommand)]
-        command: ControlCommands,
-    },
+    /// Create a VM from a spec (Worker.createVm)
+    CreateVm(CreateVmArgs),
+
+    /// Delete a VM by ID (Worker.deleteVm)
+    DeleteVm(DeleteVmArgs),
 }
 
-#[derive(Debug, Subcommand)]
-enum StateCommands {
-    /// Publish a new generation to the master
-    Publish {
-        /// Git commit hash
-        #[arg(short, long)]
-        commit: String,
+#[derive(Debug, Args)]
+struct CreateVmArgs {
+    /// Path to a VM spec JSON file (output of `nix build .#vmSpecJson`)
+    #[arg(long, conflicts_with_all = ["kernel_path", "disk_image_path"])]
+    spec_file: Option<PathBuf>,
 
-        /// Generation number
-        #[arg(short, long)]
-        generation: u64,
+    /// /nix/store path to system toplevel
+    #[arg(long, required_unless_present = "spec_file")]
+    toplevel: Option<String>,
 
-        /// Intent hash
-        #[arg(short, long)]
-        intent_hash: String,
+    /// /nix/store path to kernel (bzImage)
+    #[arg(long, required_unless_present = "spec_file")]
+    kernel_path: Option<String>,
 
-        /// Number of test VMs to create
-        #[arg(short = 'n', long, default_value = "2")]
-        num_vms: usize,
-    },
+    /// /nix/store path to initrd
+    #[arg(long, required_unless_present = "spec_file")]
+    initrd_path: Option<String>,
+
+    /// /nix/store path to root disk image
+    #[arg(long, required_unless_present = "spec_file")]
+    disk_image_path: Option<String>,
+
+    /// Kernel command line
+    #[arg(long, default_value = "console=ttyS0 root=/dev/vda rw init=/sbin/init")]
+    cmdline: String,
+
+    /// Number of vCPUs
+    #[arg(long, default_value = "1")]
+    cpu: u32,
+
+    /// RAM in megabytes
+    #[arg(long, default_value = "512")]
+    memory_mb: u32,
+
+    /// Allowed network domains (can be repeated)
+    #[arg(long)]
+    allowed_domain: Vec<String>,
 }
 
-#[derive(Debug, Subcommand)]
-enum WorkerCommands {
-    /// Get assignment for a worker
-    GetAssignment {
-        /// Worker ID
-        #[arg(short, long)]
-        worker_id: String,
-
-        /// Last seen generation
-        #[arg(short, long, default_value = "0")]
-        last_seen_generation: u64,
-    },
-
-    /// Push worker data to master
-    PushData {
-        /// Worker ID
-        #[arg(short, long)]
-        worker_id: String,
-
-        /// Observed generation
-        #[arg(short, long)]
-        observed_generation: u64,
-
-        /// Number of running VMs to report
-        #[arg(short = 'n', long, default_value = "1")]
-        num_vms: usize,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum ControlCommands {
-    /// Get cluster status
-    Status,
-
-    /// Get a specific worker capability
-    GetWorker {
-        /// Worker ID to retrieve
-        #[arg(short, long)]
-        worker_id: String,
-    },
+#[derive(Debug, Args)]
+struct DeleteVmArgs {
+    /// VM ID to delete
+    id: String,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -110,69 +89,68 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
 
     let cli = Cli::parse();
 
     let local = tokio::task::LocalSet::new();
-    local.run_until(async move {
-        match cli.command {
-            Commands::State { command } => match command {
-                StateCommands::Publish {
-                    commit,
-                    generation,
-                    intent_hash,
-                    num_vms,
-                } => {
-                    testing::test_publish(
-                        cli.addr,
-                        commit,
-                        generation,
-                        intent_hash,
-                        num_vms,
-                    ).await?;
-                }
-            },
+    local
+        .run_until(async move {
+            let client = worker_client::connect(cli.addr).await?;
 
-            Commands::Worker { command } => match command {
-                WorkerCommands::GetAssignment {
-                    worker_id,
-                    last_seen_generation,
-                } => {
-                    testing::test_get_assignment(
-                        cli.addr,
-                        worker_id,
-                        last_seen_generation,
-                    ).await?;
+            match cli.command {
+                Commands::Read => worker_client::read(&client).await?,
+                Commands::ListVms => worker_client::list_vms(&client).await?,
+                Commands::CreateVm(args) => {
+                    let spec = args.resolve()?;
+                    worker_client::create_vm(&client, spec).await?;
                 }
+                Commands::DeleteVm(args) => {
+                    worker_client::delete_vm(&client, &args.id).await?;
+                }
+            }
 
-                WorkerCommands::PushData {
-                    worker_id,
-                    observed_generation,
-                    num_vms,
-                } => {
-                    testing::test_push_data(
-                        cli.addr,
-                        worker_id,
-                        observed_generation,
-                        num_vms,
-                    ).await?;
-                }
-            },
+            Ok(())
+        })
+        .await
+}
 
-            Commands::Control { command } => match command {
-                ControlCommands::Status => {
-                    testing::test_get_cluster_status(cli.addr).await?;
-                }
+/// JSON-deserialisable VM spec matching the Nix vmSpecJson output.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VmSpecJson {
+    pub toplevel: String,
+    pub kernel_path: String,
+    pub initrd_path: String,
+    pub disk_image_path: String,
+    pub cmdline: String,
+    pub cpu: u32,
+    pub memory_mb: u32,
+    #[serde(default)]
+    pub network_allowed_domains: Vec<String>,
+}
 
-                ControlCommands::GetWorker { worker_id } => {
-                    testing::test_get_worker(cli.addr, worker_id).await?;
-                }
-            },
+impl CreateVmArgs {
+    fn resolve(self) -> Result<VmSpecJson, Box<dyn std::error::Error>> {
+        if let Some(path) = self.spec_file {
+            let contents = std::fs::read_to_string(&path)
+                .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+            let spec: VmSpecJson = serde_json::from_str(&contents)
+                .map_err(|e| format!("invalid JSON in {}: {e}", path.display()))?;
+            Ok(spec)
+        } else {
+            Ok(VmSpecJson {
+                toplevel: self.toplevel.unwrap_or_default(),
+                kernel_path: self.kernel_path.ok_or("--kernel-path required")?,
+                initrd_path: self.initrd_path.ok_or("--initrd-path required")?,
+                disk_image_path: self.disk_image_path.ok_or("--disk-image-path required")?,
+                cmdline: self.cmdline,
+                cpu: self.cpu,
+                memory_mb: self.memory_mb,
+                network_allowed_domains: self.allowed_domain,
+            })
         }
-
-        Ok(())
-    }).await
+    }
 }

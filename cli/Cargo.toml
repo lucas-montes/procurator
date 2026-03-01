@@ -11,10 +11,6 @@ path = "src/main.rs"
 name = "pcr-test"
 path = "src/test_main.rs"
 
-[[bin]]
-name = "pcr-worker-test"
-path = "src/worker_test_main.rs"
-
 [dependencies]
 clap = { version = "4.5.40", features = ["derive"] }
 tracing.workspace = true
@@ -28,9 +24,8 @@ uuid.workspace = true
 commands.workspace = true
 autonix.workspace = true
 futures.workspace = true
-ratatui = { version = "0.29.0", features = ["all-widgets", "crossterm"] }
-rand = "0.9.1"
-crossterm = "0.29"
+serde.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

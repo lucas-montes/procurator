@@ -1,6 +1,5 @@
 use axum::{routing::get, Router};
 use ci_service::{routes, AppState, Config, Database, JobQueue, Worker};
-use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 

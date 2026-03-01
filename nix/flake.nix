@@ -87,12 +87,6 @@
           exec ${worker}/bin/worker "$@"
         '';
 
-        # Development scripts using cargo run for faster iteration
-        # These use the source code directly instead of building derivations
-        pcr-dev = pkgs.writeShellScriptBin "pcr" ''
-          exec ${pkgs.cargo}/bin/cargo run --manifest-path="$CARGO_MANIFEST_DIR/Cargo.toml" -p cli -- "$@"
-        '';
-
         pcr-test = pkgs.writeShellScriptBin "pcr-test" ''
           exec ${pkgs.cargo}/bin/cargo run --manifest-path="$CARGO_MANIFEST_DIR/Cargo.toml" -p cli --bin pcr-test -- "$@"
         '';
@@ -163,7 +157,6 @@
               rust-bin-custom # Rust toolchain with rust-analyzer support
               capnproto # Cap'n Proto schema compiler
 
-              pcr-dev # Development CLI (uses cargo run)
               pcr-test # Test CLI (uses cargo run)
 
               openapi-generator-cli

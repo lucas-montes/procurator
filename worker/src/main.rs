@@ -5,12 +5,12 @@ async fn main() {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::fmt::layer()
-                .json()
+                // .json()
                 // .with_writer(non_blocking)
                 .log_internal_errors(true)
                 .with_target(false)
-                .flatten_event(true)
-                .with_span_list(false),
+                // .flatten_event(true)
+                // .with_span_list(false),
         )
         .init();
 
