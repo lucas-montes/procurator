@@ -611,14 +611,15 @@
         #     drv = myApp;
         #     autoShutdown = true;
         #   }
-        # ── mkVmSpecJson: convenience wrapper ──────────────────
-        # Build a VM image and return just the JSON spec derivation.
-        # Usage:
-        #   nix build .#vm-spec --print-out-paths
-        #   pcr create-vm --spec /nix/store/...-vm-spec.json
-        mkVmSpecJson = args: (mkVmImage args).vmSpecJson;
-
-        lib = { inherit mkVmImage mkVmFromDrv mkVmSpecJson; };
+        lib = {
+          inherit mkVmImage mkVmFromDrv;
+          # ── mkVmSpecJson: convenience wrapper ──────────────────
+          # Build a VM image and return just the JSON spec derivation.
+          # Usage:
+          #   nix build .#vm-spec --print-out-paths
+          #   pcr create-vm --spec /nix/store/...-vm-spec.json
+          mkVmSpecJson = args: (mkVmImage args).vmSpecJson;
+        };
 
         # ── Packages ─────────────────────────────────────────────────
         packages = {

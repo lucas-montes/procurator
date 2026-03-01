@@ -180,15 +180,15 @@ CLI                          Worker Server         Node<B> / VmManager<B>  CH Pr
  │── worker.read() ─────────────▶│                     │                   │
  │                               │── GetWorkerStatus ─▶│                   │
  │                               │◀── WorkerInfo ──────│                   │
- │◀── WorkerStatus ─────────────│                     │                   │
+ │◀── WorkerStatus ──────────────│                     │                   │
  │                               │                     │                   │
  │── worker.listVms() ──────────▶│                     │                   │
  │                               │── List ────────────▶│                   │
  │                               │                     │── (for each vm) ──│
  │                               │                     │   GET /vm.info    │
  │                               │                     │◀── VmInfo ────────│
- │                               │◀── VmList ─────────│                   │
- │◀── List(VmStatus) ───────────│                     │                   │
+ │                               │◀── VmList ──────────│                   │
+ │◀── List(VmStatus) ────────────│                     │                   │
 ```
 
 Note: The Server sends `CommandPayload` variants through a `CommandSender` (wraps mpsc).
@@ -199,13 +199,14 @@ The Node feeds them to VmManager, which replies via the embedded oneshot channel
 How a Nix flake definition becomes a running VM:
 
 ```
-1. User defines VM in flake.nix using mkVmImage { cpu = 2; memoryMb = 1024; ... }
-2. Nix evaluates → produces vmSpec attrset (8 camelCase fields matching capnp VmSpec)
-3. mkVmImage also produces vmSpecJson derivation (pkgs.writeText of toJSON vmSpec)
-4. CLI reads the JSON: nix build .#my-vm-spec --print-out-paths → /nix/store/...-vm-spec.json
-5. CLI deserializes JSON → VmSpec (serde: #[serde(rename_all = "camelCase")])
-6. CLI sends createVm RPC with VmSpec fields via capnp
-7. Worker receives → VmManager.handle_create():
+1. User defines a profile: mkVmProfile { cpu = 2; memoryMb = 1024; hostname = "sandbox"; ... }
+2. User builds an image: mkVmImage { profile = myProfile; }
+3. Nix evaluates → produces vmSpec attrset (8 camelCase fields matching capnp VmSpec)
+4. mkVmImage also produces vmSpecJson derivation (pkgs.writeText of toJSON vmSpec)
+5. CLI reads the JSON: nix build .#my-vm-spec --print-out-paths → /nix/store/...-vm-spec.json
+6. CLI deserializes JSON → VmSpec (serde: #[serde(rename_all = "camelCase")])
+7. CLI sends createVm RPC with VmSpec fields via capnp
+8. Worker receives → VmManager.handle_create():
    a. Generate UUIDv7 VM ID
    b. backend.prepare(&spec)  — ensure Nix closure is in local store
    c. backend.spawn(vm_id)    — spawn CH process
@@ -213,8 +214,46 @@ How a Nix flake definition becomes a running VM:
    e. client.create(config)   — REST: vm.create
    f. client.boot()           — REST: vm.boot
    g. Record VmHandle in HashMap
-8. Worker returns VM ID to CLI
+9. Worker returns VM ID to CLI
 ```
+
+### Nix Library Architecture (Four Layers)
+
+```
+                    User's flake.nix
+                          │
+            ┌─────────────┼─────────────┐
+            ▼             ▼             ▼
+       ┌─────────┐  ┌──────────┐  ┌─────────┐
+       │ cluster │  │ profile  │  │  host   │
+       │         │  │          │  │         │
+       │ topology│  │ guest cfg│  │ services│
+       │ roles   │  │ packages │  │ network │
+       │ deploy  │  │ workload │  │ firewall│
+       └────┬────┘  └────┬─────┘  └─────────┘
+            │            │
+            │    ┌───────▼─────────┐
+            │    │     image       │
+            │    │                 │
+            │    │ kernel + rootfs │
+            │    │ disk image      │
+            │    │ vmSpec JSON     │
+            │    └────────┬────────┘
+            │             │
+            ▼             ▼
+       Control Plane    Worker
+       (scheduling)     (boot VM)
+```
+
+**Profile (`nix/lib/profile/`)** — `mkVmProfile`: pure validation + normalization. Returns a plain attrset with `_type = "vmProfile"` marker. Fields: hostname, cpu, memoryMb, packages, entrypoint, autoShutdown, allowedDomains, sshAuthorizedKeys, files. Resources (cpu, memoryMb) live here — single source of truth.
+
+**Image (`nix/lib/image/`)** — `mkVmImage`: takes `{ profile; kernel?; diskSize?; additionalSpace?; }`, produces `{ image, nixos, toplevel, vmSpec, vmSpecJson }`. Uses `vm-module.nix` for NixOS guest config, `make-ext4-fs.nix` for disk image (sd-image pattern, no QEMU).
+
+**Cluster (`nix/lib/cluster/`)** — `evalCluster`: validates topology `{ vms.<name>.vmProfile; vms.<name>.deployment.addr; ... }`. Derives cpu/memoryMb from profile. Returns `{ vms, vmCount, totalCpu, totalMemoryMb }`.
+
+**Host (`nix/modules/host/`)** — NixOS module: bridge, TAP devices, NAT, dnsmasq, per-VM nftables domain allowlisting. `allowedDomains` enforced host-side on TAP device — guest cannot bypass.
+
+**Entry point (`nix/lib/default.nix`)** — exports `mkVmProfile`, `mkVmImage`, `mkVmSpecJson`, `evalCluster`.
 
 ### Key Design Points
 
@@ -240,4 +279,41 @@ worker/src/
     ├── interface.rs     # Three traits: Vmm, VmmProcess, VmmBackend (with prepare())
     ├── cloud_hypervisor.rs  # Production backend: CloudHypervisor, ChProcess, CloudHypervisorBackend
     └── mock.rs          # Test backend: MockBackend, MockVmm, MockProcess (failure injection)
+```
+
+## Directory Layout (Nix)
+
+```
+nix/
+├── flake.nix                          # Top-level: Rust crates + dev shell + exports libs
+├── lib/
+│   ├── default.nix                    # Entry point: exports mkVmProfile, mkVmImage, mkVmSpecJson, evalCluster
+│   ├── profile/
+│   │   └── default.nix                # mkVmProfile: validates + normalizes guest config
+│   ├── image/
+│   │   ├── default.nix                # mkVmImage: profile + kernel opts → { image, vmSpec, vmSpecJson }
+│   │   └── vm-module.nix              # NixOS guest module (systemd, SSH, virtio, workload)
+│   └── cluster/
+│       └── default.nix                # evalCluster: validates topology, links profiles to VMs
+├── modules/
+│   ├── host/
+│   │   └── default.nix                # Host NixOS module (bridge, TAP, NAT, dnsmasq, nftables)
+│   ├── procurator-worker.nix          # Worker daemon systemd service
+│   ├── procurator-control-plane.nix   # Control plane systemd service
+│   ├── cluster.nix                    # Legacy cluster topology schema (NixOS module system)
+│   ├── cache.nix                      # Binary cache service
+│   ├── ci-service.nix                 # CI service
+│   └── repohub.nix                    # Repohub service
+├── tests/
+│   ├── profile-fast.nix               # Pure eval: mkVmProfile shape, defaults, validation
+│   ├── vm-spec-fast.nix               # Pure eval: vmSpec 8-field contract, JSON round-trip
+│   ├── cluster-fast.nix               # Pure eval: evalCluster validation
+│   └── integration/
+│       ├── flake.nix                  # Slow test flake: builds real VM with test.py
+│       └── test.py                    # Python workload for integration test
+└── flake-vmm/                         # Legacy (being replaced by nix/lib/)
+    ├── flake.nix                      # Original monolithic VM builder
+    ├── vm-module.nix                  # Guest module (canonical copy now in lib/image/)
+    ├── host-module.nix                # Host module (canonical copy now in modules/host/)
+    └── test-vm-spec.nix              # Original fast test (superseded by nix/tests/)
 ```

@@ -265,3 +265,37 @@ The question: where does this "ensure artifacts are local" logic live?
 **Tradeoffs:**
 - Couples artifact resolution to the backend. If we need the same resolution logic for multiple backends, we'd duplicate it. Acceptable for now — we have one backend.
 - The default no-op could silently hide a missing override. Mitigated by integration tests that actually exercise the Nix path.
+
+---
+
+## ADR-011: Four-layer Nix library architecture
+
+**Status:** Accepted
+
+**Context:**
+The original `nix/flake-vmm/flake.nix` mixed all concerns in one 800-line file: kernel selection, NixOS image building, VM spec generation, host networking, workload injection. `cluster.nix` used `deferredModule` with no connection to the image builder. No composability — you couldn't mix and match.
+
+**Decision:** Split into four composable layers:
+
+1. **Profile** (`nix/lib/profile/`) — `mkVmProfile`: pure validation/normalization → plain attrset with `_type = "vmProfile"`. Resources (cpu, memoryMb) live here — single source of truth.
+2. **Image** (`nix/lib/image/`) — `mkVmImage`: takes `{ profile; kernel?; diskSize?; additionalSpace?; }` → `{ image, vmSpec, vmSpecJson, nixos }`. Full NixOS eval + disk image.
+3. **Cluster** (`nix/lib/cluster/`) — `evalCluster`: validates topology with profile references. Derives cpu/memoryMb from profile.
+4. **Host** (`nix/modules/host/`) — NixOS module for physical servers: bridge, TAP, NAT, dnsmasq, per-VM nftables.
+
+**Key sub-decisions:**
+- Resources in profile only — no override chains, no duplication
+- No `mkVmFromDrv` sugar — users write explicit profiles
+- No inline params to `mkVmImage` — always requires a `profile`
+- `allowedDomains` enforced host-side only (nftables on TAP device)
+- Tests replace examples: fast pure-eval tests per lib + slow integration test
+
+**Rationale:**
+- Each layer has a single responsibility and clear inputs/outputs
+- Profile is pure data — can be tested without NixOS eval
+- Image builder is isolated from topology concerns
+- Host module is a standard NixOS module — importable independently
+- `_type` marker enables downstream validation without coupling
+
+**Tradeoffs:**
+- Two function calls instead of one (`mkVmProfile` then `mkVmImage`) — more verbose but fully explicit
+- Old `flake-vmm/flake.nix` retained as legacy — consumers need to migrate

@@ -290,5 +290,50 @@ Inner errors are wrapped, never leaked across boundaries. The Server converts `V
 
 ### Nix Tests
 
-- **Fast test (pure eval, no build):** `nix/flake-vmm/test-vm-spec.nix` — validates vmSpec field names, types, defaults, JSON round-trip using hand-built attrsets. Runs in ~1s: `nix eval --json -f ./nix/flake-vmm/test-vm-spec.nix`
-- **Slow test (full NixOS eval):** `nix flake check ./nix/flake-vmm` — calls `mkVmImage` for real, builds actual kernel/initrd derivations, validates vmSpecJson with `jq`. ~30-60s first run, cached after. Lives in `flake.nix` as `checks.x86_64-linux.vm-spec`.
+- **Fast tests (pure eval, no build):** in `nix/tests/`. Run with `nix eval --json -f ./nix/tests/<test>.nix` (~1s each):
+  - `profile-fast.nix` — validates mkVmProfile: field names, types, defaults, custom values, validation errors (bad cpu, bad types), _type marker
+  - `vm-spec-fast.nix` — validates vmSpec shape: 8 fields matching capnp schema, camelCase names, types, JSON round-trip, /nix/store/ path prefixes
+  - `cluster-fast.nix` — validates evalCluster: derived cpu/memoryMb from profile, summary stats, default deployment values, validation errors (missing vmProfile, invalid profile, missing deployment)
+- **Slow test (full NixOS eval):** `nix/tests/integration/flake.nix` — calls mkVmProfile + mkVmImage for real, builds actual kernel/initrd/disk derivations, validates vmSpecJson with `jq`. ~30-60s first run, cached after. Run with `nix flake check ./nix/tests/integration`.
+- **Nix lib pattern:** All libs use assertion-based validation with descriptive error messages. `mkVmProfile` returns `{ ...; _type = "vmProfile"; }` marker, `mkVmImage` and `evalCluster` assert `_type` to ensure they receive validated profiles.
+
+## Nix Library Patterns
+
+### Four-Layer Architecture
+
+```nix
+# Profile — pure data, no NixOS eval
+profile = mkVmProfile { hostname = "sandbox"; cpu = 2; memoryMb = 1024; };
+
+# Image — full NixOS eval + disk image
+vm = mkVmImage { profile = profile; };
+
+# Cluster — pure validation of topology
+cluster = evalCluster { vms.sandbox-1 = { vmProfile = profile; deployment.addr = "10.0.0.1"; }; };
+```
+
+### Resource Ownership
+
+- Resources (`cpu`, `memoryMb`) live in the **profile only** — single source of truth
+- `mkVmImage` reads them from the profile to produce vmSpec fields
+- `evalCluster` reads them from the profile for scheduling decisions
+- No override chains, no duplication
+- Kernel/disk options are image-build concerns, NOT in the profile
+
+### Profile Validation
+
+`mkVmProfile` validates all inputs eagerly (types, ranges) and returns a normalized attrset with `_type = "vmProfile"`. Downstream functions assert `_type` to catch misuse:
+
+```nix
+# This throws:
+mkVmImage { profile = { hostname = "fake"; }; }  # missing _type marker
+
+# This works:
+mkVmImage { profile = mkVmProfile { hostname = "real"; }; }  # validated
+```
+
+### No Sugar
+
+- No `mkVmFromDrv` — users write explicit profiles with `packages` + `entrypoint`
+- No inline params to `mkVmImage` — always requires an explicit profile
+- Two function calls, clear data flow: `mkVmProfile { ... }` then `mkVmImage { profile = ...; }`
