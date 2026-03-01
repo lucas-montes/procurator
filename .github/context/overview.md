@@ -13,7 +13,7 @@ A GitOps-driven VM orchestrator. Think Kubernetes, but replacing containers and 
 - **RPC:** Cap'n Proto (schemas in `commands/schema/`, zero-copy, capability-based)
 - **Hypervisor:** Cloud Hypervisor (one process per VM, REST API over unix socket)
 - **Package/Image system:** Nix (flakes, closures, binary cache, content-addressed store)
-- **VM images:** NixOS minimal (built by `nix/flake-vmm/`, 500-700MB with kernel + SSH)
+- **VM images:** NixOS minimal (built by `nix/lib/image/`, 500-700MB with kernel + SSH)
 - **Logging:** `tracing` (structured JSON)
 - **Persistence:** SQLite (repohub), in-memory (control plane — desired state is reconstructable from Git)
 
@@ -29,7 +29,8 @@ A GitOps-driven VM orchestrator. Think Kubernetes, but replacing containers and 
 | `autonix` | Scans repos, detects stack, generates Nix flakes | Working |
 | `commands` | Cap'n Proto schemas + generated Rust code | Working |
 | `repo_outils` | Git and Nix utility functions | Working |
-| `nix/flake-vmm` | NixOS VM image builder + host networking modules | Working |
+| `cache` | Nix binary cache server (nix-serve compatible) | Working |
+| `nix/lib` | 4-layer VM pipeline (profile → image → cluster → host) | Working |
 
 ## Current Focus: Worker + VMM
 
@@ -42,9 +43,9 @@ The immediate goal is a working worker that can spin up and manage cloud-hypervi
 ## Communication Protocol
 
 All inter-service RPC uses **Cap'n Proto** schemas in `commands/schema/`:
-- `common.capnp`: Shared data types (VmSpec with 13 fields including kernelPath/initrdPath/diskImagePath/cmdline, WorkerStatus, VmMetrics, etc.)
+- `common.capnp`: Shared data types (VmSpec with 8 fields: toplevel, kernelPath, initrdPath, diskImagePath, cmdline, cpu, memoryMb, networkAllowedDomains; WorkerStatus, VmMetrics, etc.)
 - `master.capnp`: Control plane interface (publishState, getAssignment, pushData, getClusterStatus, getWorker)
-- `worker.capnp`: Worker interface — flat, two methods: `read` (worker status), `listVms` (list VMs)
+- `worker.capnp`: Worker interface — flat, four methods: `read`, `listVms`, `createVm`, `deleteVm`
 
 Build step: `capnpc` compiles `.capnp` → Rust in `commands/build.rs`.
 
@@ -59,10 +60,11 @@ No `apply` command. Git is the only write interface. See `context/decisions.md` 
 
 ## Nix Integration
 
-- **VM images:** Built by `nix/flake-vmm/flake.nix` — `mkVmImage` / `mkVmFromDrv`
-- **Host networking:** `nix/flake-vmm/host-module.nix` — bridge, TAP, NAT, domain allowlisting
-- **Guest config:** `nix/flake-vmm/vm-module.nix` — systemd, SSH, virtio, workload entrypoint
-- **Cluster definition:** `nix/modules/cluster.nix` — declarative VM topology
+- **Profiles:** `nix/lib/profile/` — `mkVmProfile` validates + normalizes guest config
+- **VM images:** `nix/lib/image/` — `mkVmImage` takes a profile, produces image + vmSpec JSON
+- **Guest config:** `nix/lib/image/vm-module.nix` — systemd, SSH, virtio, workload entrypoint
+- **Cluster topology:** `nix/lib/cluster/` — `evalCluster` validates VM topology with deployment metadata
+- **Host networking:** `nix/modules/host/` — bridge, TAP, NAT, dnsmasq, nftables domain allowlisting
 - **Store paths:** Workers pull closures with `nix copy --from <cache>`. Content-addressed = deterministic drift detection.
 
 ## Development

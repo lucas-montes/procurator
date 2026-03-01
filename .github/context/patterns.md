@@ -1,5 +1,9 @@
 # Patterns and Conventions
 
+## Environment
+
+- **Shell:** nushell (`nu`). Use `;` instead of `&&`, `out+err>|` instead of `2>&1`.
+
 ## Rust Conventions
 
 ### General

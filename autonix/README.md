@@ -6,7 +6,12 @@ A library that scans repositories, detects their tech stack, and auto-generates 
 
 ## Why
 
-When users onboard a new project into procurator, they shouldn't have to write a Nix flake by hand. Autonix inspects the repo and produces a reasonable starting flake — lowering the barrier from "learn Nix" to "push your code." Called by `repohub` and `ci_service` during project setup.
+The goal is twofold:
+
+1. **Package the app** — scan the repo, detect the language/framework, and generate a flake that builds it into a Nix derivation. Users shouldn't have to write Nix by hand to get started.
+2. **Discover dependencies** — detect databases, proxies, message queues, and other infrastructure the app needs, then use that information to generate the cluster topology.
+
+Used directly by the **CLI** (`pcr init`) and **Repohub** (when a project is created). It lowers the barrier from "learn Nix" to "push your code."
 
 ## Modules
 

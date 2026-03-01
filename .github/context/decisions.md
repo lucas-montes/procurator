@@ -298,4 +298,4 @@ The original `nix/flake-vmm/flake.nix` mixed all concerns in one 800-line file: 
 
 **Tradeoffs:**
 - Two function calls instead of one (`mkVmProfile` then `mkVmImage`) — more verbose but fully explicit
-- Old `flake-vmm/flake.nix` retained as legacy — consumers need to migrate
+- Old `flake-vmm/` has been deleted — all functionality is in `nix/lib/` and `nix/modules/`

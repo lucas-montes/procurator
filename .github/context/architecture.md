@@ -20,6 +20,7 @@ Git → Nix Eval/Build → Control Plane → Workers → cloud-hypervisor VMs
 | `autonix` | Scans repos, generates Nix flakes | Library, called by repohub/ci |
 | `commands` | Cap'n Proto schemas + generated code | Build-time library |
 | `repo_outils` | Git and Nix utility functions | Library |
+| `cache` | Nix binary cache server (nix-serve compatible) | Long-lived server |
 
 ## Worker Internal Architecture
 
@@ -311,9 +312,5 @@ nix/
 │   └── integration/
 │       ├── flake.nix                  # Slow test flake: builds real VM with test.py
 │       └── test.py                    # Python workload for integration test
-└── flake-vmm/                         # Legacy (being replaced by nix/lib/)
-    ├── flake.nix                      # Original monolithic VM builder
-    ├── vm-module.nix                  # Guest module (canonical copy now in lib/image/)
-    ├── host-module.nix                # Host module (canonical copy now in modules/host/)
-    └── test-vm-spec.nix              # Original fast test (superseded by nix/tests/)
+└── GITOPS_WORKFLOW.md                 # GitOps workflow reference (steps + commands)
 ```

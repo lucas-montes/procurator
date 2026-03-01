@@ -7,40 +7,57 @@ A GitOps-driven VM orchestrator. Think Kubernetes, but replacing containers and 
 ## Architecture
 
 ```
-                           ┌─────────────────────────────┐
-                           │      User Interface         │
-                           │   CLI (pcr) / Repohub (web) │
-                           └─────────────┬───────────────┘
-                                         │ RPC (Cap'n Proto)
-                                         ▼
-┌──────────────────┐          ┌─────────────────────┐
-│   Build Pipeline │          │    Control Plane     │
-│                  │ notify   │                      │
-│  git push        ├─────────►│  desired state store │
-│    → CI Service  │          │  scheduler           │
-│    → nix build   │          │  worker registry     │
-│    → Cache       │          └──────────┬───────────┘
-│                  │                     │ RPC (Cap'n Proto)
-└──────────────────┘            ┌────────┴────────┐
-                                ▼                 ▼
-                         ┌────────────┐    ┌────────────┐
-                         │  Worker 1  │    │  Worker 2  │
-                         │            │    │            │
-                         │ VmManager  │    │ VmManager  │
-                         │   ├ CH     │    │   ├ CH     │
-                         │   ├ CH     │    │   ├ CH     │
-                         │   └ CH     │    │   └ CH     │
-                         └────────────┘    └────────────┘
-                          cloud-hypervisor    (one process
-                          VMs                  per VM)
+                        ┌──────────────────────────────────────┐
+                        │           User Interface             │
+                        │    CLI (pcr) / Repohub (web)         │
+                        │         │            │               │
+                        │    autonix       autonix             │
+                        │  (scan repo,   (scan repo,           │
+                        │   gen flake)    gen flake)            │
+                        └────┬─────────────────┬───────────────┘
+                             │                 │
+                        pcr push          post-receive hook
+                        (build +           (trigger CI)
+                         push to               │
+                         cache)                 │
+                             │          ┌───────▼──────────┐
+                             │          │    CI Service     │
+                             │          │                   │
+                             │          │  nix eval/build   │
+                             ▼          │  pull from cache  │
+                     ┌──────────────┐   │  push on miss     │
+                     │ Binary Cache │◄──┤  notify ctrl plane│
+                     │  (nix-serve) │   └───────┬───────────┘
+                     └──────┬───────┘           │
+                            │           ┌───────▼───────────┐
+                            │           │   Control Plane    │
+                            │           │                    │
+                            │           │  desired state     │
+                            │           │  scheduler         │
+                            │           │  worker registry   │
+                            │           └───────┬────────────┘
+                            │                   │ RPC (Cap'n Proto)
+                            │          ┌────────┴────────┐
+                            │          ▼                 ▼
+                            │   ┌────────────┐    ┌────────────┐
+                            └──►│  Worker 1  │    │  Worker 2  │
+                                │            │    │            │
+                                │ VmManager  │    │ VmManager  │
+                                │   ├ CH VM  │    │   ├ CH VM  │
+                                │   ├ CH VM  │    │   ├ CH VM  │
+                                │   └ CH VM  │    │   └ CH VM  │
+                                └────────────┘    └────────────┘
 ```
 
 ## GitOps Flow
 
 ```
-git push → Repohub → CI Service → nix eval/build → Binary Cache
-                                       │
-                                       └─ notify ─→ Control Plane → schedule → Workers → boot VMs
+1. pcr push ──► cache (user builds + pushes closures upfront)
+2. git push ──► repohub ──► post-receive hook ──► CI Service
+3. CI ──► nix eval/build (pulls from cache when possible, pushes on miss)
+4. CI ──► notify control plane with deployment artifact
+5. Control plane ──► schedule VMs to workers
+6. Workers ──► pull from cache ──► boot cloud-hypervisor VMs
 ```
 
 ## Components
@@ -64,7 +81,7 @@ git push → Repohub → CI Service → nix eval/build → Binary Cache
 | Directory | Role | README |
 |-----------|------|--------|
 | [`nix/`](nix/README.md) | Flake, lib pipeline, NixOS modules, tests | 4-layer VM building pipeline |
-| [`nix/flake-vmm/`](nix/flake-vmm/) | Legacy monolithic VM builder | Being replaced by `nix/lib/` |
+| [`nix/GITOPS_WORKFLOW.md`](nix/GITOPS_WORKFLOW.md) | GitOps workflow reference | Step-by-step: git push → running VM |
 | [`example/`](example/) | Reference cluster configuration | Sample `flake.nix` |
 
 ## Tech Stack
