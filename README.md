@@ -82,7 +82,7 @@ A GitOps-driven VM orchestrator. Think Kubernetes, but replacing containers and 
 |-----------|------|--------|
 | [`nix/`](nix/README.md) | Flake, lib pipeline, NixOS modules, tests | 4-layer VM building pipeline |
 | [`nix/GITOPS_WORKFLOW.md`](nix/GITOPS_WORKFLOW.md) | GitOps workflow reference | Step-by-step: git push → running VM |
-| [`example/`](example/) | Reference cluster configuration | Sample `flake.nix` |
+| [`nix/examples/`](nix/examples/) | Reference cluster configuration | Sample `flake.nix` |
 
 ## Tech Stack
 
@@ -101,8 +101,10 @@ cargo build -p worker           # Build worker only
 cargo test -p worker            # Run worker tests (22 tests)
 cargo test --workspace          # Run all tests
 cargo run -p worker             # Run worker (127.0.0.1:6000)
-cargo run --bin pcr-worker-test # Manual RPC testing
+cargo run --bin pcr-test        # Manual worker RPC testing
 ```
+
+Manual worker + Python example test flow: see [`docs/testing.md`](docs/testing.md).
 
 ## Project Status
 

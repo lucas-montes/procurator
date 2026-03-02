@@ -11,13 +11,13 @@ The primary user-facing command-line tool (`pcr`). Provides four top-level comma
 | `repo` | Clone, push, pull repositories |
 | `inspect` | TUI-based cluster inspection (planned, via ratatui) |
 
-Also ships two test binaries (`pcr-test`, `pcr-worker-test`) for manually exercising the Master and Worker RPC interfaces.
+Also ships the `pcr-test` binary for manually exercising worker RPC calls.
 
 ## Why
 
 Developers need a single entry point to interact with procurator. The CLI is intentionally minimal and declarative — it never allows commands that would introduce drift from the Nix-defined project spec. All configuration comes from flakes, not CLI flags.
 
-The test binaries exist separately because RPC testing requires different workflows than normal usage. See `TESTING.md` for details.
+The test binary exists separately because RPC testing requires a different workflow than normal usage. See [`../docs/testing.md`](../docs/testing.md) for details.
 
 ## Status
 

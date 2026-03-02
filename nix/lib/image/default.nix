@@ -79,12 +79,15 @@
 
   # ── Build the disk image ────────────────────────────────────────────
   # Uses make-ext4-fs.nix (sd-image pattern — NO QEMU at build time).
-  image = pkgs.callPackage "${nixpkgs}/nixos/lib/make-ext4-fs.nix" {
-    compressImage = false;
-    volumeLabel = "nixos";
-    inherit diskSize additionalSpace;
-    storePaths = [toplevel];
-    populateImageCommands = ''
+  makeExt4FsFn = import "${nixpkgs}/nixos/lib/make-ext4-fs.nix";
+  makeExt4FsArgs = builtins.functionArgs makeExt4FsFn;
+
+  image = pkgs.callPackage makeExt4FsFn (
+    {
+      compressImage = false;
+      volumeLabel = "nixos";
+      storePaths = [toplevel];
+      populateImageCommands = ''
       # Minimal filesystem skeleton
       mkdir -p ./files/sbin
       ln -s ${toplevel}/init ./files/sbin/init
@@ -117,7 +120,14 @@
         '')
         profile.files)}
     '';
-  };
+    }
+    // lib.optionalAttrs (makeExt4FsArgs ? additionalSpace) {
+      inherit additionalSpace;
+    }
+    // lib.optionalAttrs (makeExt4FsArgs ? diskSize) {
+      inherit diskSize;
+    }
+  );
 
   # ── VM spec ─────────────────────────────────────────────────────────
   # Matches the 8-field capnp VmSpec schema exactly.
