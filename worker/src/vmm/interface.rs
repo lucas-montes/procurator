@@ -73,6 +73,10 @@ pub trait VmmProcess: Send + 'static {
     /// Kill the process. Best-effort — errors are logged, not propagated.
     fn kill(&mut self) -> impl std::future::Future<Output = Result<(), VmError>> + Send;
 
+    /// Non-blocking check whether the process has exited.
+    /// Returns `Ok(Some(status))` if exited, `Ok(None)` if still running.
+    fn try_wait(&mut self) -> Result<Option<std::process::ExitStatus>, VmError>;
+
     /// Clean up resources associated with this process (socket files, TAP
     /// devices, writable disk copies, etc.). Called after `kill`.
     fn cleanup(&mut self) -> impl std::future::Future<Output = Result<(), VmError>> + Send;
@@ -95,16 +99,24 @@ pub trait VmmBackend: Send + 'static {
     /// Ensure the VM's artifacts (kernel, disk image, initrd) are available
     /// on the local filesystem before spawning.
     ///
-    /// Production: may run `nix copy --from <cache> <store-path>` to pull
-    /// closures from a binary cache.
+    /// Responsibilities:
+    /// - Validate that store paths (kernel, initrd, disk) exist locally
+    /// - Copy the disk image to a writable location for the VM
+    /// - Create per-VM directories (for serial logs, writable disk, etc.)
+    ///
+    /// Production: validates paths, copies disk to `/tmp/procurator/vms/{vm_id}/disk.img`.
+    /// Future: may run `nix copy --from <cache> <store-path>` before validating.
     /// Tests: no-op (paths don't need to exist).
     ///
-    /// Default implementation does nothing — override when the backend
-    /// needs to fetch artifacts before it can use them.
+    /// The `vm_id` is provided so the backend can create per-VM directories
+    /// and store prepared state (writable disk path, serial log path) that
+    /// `build_config` and `cleanup` will use later.
     fn prepare(
         &self,
+        vm_id: &str,
         _spec: &VmSpec,
     ) -> impl std::future::Future<Output = Result<(), VmError>> + Send {
+        let _ = vm_id;
         std::future::ready(Ok(()))
     }
 
@@ -123,5 +135,7 @@ pub trait VmmBackend: Send + 'static {
     /// Build a backend-specific VM config from the platform-agnostic [`VmSpec`].
     ///
     /// This is where Nix store-path → kernel/disk/initrd resolution happens.
-    fn build_config(&self, spec: &VmSpec) -> <Self::Client as Vmm>::Config;
+    /// The `vm_id` is provided so the backend can look up per-VM prepared
+    /// state (e.g. writable disk path from `prepare()`).
+    fn build_config(&self, vm_id: &str, spec: &VmSpec) -> <Self::Client as Vmm>::Config;
 }

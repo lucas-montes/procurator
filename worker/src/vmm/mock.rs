@@ -197,6 +197,11 @@ impl VmmProcess for MockProcess {
         Ok(())
     }
 
+    fn try_wait(&mut self) -> Result<Option<std::process::ExitStatus>, VmError> {
+        // Mock process is always "alive"
+        Ok(None)
+    }
+
     async fn cleanup(&mut self) -> Result<(), VmError> {
         self.tracker.cleanups.fetch_add(1, Ordering::Relaxed);
         Ok(())
@@ -236,7 +241,7 @@ impl VmmBackend for MockBackend {
     type Client = MockVmm;
     type Process = MockProcess;
 
-    async fn prepare(&self, _spec: &VmSpec) -> Result<(), VmError> {
+    async fn prepare(&self, _vm_id: &str, _spec: &VmSpec) -> Result<(), VmError> {
         self.tracker.prepares.fetch_add(1, Ordering::Relaxed);
         if let Some(ref e) = self.config.prepare_error {
             return Err(VmError::Internal(e.clone()));
@@ -266,7 +271,7 @@ impl VmmBackend for MockBackend {
         Ok((client, process, socket_path))
     }
 
-    fn build_config(&self, spec: &VmSpec) -> MockVmConfig {
+    fn build_config(&self, _vm_id: &str, spec: &VmSpec) -> MockVmConfig {
         MockVmConfig {
             cpu: spec.cpu(),
             memory_mb: spec.memory_mb(),

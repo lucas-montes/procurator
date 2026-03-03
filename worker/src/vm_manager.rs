@@ -1,15 +1,34 @@
-//! VmManager — single owner of all VM state.
+//! # VmManager — single owner of all VM state (ADR-002, ADR-005)
 //!
-//! Runs as one tokio task inside the Node. Owns a HashMap of VmHandles.
-//! Generic over [`VmmBackend`] so the hypervisor layer can be swapped
-//! for testing without touching real processes or sockets.
+//! Fleet manager: owns `HashMap<VmId, VmHandle>`, processes commands sequentially
+//! in one tokio task. No locks — state mutations happen in one place, in order.
 //!
-//! Processes commands sequentially — no locks needed.
+//! ## vs [`vmm`](crate::vmm)
+//!
+//! `vmm` = driver for **one** hypervisor process (REST client + OS process handle).
+//! `VmManager` = dispatcher that owns **N** drivers and routes commands to them.
+//!
+//! ## Design
+//!
+//! - **Single owner** — only `VmManager` mutates the VM table. No `Arc<Mutex<_>>`.
+//! - **Message passing** — Server sends `CommandPayload` over mpsc, awaits oneshot reply.
+//! - **Generic over `VmmBackend`** — production uses `CloudHypervisorBackend`, tests use `MockBackend`.
+//!
+//! ## Create flow
+//!
+//! UUIDv7 → `prepare(vm_id, spec)` → `spawn(vm_id)` → `build_config(vm_id, spec)`
+//! → `client.create(config)` → `client.boot()` → insert `VmHandle`.
+//! On failure, no `VmHandle` is inserted — no partial state.
+//!
+//! ## Delete flow
+//!
+//! Remove from HashMap → `shutdown()` (best-effort) → `delete()` (best-effort)
+//! → `kill()` → `cleanup()` (socket, disk copy, serial log, VM dir).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use tracing::{info, instrument, warn};
+use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::dto::{
@@ -108,16 +127,28 @@ impl<B: VmmBackend> VmManager<B> {
     #[instrument(skip(self), fields(toplevel = %spec.toplevel()))]
     async fn handle_create(&mut self, spec: VmSpec) -> Result<String, VmError> {
         let vm_id = Uuid::now_v7().to_string();
-        info!(vm_id = %vm_id, toplevel = %spec.toplevel(), "Creating VM");
+        info!(
+            vm_id = %vm_id,
+            toplevel = %spec.toplevel(),
+            kernel = %spec.kernel_path(),
+            disk = %spec.disk_image_path(),
+            cpu = spec.cpu(),
+            memory_mb = spec.memory_mb(),
+            "Creating VM"
+        );
 
         // 1. Ensure artifacts are available locally (e.g. nix copy from cache)
-        self.backend.prepare(&spec).await?;
+        //    Also copies the disk image to a writable location for this VM.
+        self.backend.prepare(&vm_id, &spec).await?;
+        info!(vm_id = %vm_id, "prepare complete");
 
         // 2. Spawn the VMM process via the backend
-        let (client, process, socket_path) = self.backend.spawn(&vm_id).await?;
+        let (client, mut process, socket_path) = self.backend.spawn(&vm_id).await?;
+        info!(vm_id = %vm_id, socket = %socket_path.display(), "VMM process spawned");
 
         // 3. Build backend-specific config from the platform-agnostic spec
-        let vmm_config = self.backend.build_config(&spec);
+        //    Uses the writable disk path created by prepare().
+        let vmm_config = self.backend.build_config(&vm_id, &spec);
 
         // 4. Create the VM definition via the client
         client.create(vmm_config).await.map_err(|e| {
@@ -129,7 +160,33 @@ impl<B: VmmBackend> VmManager<B> {
             VmError::Hypervisor(format!("vm.boot failed: {e}"))
         })?;
 
-        // 6. Record in our table
+        // 6. Quick liveness check — did CH crash right after boot?
+        //    Give it a moment, then verify the process is still alive.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        match process.try_wait() {
+            Ok(Some(exit_status)) => {
+                error!(
+                    vm_id = %vm_id,
+                    exit_status = %exit_status,
+                    "VMM process exited immediately after boot"
+                );
+                // Read the CH log before we clean up
+                if let Err(e) = process.cleanup().await {
+                    warn!(vm_id = %vm_id, error = ?e, "cleanup after crash failed");
+                }
+                return Err(VmError::ProcessFailed(format!(
+                    "VMM process exited with {exit_status} immediately after boot"
+                )));
+            }
+            Ok(None) => {
+                info!(vm_id = %vm_id, "VMM process alive after boot");
+            }
+            Err(e) => {
+                warn!(vm_id = %vm_id, error = %e, "could not check VMM process status");
+            }
+        }
+
+        // 7. Record in our table
         let handle = VmHandle {
             spec,
             client,
@@ -139,7 +196,7 @@ impl<B: VmmBackend> VmManager<B> {
         };
         self.vms.insert(vm_id.clone(), handle);
 
-        info!(vm_id = %vm_id, "VM created and booted");
+        info!(vm_id = %vm_id, "VM created and booted successfully");
         Ok(vm_id)
     }
 

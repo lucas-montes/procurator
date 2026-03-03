@@ -3,6 +3,8 @@
   flake-utils,
   packages,
 }: let
+  ch = pkgs."cloud-hypervisor";
+
   inherit (packages)
     cache
     ci_service
@@ -11,6 +13,7 @@
     ;
 
   worker-wrapper = pkgs.writeShellScriptBin "procurator-worker" ''
+    export PATH="${pkgs.lib.makeBinPath [ch]}:$PATH"
     exec ${worker}/bin/worker "$@"
   '';
 
@@ -33,7 +36,7 @@ in {
   apps = {
     cache = flake-utils.lib.mkApp {drv = cache;};
     ci_service = flake-utils.lib.mkApp {drv = ci_service;};
-    worker = flake-utils.lib.mkApp {drv = worker;};
+    worker = flake-utils.lib.mkApp {drv = worker-wrapper;};
     pcr-test = flake-utils.lib.mkApp {
       drv = cli;
       exePath = "/bin/pcr-test";

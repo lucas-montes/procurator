@@ -1,15 +1,16 @@
 //! Stateless RPC adapter. Translates Cap'n Proto calls into VmCommands,
 //! sends them to the Node via mpsc channel, and fills responses from oneshot replies.
 //!
-//! Holds only a `CommandSender` (cloneable mpsc::Sender wrapper). No VMM, no VM state.
+//! Holds only a `CommandSender` (cloneable `mpsc::Sender` wrapper). No VMM, no VM state.
 
 use std::net::SocketAddr;
 
+use capnp::message::ReaderOptions;
 use capnp_rpc::{RpcSystem, rpc_twoparty_capnp, twoparty};
 use futures::AsyncReadExt;
 use tracing::{debug, info, instrument};
 
-use crate::dto::{CommandSender, CommandPayload, CommandResponse, VmSpec};
+use crate::dto::{CommandPayload, CommandResponse, CommandSender, VmSpec};
 
 #[derive(Clone)]
 pub struct Server {
@@ -17,10 +18,16 @@ pub struct Server {
 }
 
 impl Server {
+    #[must_use]
     pub fn new(tx: CommandSender) -> Self {
         Server { tx }
     }
 
+    /// # Errors
+    ///
+    /// - if the TCP listener fails to bind to the given address
+    /// - if the RPC system fails to start
+    ///
     #[instrument(skip(self))]
     pub async fn serve(self, addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         info!(addr = %addr, "Starting server");
@@ -38,7 +45,7 @@ impl Server {
                 futures::io::BufReader::new(reader),
                 futures::io::BufWriter::new(writer),
                 rpc_twoparty_capnp::Side::Server,
-                Default::default(),
+                ReaderOptions::default(),
             );
 
             let rpc_system = RpcSystem::new(Box::new(network), Some(client.clone().client));
@@ -57,7 +64,9 @@ impl commands::worker_capnp::worker::Server for Server {
 
         let tx = self.tx.clone();
         ::capnp::capability::Promise::from_future(async move {
-            let resp = tx.request(CommandPayload::GetWorkerStatus).await
+            let resp = tx
+                .request(CommandPayload::GetWorkerStatus)
+                .await
                 .map_err(|e| capnp::Error::failed(e.to_string()))?;
 
             if let CommandResponse::WorkerInfo(info) = resp {
@@ -68,7 +77,9 @@ impl commands::worker_capnp::worker::Server for Server {
                     data.set_running_vms(info.running_vms());
                 }
             } else {
-                return Err(capnp::Error::failed("unexpected response for GetWorkerStatus".to_string()));
+                return Err(capnp::Error::failed(
+                    "unexpected response for GetWorkerStatus".to_string(),
+                ));
             }
 
             Ok(())
@@ -84,30 +95,35 @@ impl commands::worker_capnp::worker::Server for Server {
 
         let tx = self.tx.clone();
         ::capnp::capability::Promise::from_future(async move {
-            let resp = tx.request(CommandPayload::List).await
+            let resp = tx
+                .request(CommandPayload::List)
+                .await
                 .map_err(|e| capnp::Error::failed(e.to_string()))?;
 
             if let CommandResponse::VmList(vm_infos) = resp {
+                //TODO: this is ass, there is a better way of doing this, read the docs
                 let mut vms = results.get().init_vms(vm_infos.len() as u32);
                 for (i, info) in vm_infos.iter().enumerate() {
-                let mut vm_status = vms.reborrow().get(i as u32);
-                vm_status.set_id(info.id());
-                vm_status.set_worker_id(info.worker_id());
-                vm_status.set_desired_hash(info.desired_hash());
-                vm_status.set_observed_hash(info.observed_hash());
-                vm_status.set_status(info.status().as_str());
-                vm_status.set_drifted(info.status().is_drifted(
-                    info.desired_hash(),
-                    info.observed_hash(),
-                ));
-                let mut metrics = vm_status.init_metrics();
-                metrics.set_cpu_usage(info.metrics().cpu_usage);
-                metrics.set_memory_usage(info.metrics().memory_usage);
-                metrics.set_network_rx_bytes(info.metrics().network_rx_bytes);
-                metrics.set_network_tx_bytes(info.metrics().network_tx_bytes);
-            }
+                    let mut vm_status = vms.reborrow().get(i as u32);
+                    vm_status.set_id(info.id());
+                    vm_status.set_worker_id(info.worker_id());
+                    vm_status.set_desired_hash(info.desired_hash());
+                    vm_status.set_observed_hash(info.observed_hash());
+                    vm_status.set_status(info.status().as_str());
+                    vm_status.set_drifted(
+                        info.status()
+                            .is_drifted(info.desired_hash(), info.observed_hash()),
+                    );
+                    let mut metrics = vm_status.init_metrics();
+                    metrics.set_cpu_usage(info.metrics().cpu_usage);
+                    metrics.set_memory_usage(info.metrics().memory_usage);
+                    metrics.set_network_rx_bytes(info.metrics().network_rx_bytes);
+                    metrics.set_network_tx_bytes(info.metrics().network_tx_bytes);
+                }
             } else {
-                return Err(capnp::Error::failed("unexpected response for List".to_string()));
+                return Err(capnp::Error::failed(
+                    "unexpected response for List".to_string(),
+                ));
             }
 
             Ok(())
@@ -127,14 +143,16 @@ impl commands::worker_capnp::worker::Server for Server {
 
             let mut domains = Vec::new();
             for d in spec_reader.get_network_allowed_domains()? {
-                domains.push(d?.to_str()
-                    .map_err(|e| capnp::Error::failed(e.to_string()))?
-                    .to_string());
+                domains.push(
+                    d?.to_str()
+                        .map_err(|e| capnp::Error::failed(e.to_string()))?
+                        .to_string(),
+                );
             }
 
             let to_string = |r: capnp::text::Reader<'_>| -> Result<String, capnp::Error> {
                 r.to_str()
-                    .map(|s| s.to_string())
+                    .map(std::string::ToString::to_string)
                     .map_err(|e| capnp::Error::failed(e.to_string()))
             };
 
@@ -149,16 +167,19 @@ impl commands::worker_capnp::worker::Server for Server {
                 domains,
             );
 
-            let resp = tx.request(CommandPayload::Create(spec)).await
+            let resp = tx
+                .request(CommandPayload::Create(spec))
+                .await
                 .map_err(|e| capnp::Error::failed(e.to_string()))?;
 
             if let CommandResponse::VmId(id) = resp {
                 results.get().set_id(&id);
+                Ok(())
             } else {
-                return Err(capnp::Error::failed("unexpected response for Create".into()));
+                Err(capnp::Error::failed(
+                    "unexpected response for Create".into(),
+                ))
             }
-
-            Ok(())
         })
     }
 
@@ -171,20 +192,25 @@ impl commands::worker_capnp::worker::Server for Server {
 
         let tx = self.tx.clone();
         ::capnp::capability::Promise::from_future(async move {
-            let id = params.get()?.get_id()?
+            let id = params
+                .get()?
+                .get_id()?
                 .to_str()
                 .map_err(|e| capnp::Error::failed(e.to_string()))?
                 .to_string();
 
-            let resp = tx.request(CommandPayload::Delete(id)).await
+            let resp = tx
+                .request(CommandPayload::Delete(id))
+                .await
                 .map_err(|e| capnp::Error::failed(e.to_string()))?;
 
             if let CommandResponse::Unit = resp {
                 Ok(())
             } else {
-                Err(capnp::Error::failed("unexpected response for Delete".into()))
+                Err(capnp::Error::failed(
+                    "unexpected response for Delete".into(),
+                ))
             }
         })
     }
-
 }

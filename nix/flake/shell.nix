@@ -10,6 +10,7 @@ with pkgs;
       pkg-config
       rust-bin-custom
       capnproto
+      pkgs."cloud-hypervisor"
       pcr-test-wrapper
       openapi-generator-cli
     ];

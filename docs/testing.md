@@ -1,6 +1,12 @@
-# Python VM Example: Build Artifacts → Create VM on Worker → Delete VM
+# Python VM Example: Build Artifacts → Create VM on Worker → Verify Results → Delete VM
 
 This is a step-by-step tutorial for the current repository layout.
+
+Run the worker with:
+```nushell
+nix run ./nix#worker
+```
+
 
 Quick path (single command once worker is running):
 
@@ -8,14 +14,15 @@ Quick path (single command once worker is running):
 nix run ./nix/examples/python-workload#worker-e2e
 ```
 
-You will:
+The e2e test:
 
-1. Build artifacts from `nix/examples/python-workload`
-2. Start `worker`
-3. Verify worker connectivity
-4. Create a VM with `pcr-test` using the generated spec
-5. Verify the VM exists
-6. Delete the VM
+1. Checks worker connectivity
+2. Creates a VM from the python workload spec
+3. Waits for the VM workload to complete (polls serial log for result markers)
+4. Parses structured JSON results from serial output
+5. Verifies the workload passed
+6. Deletes the VM
+7. Confirms VM is removed from list
 
 ## Prerequisites
 
@@ -28,9 +35,9 @@ Optional (for local cargo workflows):
 nix develop
 ```
 
-## One-shot workflow (new)
+## One-shot workflow
 
-After starting the worker, you can run the full flow (build spec, create VM, list VMs, delete VM):
+After starting the worker, run the full e2e test:
 
 ```nushell
 nix run ./nix/examples/python-workload#worker-e2e
@@ -39,10 +46,28 @@ nix run ./nix/examples/python-workload#worker-e2e
 Optional environment variables:
 
 ```nushell
-$env.PCR_WORKER_ADDR = "127.0.0.1:6000"
-$env.PCR_KEEP_VM = "1"   # keep VM instead of deleting it on exit
+$env.PCR_WORKER_ADDR = "127.0.0.1:6000"  # default
+$env.PCR_VM_DIR = "/tmp/procurator/vms"   # where worker puts VM dirs
+$env.PCR_TIMEOUT = "120"                   # max seconds to wait for results
 nix run ./nix/examples/python-workload#worker-e2e
 ```
+
+## How results work
+
+The VM workload (`test.py`) writes structured JSON between delimiters to stdout:
+
+```
+---PCR_RESULT_START---
+{"status": "pass", "steps": [...], "summary": "3 steps, 3 passed, 0 failed"}
+---PCR_RESULT_END---
+```
+
+This flows through systemd's `journal+console` → serial console → host file at
+`/tmp/procurator/vms/{vm_id}/serial.log`. The e2e script polls this file and
+extracts the JSON result.
+
+The workload also writes `result.json` to `$RESULTS_DIR` (`/var/lib/vm-results/`)
+on the writable disk image inside the VM.
 
 ## Step 1: Build Python example artifacts
 
@@ -127,3 +152,11 @@ $env.RUST_LOG = "debug"; nix run ./nix#pcr-test -- read
 - If `nix run ./nix#pcr-test -- ...` fails, run from repo root so relative paths resolve.
 - If `create-vm` fails, confirm `worker` is running and reachable.
 - If VM boot fails after RPC succeeds, check worker logs in the worker terminal (hypervisor/runtime issue).
+- If the e2e test times out waiting for results, check the serial log directly:
+  ```nushell
+  cat /tmp/procurator/vms/<vm-id>/serial.log | tail -50
+  ```
+- If `prepare()` fails with "Artifact not found", ensure you've built the VM image first:
+  ```nushell
+  nix build ./nix/examples/python-workload#vm-image
+  ```

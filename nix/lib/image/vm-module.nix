@@ -224,12 +224,17 @@ in
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
+        # Ensure results directory exists before running the entrypoint
+        ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p /var/lib/vm-results";
         # Run in a shell so pipes, env vars, and store paths all work
         ExecStart = "${pkgs.bash}/bin/bash -c ${lib.escapeShellArg cfg.entrypoint}";
         # Give workloads a reasonable env
         Environment = [
           "PATH=${lib.makeBinPath (cfg.extraPackages ++ (with pkgs; [ coreutils bash iproute2 curl ]))}"
           "HOME=/root"
+          # Workloads write structured results here.
+          # The host reads this from the writable disk image after VM shutdown.
+          "RESULTS_DIR=/var/lib/vm-results"
         ];
         WorkingDirectory = "/root";
         StandardOutput = "journal+console";

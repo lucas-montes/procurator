@@ -343,3 +343,85 @@ flake (source of truth)
 **Tradeoffs:**
 - The caller (CI/control plane) must resolve all 8 fields before sending. More work upstream, but that's where the intelligence belongs.
 - If the VmSpec schema changes, both the evaluator (Nix lib) and the worker must be updated in sync. Mitigated by Cap'n Proto schema versioning.
+
+---
+
+## ADR-013: Writable disk copy in prepare() with per-VM working directory
+
+**Status:** Accepted
+
+**Context:**
+Nix store paths are read-only. Cloud Hypervisor needs to write to the VM's root disk image (ext4) during operation. The original `build_config()` passed the Nix store path directly as the disk path, which would cause CH to fail at boot with a read-only filesystem error.
+
+Additionally, `prepare()` on `VmmBackend` originally took only `&VmSpec` with no VM identity, making it impossible to create per-VM directories or track per-VM state between `prepare()` and `build_config()`.
+
+**Options considered:**
+
+1. **Copy before sending to worker** — Nix-side: produce a writable copy as a separate derivation. But Nix derivations are also read-only in the store. Doesn't solve the problem.
+2. **Copy in `build_config()`** — synchronous, mixes concerns (config building shouldn't do I/O).
+3. **Copy in `prepare()`** — the trait method designed for artifact resolution. Needs `vm_id` to create a per-VM directory.
+4. **Use qcow2 COW overlay** — CH supports qcow2, overlay the read-only base. More complex, adds qcow2 dependency.
+
+**Decision:** Option 3 — copy the disk image in `prepare()`, which now receives both `vm_id` and `&VmSpec`.
+
+**Implementation:**
+- `VmmBackend::prepare(&self, vm_id: &str, spec: &VmSpec)` — trait signature updated.
+- `CloudHypervisorBackend::prepare()`:
+  1. Validates kernel, initrd, and disk store paths exist.
+  2. Creates `/tmp/procurator/vms/{vm_id}/` directory.
+  3. Copies disk image to `{vm_dir}/disk.img` via `tokio::fs::copy` (uses `copy_file_range` on Linux — efficient, works on all filesystems including ext4, btrfs, xfs).
+  4. Stores per-VM prepared state (`PreparedVm` struct) in a `Mutex<HashMap<String, PreparedVm>>`.
+- `build_config()` now takes `vm_id`, looks up the prepared state, and uses the writable disk path.
+- `ChProcess` owns the `vm_dir` path and removes the entire directory on `cleanup()`.
+- `MockBackend` updated to match new trait signatures (no-op, same as before).
+
+**Rationale:**
+- `tokio::fs::copy` is filesystem-agnostic — no btrfs/xfs assumption. Works everywhere.
+- Per-VM directories keep state isolated. Cleanup is a single `rm -rf`.
+- Path validation in `prepare()` fails early with a clear error before any CH process is spawned.
+- The `Mutex<HashMap>` for per-VM prepared state is held only briefly (insert/remove). VmManager processes commands sequentially anyway, so no real contention.
+- Future `nix copy --from <cache>` can slot into the same `prepare()` method before the validation step — same interface for local and remote.
+
+**Tradeoffs:**
+- Disk copy adds latency to VM creation (1-2s for a ~500MB image on SSD). Acceptable — VM lifecycle operations are rare and I/O-bound anyway.
+- `Mutex<HashMap>` adds interior mutability to the backend. Required because `VmmBackend` trait methods take `&self`.
+- No disk deduplication: two VMs from the same image get two copies. Acceptable for the current scale. COW overlay (option 4) could be added later as an optimization.
+
+---
+
+## ADR-014: Serial console to file for workload result extraction
+
+**Status:** Accepted
+
+**Context:**
+The e2e test creates a VM that runs a Python workload. We need a way to verify the workload actually ran and produced correct results. The host needs to read structured output from the guest VM without requiring SSH, networking, or special devices.
+
+**Options considered:**
+
+1. **Serial console to file** — CH `serial.mode = "File"`, writes all serial output to a host file. Workload prints delimited JSON markers to stdout, which goes to serial via systemd's `journal+console`. Host greps for markers.
+2. **virtio-vsock** — Structured channel between host and guest. Reliable, no kernel noise. But requires guest-side tooling (a vsock listener) and more complex CH config.
+3. **virtiofs shared directory** — Mount host directory in guest, workload writes to it. Requires `virtiofsd` daemon — extra moving parts.
+4. **Mount writable disk after shutdown** — After VM exits, mount the ext4 image read-only on the host and read result files. Clean, but requires root privileges (`mount -o loop`).
+
+**Decision:** Option 1 — serial console to file with structured markers.
+
+**Implementation:**
+- CH config: `serial: { mode: "File", file: "/tmp/procurator/vms/{vm_id}/serial.log" }`
+- Guest: `vm-module.nix` sets `RESULTS_DIR=/var/lib/vm-results` env var on the workload service. The entrypoint creates this dir and writes `result.json` there (on the writable disk, for future use).
+- Guest: workload prints `---PCR_RESULT_START---\n{json}\n---PCR_RESULT_END---` to stdout, which flows through systemd journal+console → serial → host file.
+- Host: e2e script polls `serial.log` with `awk` extracting JSON between markers. Parses with `jq`.
+
+**Also stores results on disk:**
+The guest workload also writes `result.json` to `$RESULTS_DIR` on the writable disk image. This serves as a backup verification path (option 4) if serial parsing is insufficient. Currently unused by the e2e script but available for future tooling.
+
+**Rationale:**
+- **Zero extra dependencies:** no virtiofsd, no vsock libraries, no root privileges. Just a file on disk.
+- **No guest-side changes beyond stdout:** the workload just prints to stdout. Systemd routes it to serial. No special tooling in the guest.
+- **Reliable delimiters:** `---PCR_RESULT_START---` / `---PCR_RESULT_END---` are unambiguous — kernel boot messages won't contain them.
+- **Human-readable:** the serial log is useful for debugging even without the markers.
+- **Incremental:** can be upgraded to vsock/virtiofs later without changing the guest workload (it still writes to stdout + `$RESULTS_DIR`).
+
+**Tradeoffs:**
+- Serial log mixes kernel boot messages with application output. Mitigated by explicit delimiters.
+- Polling-based: the host polls the file every 2 seconds. Acceptable for a test script. Not suitable for production monitoring (use vsock for that).
+- File mode serial means no interactive console. Acceptable — SSH is the interactive path.

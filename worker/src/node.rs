@@ -1,8 +1,8 @@
 //! Node — single owner of all VM state and logic.
 //!
-//! The Node holds the VmManager and a channel receiver. It processes
+//! The Node holds the `VmManager` and a channel receiver. It processes
 //! commands from the Server sequentially. No locks — the Node is the
-//! only task that touches VmManager.
+//! only task that touches `VmManager`.
 //!
 //! Generic over [`VmmBackend`] so the entire stack can be tested
 //! without real hypervisors.

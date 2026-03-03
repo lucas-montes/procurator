@@ -6,13 +6,15 @@
 //! - [`ChProcess`] — handle to one `cloud-hypervisor` OS process (implements [`VmmProcess`]).
 //! - [`CloudHypervisorBackend`] — factory that spawns CH processes (implements [`VmmBackend`]).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use hyperlocal::{UnixClientExt, Uri as UnixUri};
 use serde::{Deserialize, Serialize};
 use tokio::process::{Child, Command};
-use tracing::debug;
+use tracing::{debug, info, warn};
 
 use crate::dto::{VmError, VmSpec};
 use crate::vmm::{Vmm, VmmBackend, VmmProcess};
@@ -102,6 +104,7 @@ impl Vmm for CloudHypervisor {
 
     async fn create(&self, config: Self::Config) -> Result<(), Self::Error> {
         let body = serde_json::to_string(&config)?;
+        debug!(config_json = %body, "vm.create request");
 
         let uri = self.build_uri("/api/v1/vm.create");
         let req = hyper::Request::builder()
@@ -117,21 +120,25 @@ impl Vmm for CloudHypervisor {
             .await
             .map_err(|e| Error::Communication(e.to_string()))?;
 
-        if !resp.status().is_success() {
+        let status = resp.status();
+        if !status.is_success() {
             let body_bytes = hyper::body::to_bytes(resp.into_body())
                 .await
                 .map_err(|e| Error::Communication(e.to_string()))?;
             let error_msg = String::from_utf8_lossy(&body_bytes);
+            warn!(http_status = %status, error = %error_msg, "vm.create failed");
             return Err(Error::OperationFailed(format!(
                 "Failed to create VM: {}",
                 error_msg
             )));
         }
 
+        info!(http_status = %status, "vm.create succeeded");
         Ok(())
     }
 
     async fn boot(&self) -> Result<(), Self::Error> {
+        debug!("vm.boot request");
         let uri = self.build_uri("/api/v1/vm.boot");
         let req = hyper::Request::builder()
             .method(hyper::Method::PUT)
@@ -145,17 +152,21 @@ impl Vmm for CloudHypervisor {
             .await
             .map_err(|e| Error::Communication(e.to_string()))?;
 
-        if !resp.status().is_success() {
-            let body_bytes = hyper::body::to_bytes(resp.into_body())
-                .await
-                .map_err(|e| Error::Communication(e.to_string()))?;
-            let error_msg = String::from_utf8_lossy(&body_bytes);
+        let status = resp.status();
+        let body_bytes = hyper::body::to_bytes(resp.into_body())
+            .await
+            .map_err(|e| Error::Communication(e.to_string()))?;
+        let body_str = String::from_utf8_lossy(&body_bytes);
+
+        if !status.is_success() {
+            warn!(http_status = %status, body = %body_str, "vm.boot failed");
             return Err(Error::OperationFailed(format!(
                 "Failed to boot VM: {}",
-                error_msg
+                body_str
             )));
         }
 
+        info!(http_status = %status, body = %body_str, "vm.boot succeeded");
         Ok(())
     }
 
@@ -410,6 +421,8 @@ pub struct ChConsoleConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChSerialConfig {
     pub mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -444,10 +457,13 @@ pub struct ChNetCounters {
 
 /// Handle to one `cloud-hypervisor` OS process.
 ///
-/// Owns the [`Child`] and the socket path. Cleans up both on [`VmmProcess::cleanup`].
+/// Owns the [`Child`], the socket path, and the per-VM working directory.
+/// Cleans up all three on [`VmmProcess::cleanup`].
 pub struct ChProcess {
     child: Child,
     socket_path: PathBuf,
+    /// Per-VM working directory (contains writable disk copy, serial log, etc.)
+    vm_dir: PathBuf,
 }
 
 impl VmmProcess for ChProcess {
@@ -458,9 +474,39 @@ impl VmmProcess for ChProcess {
             .map_err(|e| VmError::ProcessFailed(format!("Failed to kill CH process: {e}")))
     }
 
+    fn try_wait(&mut self) -> Result<Option<std::process::ExitStatus>, VmError> {
+        self.child
+            .try_wait()
+            .map_err(|e| VmError::ProcessFailed(format!("Failed to check CH process: {e}")))
+    }
+
     async fn cleanup(&mut self) -> Result<(), VmError> {
+        // Log CH output for post-mortem debugging before cleaning up.
+        let ch_log = self.vm_dir.join("cloud-hypervisor.log");
+        if ch_log.exists() {
+            match tokio::fs::read_to_string(&ch_log).await {
+                Ok(contents) if !contents.is_empty() => {
+                    warn!(
+                        path = %ch_log.display(),
+                        "cloud-hypervisor log output:\n{}",
+                        contents
+                    );
+                }
+                Ok(_) => {
+                    debug!("cloud-hypervisor log was empty");
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to read cloud-hypervisor log");
+                }
+            }
+        }
+
         if self.socket_path.exists() {
             let _ = tokio::fs::remove_file(&self.socket_path).await;
+        }
+        // Remove the entire per-VM working directory (writable disk, serial log, etc.)
+        if self.vm_dir.exists() {
+            let _ = tokio::fs::remove_dir_all(&self.vm_dir).await;
         }
         Ok(())
     }
@@ -488,17 +534,40 @@ impl Default for CloudHypervisorConfig {
     }
 }
 
+/// Per-VM state created by `prepare()` and consumed by `build_config()` and `spawn()`.
+///
+/// Tracks the writable paths that replace the immutable Nix store paths.
+struct PreparedVm {
+    /// Writable copy of the disk image (the Nix store original is read-only)
+    writable_disk_path: PathBuf,
+    /// Path where CH will write serial console output
+    serial_log_path: PathBuf,
+    /// Per-VM working directory (parent of disk + serial log)
+    vm_dir: PathBuf,
+}
+
 /// Factory that spawns `cloud-hypervisor` processes and creates
 /// [`CloudHypervisor`] REST clients.
 ///
 /// This is the production implementation of [`VmmBackend`].
+///
+/// Tracks per-VM prepared state (writable disk paths, serial log paths)
+/// between the `prepare()` and `build_config()`/`spawn()` calls.
+/// Uses a `Mutex<HashMap>` for interior mutability since the trait
+/// methods take `&self`. The lock is held only briefly for insert/remove.
 pub struct CloudHypervisorBackend {
     config: CloudHypervisorConfig,
+    /// Per-VM prepared state, keyed by vm_id.
+    /// Populated by `prepare()`, consumed by `build_config()` and `spawn()`.
+    prepared: Mutex<HashMap<String, PreparedVm>>,
 }
 
 impl CloudHypervisorBackend {
     pub fn new(config: CloudHypervisorConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            prepared: Mutex::new(HashMap::new()),
+        }
     }
 
     /// Poll for a unix socket to appear on disk with exponential backoff.
@@ -527,6 +596,77 @@ impl VmmBackend for CloudHypervisorBackend {
     type Client = CloudHypervisor;
     type Process = ChProcess;
 
+    async fn prepare(&self, vm_id: &str, spec: &VmSpec) -> Result<(), VmError> {
+        // 1. Validate that all Nix store paths exist locally
+        for (label, path) in [
+            ("kernel", spec.kernel_path()),
+            ("initrd", spec.initrd_path()),
+            ("disk image", spec.disk_image_path()),
+        ] {
+            if !Path::new(path).exists() {
+                return Err(VmError::Internal(format!(
+                    "Artifact not found: {label} at {path}. \
+                     Ensure the closure has been built or copied to this host."
+                )));
+            }
+        }
+
+        // 2. Create per-VM working directory
+        let vm_dir = self.config.socket_dir.join(vm_id);
+        tokio::fs::create_dir_all(&vm_dir)
+            .await
+            .map_err(|e| VmError::ProcessFailed(format!(
+                "Failed to create VM directory {}: {e}", vm_dir.display()
+            )))?;
+
+        // 3. Copy disk image to a writable location
+        //    The Nix store is read-only — CH needs to write to the disk.
+        //    tokio::fs::copy uses copy_file_range on Linux (efficient, works on all FS).
+        let writable_disk_path = vm_dir.join("disk.img");
+        let src = spec.disk_image_path();
+        tracing::info!(
+            vm_id = %vm_id,
+            src = %src,
+            dst = %writable_disk_path.display(),
+            "Copying disk image to writable location"
+        );
+        tokio::fs::copy(src, &writable_disk_path)
+            .await
+            .map_err(|e| VmError::Internal(format!(
+                "Failed to copy disk image from {} to {}: {e}",
+                src, writable_disk_path.display()
+            )))?;
+
+        // Make the copy writable — Nix store originals are read-only (0444),
+        // and tokio::fs::copy preserves permissions. CH needs rw access.
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o644);
+            tokio::fs::set_permissions(&writable_disk_path, perms)
+                .await
+                .map_err(|e| VmError::Internal(format!(
+                    "Failed to set writable permissions on {}: {e}",
+                    writable_disk_path.display()
+                )))?;
+        }
+
+        // 4. Serial log path (CH will write console output here)
+        let serial_log_path = vm_dir.join("serial.log");
+
+        // 5. Store prepared state for build_config() and spawn()
+        let prepared = PreparedVm {
+            writable_disk_path,
+            serial_log_path,
+            vm_dir,
+        };
+        self.prepared
+            .lock()
+            .expect("prepared lock poisoned")
+            .insert(vm_id.to_string(), prepared);
+
+        Ok(())
+    }
+
     async fn spawn(
         &self,
         vm_id: &str,
@@ -544,10 +684,42 @@ impl VmmBackend for CloudHypervisorBackend {
             let _ = tokio::fs::remove_file(&socket_path).await;
         }
 
-        // 4. Spawn the CH process
+        // 4. Look up the VM dir from prepared state
+        let vm_dir = self
+            .prepared
+            .lock()
+            .expect("prepared lock poisoned")
+            .get(vm_id)
+            .map(|p| p.vm_dir.clone())
+            .unwrap_or_else(|| self.config.socket_dir.join(vm_id));
+
+        // 5. Spawn the CH process, redirecting stderr+stdout to a log file
+        //    so we can diagnose crashes (CH exits silently otherwise).
+        let ch_log_path = vm_dir.join("cloud-hypervisor.log");
+        let ch_log_file = std::fs::File::create(&ch_log_path)
+            .map_err(|e| VmError::ProcessFailed(format!(
+                "Failed to create CH log file {}: {e}",
+                ch_log_path.display()
+            )))?;
+        let stderr_file = ch_log_file
+            .try_clone()
+            .map_err(|e| VmError::ProcessFailed(format!(
+                "Failed to clone CH log file handle: {e}"
+            )))?;
+
+        info!(
+            vm_id = %vm_id,
+            ch_binary = %self.config.ch_binary.display(),
+            socket = %socket_path.display(),
+            log_path = %ch_log_path.display(),
+            "Spawning cloud-hypervisor"
+        );
+
         let child = Command::new(&self.config.ch_binary)
             .arg("--api-socket")
             .arg(&socket_path)
+            .stdout(std::process::Stdio::from(ch_log_file))
+            .stderr(std::process::Stdio::from(stderr_file))
             .kill_on_drop(true)
             .spawn()
             .map_err(|e| {
@@ -557,26 +729,49 @@ impl VmmBackend for CloudHypervisorBackend {
                 ))
             })?;
 
-        // 5. Wait for socket to appear
+        // 6. Wait for socket to appear
         Self::wait_for_socket(&socket_path, self.config.socket_timeout).await?;
 
-        // 6. Create the REST client and process handle
+        // 7. Create the REST client and process handle
         let client = CloudHypervisor::new(&socket_path);
         let process = ChProcess {
             child,
             socket_path: socket_path.clone(),
+            vm_dir,
         };
 
         Ok((client, process, socket_path))
     }
 
-    fn build_config(&self, spec: &VmSpec) -> ChVmConfig {
+    fn build_config(&self, vm_id: &str, spec: &VmSpec) -> ChVmConfig {
         let boot_vcpus = spec.cpu() as u8;
 
-        // Use the explicit paths from the Nix-built vmSpec.
-        // These are separate store paths for kernel, initrd, and disk image.
+        // Look up per-VM prepared state for writable disk and serial log paths.
+        let prepared = self
+            .prepared
+            .lock()
+            .expect("prepared lock poisoned");
+        let prepared_vm = prepared.get(vm_id);
+
+        // Use the writable disk copy if available, otherwise fall back to the
+        // original store path (for backward compat / tests without prepare).
+        let disk_path = prepared_vm
+            .map(|p| p.writable_disk_path.to_string_lossy().to_string())
+            .unwrap_or_else(|| spec.disk_image_path().to_string());
+
+        // Serial: write to file if we have a prepared path, otherwise Null.
+        let serial = prepared_vm
+            .map(|p| ChSerialConfig {
+                mode: "File".to_string(),
+                file: Some(p.serial_log_path.to_string_lossy().to_string()),
+            })
+            .unwrap_or_else(|| ChSerialConfig {
+                mode: "Null".to_string(),
+                file: None,
+            });
+
+        // Kernel and initrd are read-only — safe to use from the Nix store directly.
         let kernel_path = spec.kernel_path().to_string();
-        let disk_path = spec.disk_image_path().to_string();
         let initrd_path = spec.initrd_path().to_string();
         let cmdline = spec.cmdline().to_string();
 
@@ -605,9 +800,7 @@ impl VmmBackend for CloudHypervisorBackend {
             console: Some(ChConsoleConfig {
                 mode: "Off".to_string(),
             }),
-            serial: Some(ChSerialConfig {
-                mode: "Null".to_string(),
-            }),
+            serial: Some(serial),
         }
     }
 }
