@@ -1,17 +1,11 @@
-# Python VM Example: Build Artifacts → Create VM on Worker → Verify Results → Delete VM
+# Ways of running the examples to test the implementation
 
-This is a step-by-step tutorial for the current repository layout.
+## Python VM Example: Build Artifacts → Create VM on Worker → Verify Results → Delete VM
 
-Run the worker with:
+### Prerequisites
+We need the worker running, he's the one managing the VMs.
 ```nushell
 nix run ./nix#worker
-```
-
-
-Quick path (single command once worker is running):
-
-```nushell
-nix run ./nix/examples/python-workload#worker-e2e
 ```
 
 The e2e test:
@@ -24,16 +18,6 @@ The e2e test:
 6. Deletes the VM
 7. Confirms VM is removed from list
 
-## Prerequisites
-
-- Run commands from repository root
-- Host has runtime dependencies for `worker` (for example `cloud-hypervisor`)
-
-Optional (for local cargo workflows):
-
-```nushell
-nix develop
-```
 
 ## One-shot workflow
 

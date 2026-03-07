@@ -155,12 +155,18 @@ impl<B: VmmBackend> VmManager<B> {
             VmError::Hypervisor(format!("vm.create failed: {e}"))
         })?;
 
-        // 5. Boot the VM
+        // 5. Attach the VM's TAP device to the host bridge.
+        //    CH creates the TAP during create(); we connect it to the
+        //    bridge before boot() so the VM gets DHCP on startup.
+        self.backend.attach_network(&vm_id).await?;
+        info!(vm_id = %vm_id, "network attached");
+
+        // 6. Boot the VM
         client.boot().await.map_err(|e| {
             VmError::Hypervisor(format!("vm.boot failed: {e}"))
         })?;
 
-        // 6. Quick liveness check — did CH crash right after boot?
+        // 7. Quick liveness check — did CH crash right after boot?
         //    Give it a moment, then verify the process is still alive.
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         match process.try_wait() {
@@ -186,7 +192,7 @@ impl<B: VmmBackend> VmManager<B> {
             }
         }
 
-        // 7. Record in our table
+        // 8. Record in our table
         let handle = VmHandle {
             spec,
             client,

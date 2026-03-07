@@ -112,13 +112,15 @@ in
       default = [];
       description = ''
         List of domain names the VM is allowed to reach.
-        When non-empty, the generated network setup script will
-        configure iptables to only allow DNS + these domains.
-        When empty, the VM has full internet access.
+        When non-empty, guest-side nftables rules are installed at
+        boot to allow only DNS + DHCP + these domains, dropping
+        everything else. When empty, the VM has full internet access.
 
-        This is a declarative specification — the actual iptables
-        rules are applied host-side by the generated setup-network
-        script (available in the build output as `networkSetupScript`).
+        Defense in depth:
+          - Primary: guest-side nftables (this option, always active)
+          - Secondary: host-side nftables (NixOS host module, production)
+
+        Domains are resolved to IPs at boot time via getent.
       '';
       example = [ "api.openai.com" "github.com" "pypi.org" ];
     };
@@ -168,13 +170,19 @@ in
 
     # ── Networking ───────────────────────────────────────────────────
     # systemd-networkd handles DHCP on the virtio-net interface.
-    # The host-side script (setup-network.sh) runs dnsmasq to serve
-    # DHCP on the bridge. Domain allowlisting is also host-side.
+    # The host runs dnsmasq to serve DHCP on the bridge.
+    #
+    # Defense in depth: guest-side nftables is the PRIMARY filter.
+    # When allowedDomains is non-empty, a systemd service resolves
+    # domains → IPs at boot and installs nftables output rules.
+    # The host module (ch-host) adds a SECONDARY host-side layer.
     networking = {
       hostName = cfg.hostname;
       useNetworkd = true;
-      # Disable firewall inside the VM — filtering is done on the host.
-      firewall.enable = false;
+      # Enable nftables when we need domain filtering inside the VM.
+      # When allowedDomains is empty, no firewall (full access).
+      firewall.enable = (cfg.allowedDomains != []);
+      nftables.enable = (cfg.allowedDomains != []);
     };
 
     # DHCP on any ethernet interface (virtio-net shows up as ens* or eth*)
@@ -215,8 +223,14 @@ in
     systemd.services.vm-workload = lib.mkIf (cfg.entrypoint != null) {
       description = "VM Workload Entrypoint";
       wantedBy = [ "multi-user.target" ];
-      after = [ "multi-user.target" "network-online.target" "sshd.service" ];
-      wants = [ "network-online.target" ];
+      # Start after basic services are up.
+      # We intentionally do NOT depend on network-online.target:
+      # if the host has no bridge/TAP, the VM boots without a NIC and
+      # network-online.target never activates — blocking the workload.
+      # The workload itself should handle missing connectivity
+      # (e.g. HTTP timeouts) and report the result.
+      after = [ "nss-lookup.target" "sshd.service" "network.target" ];
+      wants = [ "network.target" ];
 
       # Type=oneshot so systemd waits for it to finish (for autoShutdown).
       # RemainAfterExit=yes so `systemctl status vm-workload` shows
@@ -256,6 +270,75 @@ in
       };
     };
 
+    # ── Guest-side domain allowlist firewall ─────────────────────────
+    # When allowedDomains is non-empty, resolve domains → IPs at boot
+    # and install nftables rules that only allow traffic to those IPs.
+    # This is the PRIMARY security layer (defense in depth).
+    systemd.services.vm-domain-firewall = lib.mkIf (cfg.allowedDomains != []) {
+      description = "Guest-side domain allowlist firewall";
+      wantedBy = [ "multi-user.target" ];
+      # Run after basic network stack is up, but do not block on
+      # network-online.target (it may never activate on misconfigured hosts).
+      # If DNS is unavailable, unresolved domains are simply not added.
+      after = [ "network.target" "nss-lookup.target" ];
+      wants = [ "network.target" ];
+      before = [ "vm-workload.service" ];
+
+      path = with pkgs; [ nftables glibc.bin coreutils gawk ];
+
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+      };
+
+      script = ''
+        set -euo pipefail
+
+        TABLE="pcr_domain_filter"
+
+        # Flush and recreate
+        nft delete table inet "$TABLE" 2>/dev/null || true
+        nft add table inet "$TABLE"
+
+        # Output chain: filter traffic LEAVING the VM
+        nft add chain inet "$TABLE" output '{ type filter hook output priority 0; policy accept; }'
+
+        # Always allow loopback
+        nft add rule inet "$TABLE" output oifname "lo" accept
+
+        # Always allow DNS (need it for resolution)
+        nft add rule inet "$TABLE" output udp dport 53 accept
+        nft add rule inet "$TABLE" output tcp dport 53 accept
+
+        # Allow DHCP (need it for IP assignment)
+        nft add rule inet "$TABLE" output udp dport 67 accept
+        nft add rule inet "$TABLE" output udp sport 68 accept
+
+        # Allow established/related (return traffic)
+        nft add rule inet "$TABLE" output ct state established,related accept
+
+        # Resolve each allowed domain and permit its IPs
+        ${lib.concatMapStringsSep "\n" (domain: ''
+          echo "Resolving ${domain}..."
+          for ip in $(getent ahostsv4 "${domain}" 2>/dev/null | awk '{print $1}' | sort -u); do
+            echo "  Allowing $ip (${domain})"
+            nft add rule inet "$TABLE" output ip daddr "$ip" accept
+          done
+          # Also try IPv6
+          for ip in $(getent ahostsv6 "${domain}" 2>/dev/null | awk '{print $1}' | sort -u); do
+            echo "  Allowing $ip (${domain}) [v6]"
+            nft add rule inet "$TABLE" output ip6 daddr "$ip" accept
+          done
+        '') cfg.allowedDomains}
+
+        # Drop everything else going out
+        nft add rule inet "$TABLE" output drop
+
+        echo "Guest-side domain allowlist active: ${toString (builtins.length cfg.allowedDomains)} domains"
+        nft list table inet "$TABLE"
+      '';
+    };
+
     # ── Packages ─────────────────────────────────────────────────────
     # Baseline utilities + whatever the user requested via mkVmImage.
     environment.systemPackages = with pkgs; [
@@ -266,7 +349,9 @@ in
       iputils        # ping
       curl           # HTTP client for testing connectivity
       openssh        # ssh/scp client (server is separate)
-    ] ++ cfg.extraPackages;
+    ] ++ (lib.optionals (cfg.allowedDomains != []) [
+      nftables       # nft CLI for domain filtering
+    ]) ++ cfg.extraPackages;
 
     # ── Minimization ─────────────────────────────────────────────────
     # Strip everything we don't need to keep the image small.

@@ -1,3 +1,10 @@
+# SCE notes
+
+How to use opencode?
+Do I need to clone the whole repo?
+
+
+# PRocurator notes
 look at [this microvm](https://github.com/astro/microvm.nix)
 docs for [micr](https://astro.github.io/microvm.nix/cpu-emulation.html)
 and also the native [way](https://discourse.nixos.org/t/is-there-a-way-to-share-a-nix-store-across-multiple-machines/18186/2)

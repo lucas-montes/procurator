@@ -22,3 +22,6 @@ Structured as a library (`ci_service::*`) with a thin binary (`main.rs`). The li
 ## Status
 
 Scaffolded — the job queue, database, HTTP API, and worker loop are wired together. Core Nix eval/build logic is in progress.
+
+## Notes
+An important features would be to save the runs, and keep track of what tests failed so we can identify flaky tests and rerun them or notify the user

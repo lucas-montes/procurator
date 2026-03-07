@@ -160,6 +160,17 @@ in {
   };
 
   config = lib.mkIf cfg.enable {
+    # ── Cloud Hypervisor capability wrapper ────────────────────────
+    # CH needs CAP_NET_ADMIN to create TAP devices for VM networking.
+    # This creates /run/wrappers/bin/cloud-hypervisor with the
+    # capability set, so the worker doesn't need root.
+    security.wrappers.cloud-hypervisor = {
+      source = "${pkgs.cloud-hypervisor}/bin/cloud-hypervisor";
+      capabilities = "cap_net_admin+ep";
+      owner = "root";
+      group = "root";
+    };
+
     # ── IP forwarding ──────────────────────────────────────────────
     boot.kernel.sysctl."net.ipv4.ip_forward" = 1;
 

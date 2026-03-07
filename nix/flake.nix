@@ -5,12 +5,14 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
     rust-overlay.url = "github:oxalica/rust-overlay";
     flake-utils.url = "github:numtide/flake-utils";
+    naersk.url = "github:nix-community/naersk";
   };
 
   outputs = {
     nixpkgs,
     rust-overlay,
     flake-utils,
+    naersk ? null,
     ...
   }: flake-utils.lib.eachDefaultSystem (system: let
     overlays = [(import rust-overlay)];
@@ -18,9 +20,21 @@
       inherit system overlays;
     };
 
-    workspaceRoot = builtins.path {
-      path = ../.;
-      name = "workspace-src";
+    workspaceRoot = pkgs.lib.cleanSourceWith {
+      src = ../.;
+      filter = path: _type: let
+        root = toString ../.;
+        pathStr = toString path;
+        relPath = pkgs.lib.removePrefix "${root}/" pathStr;
+      in
+        !(
+          pkgs.lib.hasPrefix ".git/" relPath
+          || pkgs.lib.hasPrefix "target/" relPath
+          || pkgs.lib.hasPrefix ".direnv/" relPath
+          || pkgs.lib.hasPrefix "result/" relPath
+          || relPath == "result"
+          || pkgs.lib.hasPrefix "tmp/" relPath
+        );
     };
 
     rust-bin-custom = pkgs.rust-bin.stable.latest.default.override {
@@ -28,7 +42,7 @@
     };
 
     packageSet = import ./flake/packages.nix {
-      inherit pkgs workspaceRoot;
+      inherit pkgs workspaceRoot naersk;
     };
 
     appSet = import ./flake/apps.nix {

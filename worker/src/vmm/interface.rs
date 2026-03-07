@@ -138,4 +138,19 @@ pub trait VmmBackend: Send + 'static {
     /// The `vm_id` is provided so the backend can look up per-VM prepared
     /// state (e.g. writable disk path from `prepare()`).
     fn build_config(&self, vm_id: &str, spec: &VmSpec) -> <Self::Client as Vmm>::Config;
+
+    /// Attach the VM's network interface to the host network.
+    ///
+    /// Called between `client.create()` (hypervisor creates the TAP device)
+    /// and `client.boot()`. This is where the TAP gets attached to the host
+    /// bridge so the VM can reach the network.
+    ///
+    /// Default: no-op (for tests or backends without networking).
+    fn attach_network(
+        &self,
+        vm_id: &str,
+    ) -> impl std::future::Future<Output = Result<(), VmError>> + Send {
+        let _ = vm_id;
+        std::future::ready(Ok(()))
+    }
 }

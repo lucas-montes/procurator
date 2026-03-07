@@ -21,7 +21,7 @@
       cpu = 2;
       memoryMb = 1024;
       autoShutdown = true;
-      allowedDomains = ["pypi.org" "files.pythonhosted.org"];
+      allowedDomains = ["www.python.org"];
       packages = p: [p.python3];
       entrypoint = "python3 /opt/workload/test.py";
       files = {
@@ -130,9 +130,23 @@ EOF
       # ── Step 5: Verify PASS ────────────────────────────────────────
       info "step 5/7: verifying result"
       if [ "$status" != "pass" ]; then
-        info "workload errors:"
-        echo "$result_json" | ${pkgs.jq}/bin/jq '.errors'
+        info "request_valid:"
+        echo "$result_json" | ${pkgs.jq}/bin/jq '.request_valid'
+        info "request_invalid:"
+        echo "$result_json" | ${pkgs.jq}/bin/jq '.request_invalid'
         fail "workload status is '$status' ($summary)"
+      fi
+
+      # Extra verification: request_valid should have a status code,
+      # request_invalid should have failed (no status code)
+      valid_ok="$(echo "$result_json" | ${pkgs.jq}/bin/jq -r '.request_valid.ok')"
+      invalid_ok="$(echo "$result_json" | ${pkgs.jq}/bin/jq -r '.request_invalid.ok')"
+      info "allowed domain ok=$valid_ok, blocked domain ok=$invalid_ok"
+      if [ "$valid_ok" != "true" ]; then
+        fail "allowed domain request failed (expected ok=true)"
+      fi
+      if [ "$invalid_ok" != "false" ]; then
+        fail "blocked domain request succeeded (expected ok=false)"
       fi
       info "workload PASSED: $summary"
 
@@ -178,10 +192,6 @@ EOF
         program = "${buildVmSpecPath}/bin/build-python-vm-spec";
       };
       worker-e2e = {
-        type = "app";
-        program = "${runWorkerE2e}/bin/run-python-worker-e2e";
-      };
-      default = {
         type = "app";
         program = "${runWorkerE2e}/bin/run-python-worker-e2e";
       };

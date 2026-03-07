@@ -8,6 +8,7 @@ pub mod vmm;
 mod vm_manager_tests;
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use node::Node;
 use server::Server;
@@ -24,8 +25,17 @@ pub async fn main(_hostname: String, listen_addr: SocketAddr, master_addr: Socke
     // Server only holds the sending end — no VMM, no state
     let server = Server::new(CommandSender::new(cmd_tx));
 
-    // Backend handles process spawning, socket management, config building
-    let backend = CloudHypervisorBackend::new(CloudHypervisorConfig::default());
+    // Backend handles process spawning, socket management, config building.
+    // Prefer explicit binary path from env to avoid PATH ambiguity.
+    let mut ch_config = CloudHypervisorConfig::default();
+    if let Ok(ch_binary) = std::env::var("PCR_CH_BINARY") {
+        ch_config.ch_binary = PathBuf::from(ch_binary);
+    }
+    tracing::info!(
+        ch_binary = %ch_config.ch_binary.display(),
+        "Using cloud-hypervisor binary"
+    );
+    let backend = CloudHypervisorBackend::new(ch_config);
 
     // Node owns the receiving end + VmManager with all VM state
     let manager_config = VmManagerConfig::default();

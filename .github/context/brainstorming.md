@@ -592,3 +592,156 @@ The control plane, API gateway, and session orchestration are deferred. Focus is
 - Control plane integration
 - Webhook/trigger layer
 - Custom secrets service
+
+
+---
+
+## 2026-03-03: Can Nix produce a writable disk image?
+
+**Question:** Can we make Nix generate a writable image so the worker doesn't need to copy + chmod?
+
+**Answer: No — this conflicts with fundamental Nix invariants.**
+
+### Background
+
+The disk image is built via `make-ext4-fs.nix` (in `nix/lib/image/default.nix`).
+The output lands in `/nix/store/`. The Nix daemon enforces read-only permissions
+(0444 for files, 0555 for dirs) on **all** store outputs after a build completes,
+regardless of what permissions the build script sets. This is not optional — it's
+how Nix enables content-addressable caching, reproducibility, and binary cache sharing.
+
+### Approaches considered
+
+| Approach | Why it doesn't work |
+|---|---|
+| `chmod` inside the build derivation | Nix daemon resets to 0444 after build |
+| Write outside `/nix/store` (e.g. `/tmp`) | Sandbox blocks writes outside `$out` |
+| Unsandboxed / impure derivation | Breaks reproducibility, caching, `nix copy`, CI |
+| `nix run` wrapper that copies to `/tmp` | Same work as the Rust copy, worse error handling, duplicates logic |
+| `builtins.outputHashMode = "flat"` | Still goes to the store, still gets 0444 |
+
+### Conclusion
+
+The Nix build is a **golden image factory** — it produces an immutable template.
+The worker's job is to **instantiate** that template into a running VM, which
+requires copying (or overlaying) the disk into a mutable workspace. This is the
+same pattern Docker uses: images are immutable layers, containers get a writable overlay.
+
+**Decision: Keep copy + chmod in `prepare()`.** The current approach in
+`worker/src/vmm/cloud_hypervisor.rs` is correct:
+1. `tokio::fs::copy` (uses `copy_file_range` on Linux — kernel-side, efficient)
+2. `set_permissions(0o644)` to make the copy writable for CH
+
+### Future upgrade path (not needed now)
+
+- **reflink copy** (`cp --reflink=auto`): Near-instant on btrfs/xfs (copy-on-write
+  at filesystem level). Falls back to regular copy on ext4. Worth adopting when the
+  host filesystem is known.
+- **qcow2 overlay**: Create a thin qcow2 file with `backing_file=<nix store image>`.
+  Near-zero copy cost, only stores the delta written by the VM. This is the
+  production-grade answer for when we run many VMs from the same base image.
+  Requires `qemu-img create -f qcow2 -b <backing> -F raw overlay.qcow2`.
+  CH supports qcow2 natively.
+
+---
+
+## 2026-03-03: E2E test stuck at step 3 — workload never runs
+
+**Symptom:** VM boots to login prompt, `serial.log` shows `Reached target
+Multi-User System` but `vm-workload.service` never starts. Test times out
+after 120s.
+
+**Root cause:** `vm-workload.service` had:
+```
+after = [ "multi-user.target" "network-online.target" "sshd.service" ]
+wants = [ "network-online.target" ]
+```
+
+Two problems:
+1. `after = [ "multi-user.target" ]` with `wantedBy = [ "multi-user.target" ]`
+   — circular: service is part of the target but waits for it to complete.
+2. `wants = [ "network-online.target" ]` — CH currently passes `net: None`
+   (no virtio-net device), so `systemd-networkd-wait-online` can never
+   succeed. The workload waits forever for a network that doesn't exist.
+
+**Fix:** Made network dependency conditional on `cfg.allowedDomains != []`.
+If the profile declares allowed domains, the workload waits for network.
+Otherwise it starts immediately after `nss-lookup.target` + `sshd.service`.
+
+**Note:** Even with `allowedDomains` set, the network won't work until we
+add virtio-net support to `build_config()` and host-side bridge/NAT setup.
+That's a separate task.
+
+---
+
+## 2026-03-03: VM Networking — how should we give VMs internet access?
+
+**Question:** How do we give Cloud Hypervisor VMs network connectivity? What
+do Docker, Kubernetes, QEMU/libvirt, and Firecracker do, and what should we do?
+
+### How other tools do it
+
+| Tool          | Who creates TAP/veth? | Bridge    | DHCP/DNS  | NAT         |
+|---------------|----------------------|-----------|-----------|-------------|
+| Docker        | dockerd (root)       | docker0   | embedded  | iptables    |
+| QEMU/libvirt  | libvirt/helper       | virbr0    | dnsmasq   | iptables    |
+| Firecracker   | external orchestrator| external  | external  | external    |
+| Cloud Hyp.    | CH itself            | external  | external  | external    |
+
+**Docker:** Runs as root. Creates a bridge (`docker0`) at startup, creates a
+veth pair per container, runs its own DNS server, manages iptables rules.
+Everything is internal to the daemon.
+
+**QEMU/libvirt:** libvirt creates a bridge (`virbr0`) with dnsmasq at daemon
+startup. Per-VM TAPs are created by libvirt or a helper binary
+(`qemu-bridge-helper`). NAT via iptables. The bridge+dnsmasq is persistent
+system infrastructure.
+
+**Firecracker:** Requires the orchestrator to pre-create TAP devices before
+launching the VM. Firecracker itself never touches networking. AWS's agent
+handles all TAP/bridge/iptables setup externally.
+
+**Cloud Hypervisor:** Can create TAP devices itself (needs `CAP_NET_ADMIN`).
+If you pass `net: [{tap: "name"}]`, it creates or opens that TAP. If you
+omit `tap`, it auto-creates one named `vmtapN`. Bridge/DHCP/NAT is external.
+
+### Options considered for Procurator
+
+**Option A: Worker creates everything at runtime (like Docker)**
+- Worker creates bridge, runs dnsmasq, sets up NAT, creates TAPs
+- Pro: Self-contained, works on any Linux
+- Con: Very complex Rust code, needs root or many capabilities, fragile
+  (what if dnsmasq crashes? bridge conflicts?)
+
+**Option B: NixOS host module for infrastructure + CH creates TAPs (like libvirt)**
+- NixOS module declares bridge, dnsmasq, NAT (persistent, survives reboots)
+- CH creates TAP per VM (needs `CAP_NET_ADMIN` via `setcap`)
+- Worker attaches TAP to bridge after CH creates it
+- Pro: Clean separation, NixOS manages infrastructure declaratively
+- Con: Requires NixOS host
+
+**Option C: Pre-create TAP pool in NixOS (like Firecracker)**
+- NixOS module creates N TAP devices at boot, attached to bridge
+- Worker assigns a TAP from the pool to each VM
+- Pro: No runtime capability needed for TAP creation
+- Con: Limits max VMs to pool size, wastes resources for unused TAPs
+
+**Option D: Manual setup script (like old QEMU)**
+- A `setup-network.sh` script the user runs once
+- Pro: Works on any Linux
+- Con: Fragile, manual, not reproducible, hard to debug
+
+### Decision
+
+**Chose Option B** — NixOS host module + CH creates TAPs.
+
+Rationale:
+- Procurator is fundamentally a Nix project — VMs are built from Nix flakes.
+  Assuming a NixOS host is reasonable.
+- Clean separation: infrastructure (bridge, dnsmasq, NAT) is declarative NixOS
+  config. Per-VM TAPs are dynamic, created by CH, destroyed on VM cleanup.
+- `setcap cap_net_admin+ep` on the CH binary is the minimum privilege needed.
+  The worker process itself doesn't need root.
+- The NixOS host module already exists: `nix/modules/host/default.nix`.
+
+See `context/networking.md` for full glossary and architecture diagram.

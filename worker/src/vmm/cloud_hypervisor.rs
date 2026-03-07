@@ -522,6 +522,9 @@ pub struct CloudHypervisorConfig {
     pub ch_binary: PathBuf,
     /// How long to wait for a CH socket to appear after spawning
     pub socket_timeout: Duration,
+    /// Name of the host bridge to attach VM TAP devices to (e.g. `chbr0`).
+    /// Set to `None` to skip TAP-to-bridge attachment (VMs get no network).
+    pub bridge_name: Option<String>,
 }
 
 impl Default for CloudHypervisorConfig {
@@ -530,6 +533,7 @@ impl Default for CloudHypervisorConfig {
             socket_dir: PathBuf::from("/tmp/procurator/vms"),
             ch_binary: PathBuf::from("cloud-hypervisor"),
             socket_timeout: Duration::from_secs(5),
+            bridge_name: Some("chbr0".to_string()),
         }
     }
 }
@@ -544,6 +548,14 @@ struct PreparedVm {
     serial_log_path: PathBuf,
     /// Per-VM working directory (parent of disk + serial log)
     vm_dir: PathBuf,
+    /// TAP device name for this VM's virtio-net interface.
+    /// CH creates the TAP at `vm.create()` time; we attach it to the
+    /// bridge between `create()` and `boot()`.
+    tap_name: String,
+    /// Whether the host bridge exists and networking can be set up.
+    /// When `false`, CH is started without `--net` and TAP attachment is skipped.
+    /// This allows dev/testing without the NixOS host module.
+    network_available: bool,
 }
 
 /// Factory that spawns `cloud-hypervisor` processes and creates
@@ -568,6 +580,66 @@ impl CloudHypervisorBackend {
             config,
             prepared: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Attach the VM's TAP device to the host bridge.
+    ///
+    /// Called between `vm.create()` (CH creates the TAP) and `vm.boot()`.
+    /// Runs `ip link set <tap> master <bridge> up` via a subprocess.
+    /// Requires `CAP_NET_ADMIN` on the worker binary or root.
+    pub async fn attach_tap_to_bridge(&self, vm_id: &str) -> Result<(), VmError> {
+        let bridge = match &self.config.bridge_name {
+            Some(b) => b,
+            None => return Ok(()), // No bridge configured — skip
+        };
+
+        let (tap_name, network_available) = {
+            let guard = self.prepared.lock().expect("prepared lock poisoned");
+            let p = guard.get(vm_id).ok_or_else(|| VmError::Internal(format!(
+                "No prepared state for VM {vm_id} — cannot find TAP name"
+            )))?;
+            (p.tap_name.clone(), p.network_available)
+        };
+
+        // Bridge didn't exist at prepare() time — nothing to attach.
+        if !network_available {
+            return Ok(());
+        }
+
+        info!(
+            vm_id = %vm_id,
+            tap = %tap_name,
+            bridge = %bridge,
+            "Attaching TAP to bridge"
+        );
+
+        let output = tokio::process::Command::new("ip")
+            .args(["link", "set", &tap_name, "master", bridge, "up"])
+            .output()
+            .await
+            .map_err(|e| VmError::ProcessFailed(format!(
+                "Failed to run 'ip link set': {e}"
+            )))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            warn!(
+                vm_id = %vm_id,
+                tap = %tap_name,
+                bridge = %bridge,
+                stderr = %stderr,
+                "Failed to attach TAP to bridge — VM will boot without network"
+            );
+            return Ok(());
+        }
+
+        info!(
+            vm_id = %vm_id,
+            tap = %tap_name,
+            bridge = %bridge,
+            "TAP attached to bridge"
+        );
+        Ok(())
     }
 
     /// Poll for a unix socket to appear on disk with exponential backoff.
@@ -653,11 +725,37 @@ impl VmmBackend for CloudHypervisorBackend {
         // 4. Serial log path (CH will write console output here)
         let serial_log_path = vm_dir.join("serial.log");
 
-        // 5. Store prepared state for build_config() and spawn()
+        // 5. Generate a deterministic TAP device name from the VM ID.
+        //    Linux limits interface names to 15 chars. "pcr-" prefix (4) +
+        //    first 11 chars of the UUID (enough to avoid collisions).
+        let tap_name = format!("pcr-{}", &vm_id[..11]);
+
+        // 6. Check if the host bridge actually exists.
+        //    Without it (e.g. dev machine, no NixOS host module), we skip
+        //    networking entirely — CH won't get --net, TAP won't be attached.
+        let network_available = match &self.config.bridge_name {
+            Some(bridge) => {
+                let exists = Path::new(&format!("/sys/class/net/{bridge}")).exists();
+                if !exists {
+                    warn!(
+                        vm_id = %vm_id,
+                        bridge = %bridge,
+                        "Bridge device does not exist — VM will boot without network. \
+                         Enable the NixOS host module (ch-host.enable = true) for networking."
+                    );
+                }
+                exists
+            }
+            None => false,
+        };
+
+        // 7. Store prepared state for build_config() and spawn()
         let prepared = PreparedVm {
             writable_disk_path,
             serial_log_path,
             vm_dir,
+            tap_name,
+            network_available,
         };
         self.prepared
             .lock()
@@ -793,7 +891,21 @@ impl VmmBackend for CloudHypervisorBackend {
                 readonly: Some(false),
                 direct: None,
             }],
-            net: None,
+            net: if prepared_vm.is_some_and(|p| p.network_available) {
+                // Tell CH to create a TAP device with a known name so we
+                // can attach it to the host bridge between create and boot.
+                let tap = prepared_vm
+                    .map(|p| p.tap_name.clone())
+                    .unwrap_or_else(|| format!("pcr-{}", &vm_id[..vm_id.len().min(11)]));
+                Some(vec![ChNetConfig {
+                    tap: Some(tap),
+                    ip: None,
+                    mask: None,
+                    mac: None,
+                }])
+            } else {
+                None
+            },
             rng: Some(ChRngConfig {
                 src: "/dev/urandom".to_string(),
             }),
@@ -802,5 +914,9 @@ impl VmmBackend for CloudHypervisorBackend {
             }),
             serial: Some(serial),
         }
+    }
+
+    async fn attach_network(&self, vm_id: &str) -> Result<(), VmError> {
+        self.attach_tap_to_bridge(vm_id).await
     }
 }

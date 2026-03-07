@@ -425,3 +425,114 @@ The guest workload also writes `result.json` to `$RESULTS_DIR` on the writable d
 - Serial log mixes kernel boot messages with application output. Mitigated by explicit delimiters.
 - Polling-based: the host polls the file every 2 seconds. Acceptable for a test script. Not suitable for production monitoring (use vsock for that).
 - File mode serial means no interactive console. Acceptable — SSH is the interactive path.
+
+
+---
+
+## ADR-001: Immutable Nix images + worker-side copy for writable disks
+
+**Date:** 2026-03-03
+**Status:** Accepted
+
+**Context:**
+Cloud Hypervisor needs read-write access to the VM disk image. Nix store outputs
+are always read-only (0444) — this is enforced by the Nix daemon and cannot be
+overridden by derivation code. The worker receives a `VmSpec` with paths pointing
+into `/nix/store/`.
+
+**Decision:**
+The worker's `prepare()` step copies the disk image from the Nix store to a
+per-VM working directory (`/tmp/procurator/vms/<vm_id>/disk.img`) and sets
+permissions to 0644. This happens in `CloudHypervisorBackend::prepare()` in
+`worker/src/vmm/cloud_hypervisor.rs`.
+
+Kernel and initrd are NOT copied — CH reads them read-only.
+
+**Rationale:**
+- `tokio::fs::copy` uses `copy_file_range(2)` on Linux — zero-copy kernel-side transfer
+- Simple, correct, no external dependencies
+- Matches the Docker pattern: immutable image → mutable container workspace
+- See `context/brainstorming.md` (2026-03-03) for full options analysis
+
+**Future evolution:**
+- reflink copy for btrfs/xfs hosts (near-instant, copy-on-write)
+- qcow2 overlay for production multi-VM scenarios (near-zero cost per VM)
+
+---
+
+## ADR-002: NixOS host module + CH capability wrapper for VM networking
+
+**Date:** 2026-03-03
+**Status:** Accepted
+
+**Context:**
+VMs need network access (HTTP requests, DNS resolution). This requires:
+- A TAP device per VM (virtual Ethernet cable between VM and host)
+- A bridge connecting TAPs (virtual switch)
+- dnsmasq for DHCP + DNS
+- NAT/masquerade for internet access
+- nftables for domain allowlisting
+
+See `context/networking.md` for full glossary and `context/brainstorming.md`
+(2026-03-03 networking entry) for options analysis.
+
+**Decision:**
+Follow the QEMU/libvirt pattern, adapted for NixOS. **Defense in depth**:
+guest-side nftables is the primary filter, host-side nftables is a secondary
+production hardening layer.
+
+### Layer 1: Guest-side nftables (primary — always active)
+
+When `allowedDomains` is non-empty, a systemd service inside the VM
+(`vm-domain-firewall.service`) resolves domains → IPs at boot and installs
+nftables output rules. This runs before the workload starts.
+
+- **Allow:** loopback, DNS (udp/tcp 53), DHCP (udp 67/68), established/related,
+  resolved IPs of each allowed domain
+- **Drop:** everything else outbound
+- **Empty allowedDomains:** no firewall, full internet access
+
+This layer works regardless of host setup — even without a bridge or NixOS
+host module, the guest self-enforces its domain restrictions.
+
+### Layer 2: Host-side network infrastructure
+
+1. **Worker wrapper** (`nix/flake/apps.nix`) runs a one-time `sudo` setup
+   script that creates:
+   - Bridge `chbr0` (192.168.249.1/24)
+   - IP forwarding + iptables masquerade for NAT
+   - `CAP_NET_ADMIN` on a copy of the CH binary at `/run/pcr/cloud-hypervisor`
+   - dnsmasq on the bridge (DHCP + DNS forwarding for guests)
+
+   This makes `nix run ./nix#worker` work on any Linux machine (dev laptops,
+   CI servers) without needing `nixos-rebuild switch`.
+
+2. **NixOS host module** (`nix/modules/host/default.nix`) provides the same
+   infrastructure declaratively, plus host-side nftables domain rules as a
+   second filtering layer. Production hardening.
+
+3. **CH creates TAP per VM** — `build_config()` sets `net: [{tap: "pcr-<id>"}]`.
+   CH creates the TAP at `vm.create()` time.
+4. **Worker attaches TAP to bridge** — `attach_network()` runs
+   `ip link set <tap> master chbr0 up` between `create()` and `boot()`.
+5. **Guest gets IP via DHCP** — systemd-networkd in the VM requests DHCP
+   from dnsmasq on the bridge.
+
+**Rationale:**
+- Guest-side filtering is the security boundary — it works even if the host
+  is misconfigured or the NixOS module is not enabled.
+- Host-side filtering is defense in depth — a compromised guest can't bypass
+  host-level nftables rules.
+- The wrapper script eliminates the "chicken and egg" problem: you don't need
+  a full NixOS host module deployment just to test a VM.
+- Clean separation: infrastructure is one-time setup, per-VM TAPs are dynamic.
+- `setcap` on a copy of CH is the pragmatic alternative when
+  `/run/wrappers/bin/cloud-hypervisor` doesn't exist.
+
+**Key files:**
+- `nix/lib/image/vm-module.nix` — guest firewall, networking, domain allowlist service
+- `nix/flake/apps.nix` — worker wrapper + one-time host setup script
+- `nix/modules/host/default.nix` — NixOS host module (production, declarative)
+- `worker/src/vmm/cloud_hypervisor.rs` — `build_config()` sets net, `attach_tap_to_bridge()`
+- `worker/src/vmm/interface.rs` — `VmmBackend::attach_network()` trait method
+- `worker/src/vm_manager.rs` — calls `attach_network()` between `create()` and `boot()`

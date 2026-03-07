@@ -1,123 +1,120 @@
 """
-Procurator test workload.
+Procurator network test workload.
 
-Runs inside a Cloud Hypervisor VM. Performs real work to exercise the VM,
-writes structured results to $RESULTS_DIR/result.json, and prints
-delimited markers to stdout so the host can parse results from the serial log.
+Runs inside a Cloud Hypervisor VM. Makes HTTP requests to test domain
+allowlisting:
+  - python.org  → should succeed (in allowedDomains)
+  - google.com  → should be blocked (NOT in allowedDomains)
+
+Writes structured JSON results to a file, reads them back, and prints
+to stdout with delimited markers so the host can parse from serial log.
 """
 
-import hashlib
 import json
 import os
-import platform
 import sys
 import time
+from urllib.request import urlopen
+from urllib.error import URLError
 
 
-def step_file_io(results: dict) -> None:
-    """Write and read files to exercise disk I/O."""
-    test_data = "Hello from procurator VM!\n" * 100
-    path = "/tmp/workload-test-file.txt"
-
-    with open(path, "w") as f:
-        f.write(test_data)
-
-    with open(path, "r") as f:
-        content = f.read()
-
-    assert content == test_data, "File round-trip mismatch"
-    results["steps"].append({
-        "name": "file_io",
-        "status": "pass",
-        "detail": f"Wrote and read {len(test_data)} bytes",
-    })
+ALLOWED_URL = "https://www.python.org"
+BLOCKED_URL = "https://www.google.com"
+TIMEOUT_SECONDS = 10
 
 
-def step_compute(results: dict) -> None:
-    """Do CPU work to verify compute works."""
-    data = b"procurator-vm-test"
-    for i in range(10_000):
-        data = hashlib.sha256(data).digest()
-    final_hash = data.hex()
-
-    results["steps"].append({
-        "name": "compute",
-        "status": "pass",
-        "detail": f"10000 SHA-256 rounds, final={final_hash[:16]}...",
-    })
-
-
-def step_system_info(results: dict) -> None:
-    """Collect system information to verify VM environment."""
-    info = {
-        "hostname": platform.node(),
-        "platform": platform.platform(),
-        "python": platform.python_version(),
-        "cpu_count": os.cpu_count(),
-    }
-    results["system"] = info
-    results["steps"].append({
-        "name": "system_info",
-        "status": "pass",
-        "detail": json.dumps(info),
-    })
+def http_get(url: str) -> dict:
+    """Attempt an HTTP GET and return a result dict."""
+    try:
+        resp = urlopen(url, timeout=TIMEOUT_SECONDS)
+        return {
+            "url": url,
+            "status_code": resp.status,
+            "ok": True,
+            "message": f"HTTP {resp.status}",
+        }
+    except URLError as e:
+        return {
+            "url": url,
+            "status_code": None,
+            "ok": False,
+            "message": str(e.reason),
+        }
+    except Exception as e:
+        return {
+            "url": url,
+            "status_code": None,
+            "ok": False,
+            "message": str(e),
+        }
 
 
 def main() -> None:
     start = time.time()
+
+    # ── Step 1: HTTP request to allowed domain ─────────────────────
+    print(f"Requesting allowed URL: {ALLOWED_URL}", flush=True)
+    request_valid = http_get(ALLOWED_URL)
+    print(f"  Result: {request_valid}", flush=True)
+
+    # ── Step 2: HTTP request to blocked domain ─────────────────────
+    print(f"Requesting blocked URL: {BLOCKED_URL}", flush=True)
+    request_invalid = http_get(BLOCKED_URL)
+    print(f"  Result: {request_invalid}", flush=True)
+
+    # ── Step 3: Build results ──────────────────────────────────────
     results = {
-        "status": "running",
-        "steps": [],
-        "errors": [],
-        "start_time": start,
+        "request_valid": {
+            "url": request_valid["url"],
+            "status_code": request_valid["status_code"],
+            "ok": request_valid["ok"],
+            "message": request_valid["message"],
+        },
+        "request_invalid": {
+            "url": request_invalid["url"],
+            "status_code": request_invalid["status_code"],
+            "ok": request_invalid["ok"],
+            "message": request_invalid["message"],
+        },
+        "elapsed_seconds": round(time.time() - start, 3),
     }
 
-    steps = [step_system_info, step_file_io, step_compute]
-
-    for step_fn in steps:
-        try:
-            step_fn(results)
-        except Exception as e:
-            results["errors"].append({
-                "step": step_fn.__name__,
-                "error": str(e),
-            })
-            results["steps"].append({
-                "name": step_fn.__name__,
-                "status": "fail",
-                "detail": str(e),
-            })
-
-    elapsed = time.time() - start
-    results["elapsed_seconds"] = round(elapsed, 3)
-
-    # Determine overall status
-    failed = [s for s in results["steps"] if s["status"] != "pass"]
-    results["status"] = "fail" if failed else "pass"
+    # Determine overall status:
+    # - request_valid should succeed (ok=True, status_code=200-ish)
+    # - request_invalid should fail (ok=False or connection refused/timed out)
+    valid_passed = request_valid["ok"]
+    invalid_blocked = not request_invalid["ok"]
+    results["status"] = "pass" if (valid_passed and invalid_blocked) else "fail"
     results["summary"] = (
-        f"{len(results['steps'])} steps, "
-        f"{len(results['steps']) - len(failed)} passed, "
-        f"{len(failed)} failed"
+        f"allowed={'ok' if valid_passed else 'FAIL'}, "
+        f"blocked={'ok' if invalid_blocked else 'FAIL (reached blocked domain!)'}"
     )
 
-    # Write structured result to RESULTS_DIR (on the writable disk)
+    # ── Step 4: Write results to file ──────────────────────────────
     results_dir = os.environ.get("RESULTS_DIR", "/var/lib/vm-results")
     os.makedirs(results_dir, exist_ok=True)
     result_path = os.path.join(results_dir, "result.json")
+
     with open(result_path, "w") as f:
         json.dump(results, f, indent=2)
+    print(f"Results written to {result_path}", flush=True)
 
-    # Print delimited result to stdout → serial log for host parsing
-    result_json = json.dumps(results)
+    # ── Step 5: Read results back (file I/O round-trip) ────────────
+    with open(result_path, "r") as f:
+        readback = json.load(f)
+    print(f"Results read back from {result_path}", flush=True)
+
+    # ── Step 6: Print delimited result to stdout → serial log ──────
+    result_json = json.dumps(readback)
     print(f"\n---PCR_RESULT_START---\n{result_json}\n---PCR_RESULT_END---\n",
           flush=True)
 
-    # Exit with appropriate code
-    if results["status"] == "pass":
-        print(f"RESULT:PASS ({results['summary']}) in {elapsed:.1f}s")
+    elapsed = time.time() - start
+    if readback["status"] == "pass":
+        print(f"RESULT:PASS ({readback['summary']}) in {elapsed:.1f}s")
         sys.exit(0)
     else:
-        print(f"RESULT:FAIL ({results['summary']}) in {elapsed:.1f}s")
+        print(f"RESULT:FAIL ({readback['summary']}) in {elapsed:.1f}s")
         sys.exit(1)
 
 
