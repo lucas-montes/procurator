@@ -105,10 +105,12 @@ EOF
         fi
 
         if [ -f "$serial_log" ]; then
-          # Extract JSON between markers
-          result_json="$(${pkgs.gawk}/bin/awk \
-            '/---PCR_RESULT_START---/{found=1; next} /---PCR_RESULT_END---/{found=0} found{print}' \
-            "$serial_log" | head -n1 || true)"
+          # Extract the latest single-line structured result
+          result_json="$(
+            ${pkgs.gnugrep}/bin/grep 'PCR_RESULT_JSON::' "$serial_log" 2>/dev/null \
+              | tail -n1 \
+              | ${pkgs.gnused}/bin/sed 's/^.*PCR_RESULT_JSON:://'
+          )"
           if [ -n "$result_json" ]; then
             break
           fi

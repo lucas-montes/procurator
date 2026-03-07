@@ -14,6 +14,9 @@ tracing-subscriber.workspace = true
 commands.workspace = true
 uuid.workspace = true
 
+# low-level netlink library used for attaching TAPs to bridges without spawning `ip`
+rtnetlink = "0.11"
+
 # VMM dependencies
 hyper = { version = "0.14", features = ["client", "http1", "stream"] }
 hyperlocal = "0.8"

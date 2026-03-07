@@ -15,6 +15,8 @@ use hyperlocal::{UnixClientExt, Uri as UnixUri};
 use serde::{Deserialize, Serialize};
 use tokio::process::{Child, Command};
 use tracing::{debug, info, warn};
+use futures::stream::TryStreamExt;
+use rtnetlink;
 
 use crate::dto::{VmError, VmSpec};
 use crate::vmm::{Vmm, VmmBackend, VmmProcess};
@@ -585,8 +587,11 @@ impl CloudHypervisorBackend {
     /// Attach the VM's TAP device to the host bridge.
     ///
     /// Called between `vm.create()` (CH creates the TAP) and `vm.boot()`.
-    /// Runs `ip link set <tap> master <bridge> up` via a subprocess.
-    /// Requires `CAP_NET_ADMIN` on the worker binary or root.
+    /// The worker process itself already has `CAP_NET_ADMIN`.
+    /// Instead of spawning `ip(8)` we talk to the kernel directly via
+    /// netlink. doing so avoids the capability‑inheritance problem where a
+    /// child process loses the parent's caps and `ip` would fail with
+    /// "Operation not permitted".
     pub async fn attach_tap_to_bridge(&self, vm_id: &str) -> Result<(), VmError> {
         let bridge = match &self.config.bridge_name {
             Some(b) => b,
@@ -613,31 +618,107 @@ impl CloudHypervisorBackend {
             "Attaching TAP to bridge"
         );
 
-        let output = tokio::process::Command::new("ip")
-            .args(["link", "set", &tap_name, "master", bridge, "up"])
-            .output()
-            .await
-            .map_err(|e| VmError::ProcessFailed(format!(
-                "Failed to run 'ip link set': {e}"
-            )))?;
+        // We speak netlink directly so we can control the retry behaviour
+        // when the interface hasn't appeared yet.  The `rtnetlink` crate
+        // returns the link index for a given name, which we then use to set
+        // the master/`up` flags.
+        let (connection, handle, _) = rtnetlink::new_connection()
+            .map_err(|e| VmError::Internal(format!("netlink connection failed: {e}")))?;
+        // drive the connection in the background
+        tokio::spawn(connection);
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            warn!(
-                vm_id = %vm_id,
-                tap = %tap_name,
-                bridge = %bridge,
-                stderr = %stderr,
-                "Failed to attach TAP to bridge — VM will boot without network"
-            );
-            return Ok(());
+        // helper that returns the link index or None if not found
+        async fn link_index(
+            handle: &rtnetlink::Handle,
+            name: &str,
+        ) -> Result<Option<u32>, VmError> {
+            // `match_name` is a convenience filter provided by rtnetlink that
+            // adds the appropriate netlink attribute.  `execute()` returns a
+            // `TryStream` of `LinkMessage` objects, so we can call
+            // `try_next()` to grab the first (and only) result.
+            let mut links = handle.link().get().match_name(name.to_string()).execute();
+            let opt_msg = links
+                .try_next()
+                .await
+                .map_err(|e| VmError::Internal(format!("netlink get failed: {e}")))?;
+            Ok(opt_msg.map(|m| m.header.index))
         }
 
-        info!(
+        let max_attempts = 20;
+        for attempt in 1..=max_attempts {
+            match link_index(&handle, &tap_name).await? {
+                Some(tap_idx) => {
+                    // bridge is expected to exist; if it does not we abort.
+                    let bridge_idx = match link_index(&handle, bridge).await? {
+                        Some(idx) => idx,
+                        None => {
+                            return Err(VmError::Internal(format!(
+                                "bridge {} not found when attaching TAP",
+                                bridge
+                            )));
+                        }
+                    };
+
+                    let attach_res = handle
+                        .link()
+                        .set(tap_idx)
+                        .master(bridge_idx)
+                        .up()
+                        .execute()
+                        .await;
+                    match attach_res {
+                        Ok(()) => {
+                            info!(
+                                vm_id = %vm_id,
+                                tap = %tap_name,
+                                bridge = %bridge,
+                                attempts = attempt,
+                                "TAP attached to bridge"
+                            );
+                            return Ok(());
+                        }
+                        Err(e) => {
+                            let stderr = format!("{e}");
+                            warn!(
+                                vm_id = %vm_id,
+                                tap = %tap_name,
+                                bridge = %bridge,
+                                attempts = attempt,
+                                stderr = %stderr,
+                                "Failed to attach TAP to bridge — VM may have no network"
+                            );
+                            return Ok(());
+                        }
+                    }
+                }
+                None if attempt < max_attempts => {
+                    debug!(
+                        vm_id = %vm_id,
+                        tap = %tap_name,
+                        bridge = %bridge,
+                        attempts = attempt,
+                        "TAP not visible yet; retrying bridge attach"
+                    );
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                }
+                None => {
+                    warn!(
+                        vm_id = %vm_id,
+                        tap = %tap_name,
+                        bridge = %bridge,
+                        "TAP still missing after retries — VM may have no network"
+                    );
+                    return Ok(());
+                }
+            }
+        }
+
+        warn!(
             vm_id = %vm_id,
             tap = %tap_name,
             bridge = %bridge,
-            "TAP attached to bridge"
+            "Failed to attach TAP to bridge after retries — VM may have no network"
         );
         Ok(())
     }

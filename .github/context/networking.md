@@ -23,7 +23,9 @@ that cable.
 1. A program opens `/dev/net/tun` and asks the kernel: "create a TAP device
    named `vmtap0`".
 2. The kernel creates the virtual interface. It shows up in `ip link` just
-   like `eth0` or `wlan0`.
+   like `eth0` or `wlan0`. The worker itself asks the kernel to plug the TAP into the bridge via
+   netlink (no `ip` subprocess).  Once the TAP is on `chbr0`, the kernel
+   forwards packets automatically.
 3. When the VM sends a network packet, Cloud Hypervisor writes it to the TAP.
    The kernel receives it on `vmtap0` as if a real NIC sent it.
 4. When the host sends a packet to `vmtap0`, Cloud Hypervisor reads it and
@@ -293,8 +295,8 @@ is set up. If not, it runs a one-time `sudo` setup script that:
 1. Creates bridge `chbr0` with IP `192.168.249.1/24`
 2. Enables `ip_forward` if not already on
 3. Adds iptables masquerade rule for NAT
-4. Copies the CH binary to `/run/pcr/cloud-hypervisor` and sets
-   `CAP_NET_ADMIN` via `setcap`
+4. Copies the CH and worker binaries to `/var/lib/procurator/bin/` and
+   sets `CAP_NET_ADMIN` via `setcap` (not `/run` — it's mounted `nosuid`)
 5. Starts dnsmasq on the bridge for DHCP + DNS
 
 The script is idempotent — safe to run multiple times. After the first run,
@@ -308,10 +310,13 @@ nftables domain rules as a second filtering layer.
 
 ### Per-VM networking
 
-1. **CH creates TAP per VM** — `build_config()` sets `net: [{tap: "pcr-<id>"}]`.
+3. **CH creates TAP per VM** — `build_config()` sets `net: [{tap: "pcr-<id>"}]`.
    CH creates the TAP at `vm.create()` time. Requires `CAP_NET_ADMIN`.
-2. **Worker attaches TAP to bridge** — `attach_network()` runs
-   `ip link set <tap> master chbr0 up` between `create()` and `boot()`.
+4. **Worker attaches TAP to bridge** — `attach_network()` talks to the
+   kernel over netlink and sets the TAP's master to `chbr0` before
+   booting.  The operation runs inside the worker process, so the
+   existing `CAP_NET_ADMIN` file capability on the worker binary is
+   sufficient; no external `ip` command is invoked.
 3. **Guest gets IP via DHCP** — systemd-networkd in the VM requests DHCP
    from dnsmasq on the bridge.
 4. **Guest firewall activates** — `vm-domain-firewall.service` resolves

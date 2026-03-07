@@ -17,7 +17,8 @@
 //! ## Create flow
 //!
 //! UUIDv7 → `prepare(vm_id, spec)` → `spawn(vm_id)` → `build_config(vm_id, spec)`
-//! → `client.create(config)` → `client.boot()` → insert `VmHandle`.
+//! → `client.create(config)` → `client.boot()` → `attach_network(vm_id)`
+//! → insert `VmHandle`.
 //! On failure, no `VmHandle` is inserted — no partial state.
 //!
 //! ## Delete flow
@@ -124,7 +125,7 @@ impl<B: VmmBackend> VmManager<B> {
 
     // ─── Command handlers ──────────────────────────────────────────────
 
-    #[instrument(skip(self), fields(toplevel = %spec.toplevel()))]
+    #[instrument(skip(self, spec), fields(toplevel = %spec.toplevel()))]
     async fn handle_create(&mut self, spec: VmSpec) -> Result<String, VmError> {
         let vm_id = Uuid::now_v7().to_string();
         info!(
@@ -140,11 +141,11 @@ impl<B: VmmBackend> VmManager<B> {
         // 1. Ensure artifacts are available locally (e.g. nix copy from cache)
         //    Also copies the disk image to a writable location for this VM.
         self.backend.prepare(&vm_id, &spec).await?;
-        info!(vm_id = %vm_id, "prepare complete");
+        tracing::debug!(vm_id = %vm_id, "prepare complete");
 
         // 2. Spawn the VMM process via the backend
         let (client, mut process, socket_path) = self.backend.spawn(&vm_id).await?;
-        info!(vm_id = %vm_id, socket = %socket_path.display(), "VMM process spawned");
+        tracing::debug!(vm_id = %vm_id, socket = %socket_path.display(), "VMM process spawned");
 
         // 3. Build backend-specific config from the platform-agnostic spec
         //    Uses the writable disk path created by prepare().
@@ -155,16 +156,16 @@ impl<B: VmmBackend> VmManager<B> {
             VmError::Hypervisor(format!("vm.create failed: {e}"))
         })?;
 
-        // 5. Attach the VM's TAP device to the host bridge.
-        //    CH creates the TAP during create(); we connect it to the
-        //    bridge before boot() so the VM gets DHCP on startup.
-        self.backend.attach_network(&vm_id).await?;
-        info!(vm_id = %vm_id, "network attached");
-
-        // 6. Boot the VM
+        // 5. Boot the VM
         client.boot().await.map_err(|e| {
             VmError::Hypervisor(format!("vm.boot failed: {e}"))
         })?;
+
+        // 6. Attach the VM's TAP device to the host bridge.
+        //    In practice, CH may create/configure the TAP at boot time,
+        //    so we attach after boot to avoid a create/attach race.
+        self.backend.attach_network(&vm_id).await?;
+        tracing::debug!(vm_id = %vm_id, "network attached");
 
         // 7. Quick liveness check — did CH crash right after boot?
         //    Give it a moment, then verify the process is still alive.
@@ -185,7 +186,7 @@ impl<B: VmmBackend> VmManager<B> {
                 )));
             }
             Ok(None) => {
-                info!(vm_id = %vm_id, "VMM process alive after boot");
+                tracing::debug!(vm_id = %vm_id, "VMM process alive after boot");
             }
             Err(e) => {
                 warn!(vm_id = %vm_id, error = %e, "could not check VMM process status");

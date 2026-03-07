@@ -25,9 +25,11 @@
     DHCP_RANGE_START="192.168.249.10"
     DHCP_RANGE_END="192.168.249.50"
     CH_BIN="${ch}/bin/cloud-hypervisor"
+    WORKER_BIN="${worker}/bin/worker"
     DNSMASQ_PID="/run/pcr-dnsmasq.pid"
     PCR_LIB="/var/lib/procurator/bin"
     PCR_CH="$PCR_LIB/cloud-hypervisor"
+    PCR_WORKER="$PCR_LIB/worker"
 
     echo "[pcr-setup] Setting up host networking for procurator worker..."
 
@@ -68,13 +70,24 @@
     # outside /run because /run is typically mounted nosuid, which makes
     # file capabilities ineffective even if getcap shows them.
     mkdir -p "$PCR_LIB"
-    if [ ! -x "$PCR_CH" ] || ! getcap "$PCR_CH" 2>/dev/null | grep -q cap_net_admin; then
+    if [ ! -x "$PCR_CH" ] || ! getcap "$PCR_CH" 2>/dev/null | grep -q cap_net_admin || ! cmp -s "$CH_BIN" "$PCR_CH"; then
       echo "[pcr-setup] Installing cloud-hypervisor with CAP_NET_ADMIN at $PCR_CH"
       cp "$CH_BIN" "$PCR_CH"
       chmod 755 "$PCR_CH"
       setcap cap_net_admin+ep "$PCR_CH"
     else
       echo "[pcr-setup] $PCR_CH already has CAP_NET_ADMIN"
+    fi
+
+    # Worker also needs CAP_NET_ADMIN because it runs `ip link set ...`
+    # to attach TAP interfaces to the bridge.
+    if [ ! -x "$PCR_WORKER" ] || ! getcap "$PCR_WORKER" 2>/dev/null | grep -q cap_net_admin || ! cmp -s "$WORKER_BIN" "$PCR_WORKER"; then
+      echo "[pcr-setup] Installing worker with CAP_NET_ADMIN at $PCR_WORKER"
+      cp "$WORKER_BIN" "$PCR_WORKER"
+      chmod 755 "$PCR_WORKER"
+      setcap cap_net_admin+ep "$PCR_WORKER"
+    else
+      echo "[pcr-setup] $PCR_WORKER already has CAP_NET_ADMIN"
     fi
 
     # ── 5. dnsmasq (DHCP + DNS for VMs) ────────────────────────────
@@ -102,12 +115,12 @@
     # ── Host network setup (requires sudo once) ────────────────────
     # Creates bridge, masquerade, dnsmasq, and gives CH CAP_NET_ADMIN.
     # Idempotent — safe to run multiple times.
-    if [ -x /run/wrappers/bin/cloud-hypervisor ] && ip link show chbr0 &>/dev/null; then
-      # NixOS host module already set up — use its wrapper
-      export PATH="/run/wrappers/bin:$PATH"
-      export PCR_CH_BINARY="/run/wrappers/bin/cloud-hypervisor"
-    elif [ -x /var/lib/procurator/bin/cloud-hypervisor ] && ip link show chbr0 &>/dev/null; then
-      # Our setup script already ran — use its binary
+    if [ -x /var/lib/procurator/bin/cloud-hypervisor ] \
+      && [ -x /var/lib/procurator/bin/worker ] \
+      && cmp -s ${ch}/bin/cloud-hypervisor /var/lib/procurator/bin/cloud-hypervisor \
+      && cmp -s ${worker}/bin/worker /var/lib/procurator/bin/worker \
+      && [ -d /sys/class/net/chbr0 ]; then
+      # Our setup script already ran — use capability-enabled binaries
       export PATH="/var/lib/procurator/bin:$PATH"
       export PCR_CH_BINARY="/var/lib/procurator/bin/cloud-hypervisor"
     else
@@ -117,15 +130,8 @@
       export PCR_CH_BINARY="/var/lib/procurator/bin/cloud-hypervisor"
     fi
 
-    # ip(8) is needed to attach TAP devices to the bridge
-    export PATH="${pkgs.lib.makeBinPath [pkgs.iproute2]}:$PATH"
-    exec ${worker}/bin/worker "$@"
+    exec /var/lib/procurator/bin/worker "$@"
   '';
-
-  control-plane-wrapper = pkgs.writeShellScriptBin "procurator-control-plane" ''
-    exec ${worker}/bin/worker "$@"
-  '';
-
   pcr-test-wrapper = pkgs.writeShellScriptBin "pcr-test" ''
     exec ${cli}/bin/pcr-test "$@"
   '';
@@ -133,7 +139,6 @@ in {
   wrappers = {
     inherit
       worker-wrapper
-      control-plane-wrapper
       pcr-test-wrapper
       ;
   };
@@ -147,7 +152,5 @@ in {
       exePath = "/bin/pcr-test";
     };
     procurator-worker = flake-utils.lib.mkApp {drv = worker-wrapper;};
-    procurator-control-plane = flake-utils.lib.mkApp {drv = control-plane-wrapper;};
-    default = flake-utils.lib.mkApp {drv = control-plane-wrapper;};
   };
 }

@@ -105,9 +105,10 @@ def main() -> None:
     print(f"Results read back from {result_path}", flush=True)
 
     # ── Step 6: Print delimited result to stdout → serial log ──────
+    # Keep this on ONE line so host-side parsing is robust even if
+    # kernel/service logs interleave nearby serial output.
     result_json = json.dumps(readback)
-    print(f"\n---PCR_RESULT_START---\n{result_json}\n---PCR_RESULT_END---\n",
-          flush=True)
+    print(f"PCR_RESULT_JSON::{result_json}", flush=True)
 
     elapsed = time.time() - start
     if readback["status"] == "pass":
