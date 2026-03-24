@@ -195,6 +195,16 @@ in
       };
     };
 
+    # Give systemd-networkd-wait-online a timeout so that
+    # network-online.target eventually fires even if no NIC is present
+    # (e.g. VM started without --net on a dev machine).
+    # With a NIC + dnsmasq DHCP this completes in < 2 seconds;
+    # without a NIC it times out after 10s and boot continues.
+    systemd.services.systemd-networkd-wait-online.serviceConfig.ExecStart = [
+      ""  # clear the default ExecStart first
+      "${pkgs.systemd}/lib/systemd/systemd-networkd-wait-online --timeout=10"
+    ];
+
     # ── SSH ───────────────────────────────────────────────────────────
     # OpenSSH is the primary way users interact with the VM.
     # Password auth is enabled for convenience; key auth is preferred.
@@ -223,14 +233,12 @@ in
     systemd.services.vm-workload = lib.mkIf (cfg.entrypoint != null) {
       description = "VM Workload Entrypoint";
       wantedBy = [ "multi-user.target" ];
-      # Start after basic services are up.
-      # We intentionally do NOT depend on network-online.target:
-      # if the host has no bridge/TAP, the VM boots without a NIC and
-      # network-online.target never activates — blocking the workload.
-      # The workload itself should handle missing connectivity
-      # (e.g. HTTP timeouts) and report the result.
-      after = [ "nss-lookup.target" "sshd.service" "network.target" ];
-      wants = [ "network.target" ];
+      # Wait for DHCP to complete so the workload has an IP + DNS.
+      # network-online.target is safe because we configure
+      # systemd-networkd-wait-online with a short timeout below —
+      # if there is no NIC the timeout fires and boot continues.
+      after = [ "network-online.target" "nss-lookup.target" "sshd.service" ];
+      wants = [ "network-online.target" ];
 
       # Type=oneshot so systemd waits for it to finish (for autoShutdown).
       # RemainAfterExit=yes so `systemctl status vm-workload` shows
@@ -277,11 +285,11 @@ in
     systemd.services.vm-domain-firewall = lib.mkIf (cfg.allowedDomains != []) {
       description = "Guest-side domain allowlist firewall";
       wantedBy = [ "multi-user.target" ];
-      # Run after basic network stack is up, but do not block on
-      # network-online.target (it may never activate on misconfigured hosts).
-      # If DNS is unavailable, unresolved domains are simply not added.
-      after = [ "network.target" "nss-lookup.target" ];
-      wants = [ "network.target" ];
+      # We need DNS to resolve the allowed domains → IPs.
+      # network-online.target ensures DHCP (and thus DNS) is ready.
+      # The 10s timeout on systemd-networkd-wait-online prevents hangs.
+      after = [ "network-online.target" "nss-lookup.target" ];
+      wants = [ "network-online.target" ];
       before = [ "vm-workload.service" ];
 
       path = with pkgs; [ nftables glibc.bin coreutils gawk ];

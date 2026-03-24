@@ -25,6 +25,9 @@ learn about [distributed](https://github.com/jepsen-io/maelstrom)
 
 configs for kernel:https://github.com/cloud-hypervisor/cloud-hypervisor/issues/7058#issuecomment-2869408095
 
+check this too;
+https://nixos.wiki/wiki/NixOps/Virtualization#Building_a_NixOS_base_image
+
 more things to check:
 
 https://github.com/DarthSim/overmind

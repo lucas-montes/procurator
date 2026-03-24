@@ -59,6 +59,7 @@
       ci-service = import ./modules/ci-service.nix;
       repohub = import ./modules/repohub.nix;
       guest = import ./lib/image/vm-module.nix;
+      sandbox = import ./lib/sandbox/sandbox-module.nix;
     };
 
     lib = import ./lib {
@@ -74,6 +75,26 @@
     devShells.default = import ./flake/shell.nix {
       inherit pkgs rust-bin-custom;
       pcr-test-wrapper = appSet.wrappers.pcr-test-wrapper;
+    };
+
+    checks = {
+      rust-lints = pkgs.stdenv.mkDerivation {
+        name = "procurator-rust-lints";
+        src = workspaceRoot;
+
+        nativeBuildInputs = [ pkgs.rustPackages.cargo pkgs.rustPackages.rustfmt pkgs.rustPackages.clippy ];
+
+        buildPhase = ''
+          cd "$src"
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --all-features -- -D warnings
+        '';
+
+        installPhase = ''
+          mkdir -p "$out"
+          touch "$out"/.ok
+        '';
+      };
     };
   });
 }
