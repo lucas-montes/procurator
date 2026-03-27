@@ -1,0 +1,151 @@
+#!/bin/sh
+# Post-receive hook for Procurator CI
+# This runs on the SERVER (bare repo), not the developer's machine
+
+echo "=== Post-receive hook triggered ==="
+
+# Get repo path - GIT_DIR is the most reliable
+REPO_PATH="${GIT_DIR:-.}"
+
+# Convert to absolute path and normalize (remove trailing slashes/dots)
+case "$REPO_PATH" in
+    /*)
+        # Already absolute, just normalize
+        REPO_PATH=$(cd "$REPO_PATH" && pwd)
+        ;;
+    *)
+        # Make it absolute
+        REPO_PATH=$(cd "$REPO_PATH" && pwd)
+        ;;
+esac
+
+# Extract repository name from the path
+# /var/lib/git-server/lucas/dummy.git -> dummy
+BARE_REPO_NAME=$(basename "$REPO_PATH")
+REPO_NAME="${BARE_REPO_NAME%.git}"
+
+# Get parent directory and username
+PARENT_DIR=$(dirname "$REPO_PATH")
+SSH_USER="${USER:-unknown}"
+
+# Get SSH client IP from SSH_CONNECTION
+SSH_CLIENT_IP=""
+SSH_KEY_FP=""
+
+if [ -n "$SSH_CONNECTION" ]; then
+    SSH_CLIENT_IP=$(echo "$SSH_CONNECTION" | awk '{print $1}')
+fi
+
+# Try to get the SSH key fingerprint
+if [ -n "$SSH_USER_AUTH" ]; then
+    SSH_KEY_FP="$SSH_USER_AUTH"
+elif [ -f "$HOME/.ssh/authorized_keys" ] && [ -n "$SSH_ORIGINAL_COMMAND" ]; then
+    SSH_KEY_FP=$(ssh-keygen -lf "$HOME/.ssh/authorized_keys" 2>/dev/null | head -n1 | awk '{print $2}')
+fi
+
+echo "Repository: $REPO_NAME"
+echo "Bare repo path: $REPO_PATH"
+echo "SSH user: $SSH_USER"
+echo "SSH client IP: ${SSH_CLIENT_IP:-<not available>}"
+echo "SSH key fingerprint: ${SSH_KEY_FP:-<not available>}"
+
+# Verify the repo is actually a git repository
+if ! git --git-dir="$REPO_PATH" rev-parse --git-dir >/dev/null 2>&1; then
+    echo "❌ Error: Not a valid git repository: $REPO_PATH"
+    exit 1
+fi
+
+while read oldrev newrev refname; do
+    echo ""
+    echo "--- Processing ref: $refname ---"
+    echo "Old commit: ${oldrev:0:8}...${oldrev:32:40}"
+    echo "New commit: ${newrev:0:8}...${newrev:32:40}"
+
+    # Extract branch name from refs/heads/main -> main
+    branch="${refname#refs/heads/}"
+
+    # Check if this is a branch delete (newrev is all zeros)
+    if [ "$newrev" = "0000000000000000000000000000000000000000" ]; then
+        echo "⚠️  Branch deleted, skipping CI"
+        continue
+    fi
+
+    # Check if this is a new branch (oldrev is all zeros)
+    if [ "$oldrev" = "0000000000000000000000000000000000000000" ]; then
+        echo "🆕 New branch created"
+    fi
+
+    # Verify the commit exists in the repository
+    if ! git --git-dir="$REPO_PATH" cat-file -e "$newrev^{commit}" 2>/dev/null; then
+        echo "❌ Error: Commit $newrev not found in repository"
+        continue
+    fi
+
+    # Update the symbolic ref to point to this branch if it's the first push
+    if [ "$oldrev" = "0000000000000000000000000000000000000000" ]; then
+        current_head=$(git --git-dir="$REPO_PATH" symbolic-ref HEAD 2>/dev/null || echo "")
+        if [ -z "$current_head" ] || [ "$current_head" = "refs/heads/master" ]; then
+            echo "Setting HEAD to point to $refname"
+            git --git-dir="$REPO_PATH" symbolic-ref HEAD "$refname"
+        fi
+    fi
+
+    # Get commit info
+    commit_author=$(git --git-dir="$REPO_PATH" log -1 --format="%an" "$newrev" 2>/dev/null || echo "")
+    commit_email=$(git --git-dir="$REPO_PATH" log -1 --format="%ae" "$newrev" 2>/dev/null || echo "")
+    commit_message=$(git --git-dir="$REPO_PATH" log -1 --format="%s" "$newrev" 2>/dev/null || echo "")
+    commit_count=$(git --git-dir="$REPO_PATH" rev-list --count "$oldrev..$newrev" 2>/dev/null || echo "1")
+
+    # Get GPG signature verification if commit is signed
+    gpg_status=$(git --git-dir="$REPO_PATH" log -1 --format="%G?" "$newrev" 2>/dev/null || echo "N")
+    gpg_key=$(git --git-dir="$REPO_PATH" log -1 --format="%GK" "$newrev" 2>/dev/null || echo "")
+    gpg_signer=$(git --git-dir="$REPO_PATH" log -1 --format="%GS" "$newrev" 2>/dev/null || echo "")
+
+    echo "Author: $commit_author <$commit_email>"
+    echo "Message: $commit_message"
+    echo "Commits pushed: $commit_count"
+    echo "GPG Status: $gpg_status"
+    [ -n "$gpg_signer" ] && echo "GPG Signer: $gpg_signer"
+
+    # Build JSON payload - use escaped strings for safety
+    # Escape double quotes and backslashes in strings
+    escaped_author=$(echo "$commit_author" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    escaped_email=$(echo "$commit_email" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    escaped_message=$(echo "$commit_message" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    escaped_signer=$(echo "$gpg_signer" | sed 's/\\/\\\\/g; s/"/\\"/g')
+
+    json_payload="{\"repo\":\"$REPO_NAME\",\"bare_repo_path\":\"$REPO_PATH\",\"old_rev\":\"$oldrev\",\"new_rev\":\"$newrev\",\"ref\":\"$refname\""
+
+    # Add optional fields only if they have values
+    [ -n "$commit_author" ] && json_payload="$json_payload,\"commit_author\":\"$escaped_author\""
+    [ -n "$commit_email" ] && json_payload="$json_payload,\"commit_email\":\"$escaped_email\""
+    [ -n "$commit_message" ] && json_payload="$json_payload,\"commit_message\":\"$escaped_message\""
+    [ -n "$gpg_status" ] && [ "$gpg_status" != "N" ] && json_payload="$json_payload,\"gpg_status\":\"$gpg_status\""
+    [ -n "$gpg_key" ] && json_payload="$json_payload,\"gpg_key\":\"$gpg_key\""
+    [ -n "$gpg_signer" ] && json_payload="$json_payload,\"gpg_signer\":\"$escaped_signer\""
+    [ -n "$SSH_USER" ] && json_payload="$json_payload,\"pusher\":\"$SSH_USER\""
+    [ -n "$SSH_KEY_FP" ] && json_payload="$json_payload,\"ssh_key_fingerprint\":\"$SSH_KEY_FP\""
+    [ -n "$SSH_CLIENT_IP" ] && json_payload="$json_payload,\"ssh_client_ip\":\"$SSH_CLIENT_IP\""
+
+    json_payload="$json_payload}"
+
+    echo "Sending payload to CI service..."
+
+    # Notify CI service
+    response=$(curl -s -w "\n%{http_code}" -X POST http://localhost:3000/api/builds \
+        -H "Content-Type: application/json" \
+        -d "$json_payload")
+
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | sed '$d')
+
+    if [ "$http_code" = "202" ]; then
+        echo "$body✓ CI notified successfully"
+    else
+        echo "✗ CI notification failed (HTTP $http_code)"
+        echo "$body"
+    fi
+done
+
+echo ""
+echo "==================================="
