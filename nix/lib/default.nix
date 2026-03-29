@@ -19,8 +19,10 @@ let
   mkVmImage = import ./image { inherit pkgs nixpkgs system; };
   mkSandbox = import ./sandbox { inherit pkgs nixpkgs system; };
   evalCluster = import ./cluster {};
+  # export diskVm as a function that merges caller args with the library defaults
+  diskVm = args: import ./diskVm.nix ( { inherit pkgs nixpkgs system; } // args );
 in {
-  inherit mkVmProfile mkVmImage mkSandbox evalCluster;
+  inherit mkVmProfile mkVmImage mkSandbox evalCluster diskVm;
 
   # Convenience: build a VM image and return just the JSON spec derivation.
   mkVmSpecJson = args: (mkVmImage args).vmSpecJson;

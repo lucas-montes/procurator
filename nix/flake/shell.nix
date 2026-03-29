@@ -3,16 +3,16 @@
   rust-bin-custom,
   pcr-test-wrapper,
 }:
-with pkgs;
-  mkShell {
+  pkgs.mkShell {
+    name = "procurator";
     buildInputs = [
-      cargo-watch
-      pkg-config
+      pkgs.cargo-watch
+      pkgs.pkg-config
       rust-bin-custom
-      capnproto
-      cloud-hypervisor
+      pkgs.capnproto
+      pkgs.cloud-hypervisor
       pcr-test-wrapper
-      openapi-generator-cli
+      pkgs.openapi-generator-cli
     ];
 
     shellHook = ''

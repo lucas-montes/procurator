@@ -38,6 +38,13 @@ https://github.com/juspay/omnix
 https://github.com/hercules-ci/flake-parts
 https://github.com/Platonic-Systems/process-compose-flake/blob/main/example/flake.nix
 
+
+check https://github.com/pipelight/virshle/tree/master
+
+https://github.com/kuasar-io/kuasar/tree/main
+
+https://github.com/qarax/cloud-hypervisor-sdk/tree/main/src
+
 Does not evaluates the file it only serialize the derivation
 ```bash
 nix-instantiate --eval --json cluster.nix > cluster-state.json

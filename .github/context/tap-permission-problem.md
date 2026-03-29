@@ -147,24 +147,5 @@ capabilities attach to the binary, not to the user or the parent process,
 and they are not inherited by children. In short: worker → spawns `ip` →
 child has no privileges → `ip` fails with "Operation not permitted."
 
-### What can we do about it?
-
-1. **Make the worker do the work itself** (Option A). Instead of calling
-  `ip`, the worker opens a netlink socket and tells the kernel directly
-  "attach this TAP to that bridge." Since the worker binary already has
-  CAP_NET_ADMIN, the syscall succeeds. No child process, no capability
-  inheritance problem. This simply requires adding a small bit of Rust
-  networking code (`rtnetlink` crate).
-2. **Give the helper program the capability** (Option B). Install a small
-  helper binary with `CAP_NET_ADMIN` (same as we already do for the
-  worker and cloud-hypervisor), and have the worker call *that* instead of
-  the system `ip`. The helper could be a shell script or the real `ip`.
-  This keeps the current two-process structure but guarantees the program
-  doing the work has the right permission.
-3. **Use ambient caps or sudo** — more awkward, less clean. See the full
-  options list above for why these are less desirable.
-
-The easiest, most robust choice is Option A: let the worker speak to the
-kernel itself.  This has now been implemented in `worker/src/vmm/cloud_hypervisor.rs`.
 
 ---
