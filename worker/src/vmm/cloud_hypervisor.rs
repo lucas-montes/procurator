@@ -953,20 +953,7 @@ impl VmmBackend for CloudHypervisorBackend {
         let kernel_path = spec.kernel_path().to_string();
         let initrd_path = spec.initrd_path().to_string();
 
-        //NOTE: this is new and AI generated, no idea if it works
-        // Append allowed_domains=<comma-list> to the kernel cmdline so that the
-        // dns-filter-setup.service inside the VM can read it from /proc/cmdline
-        // and write the per-VM dnsmasq config before dnsmasq starts.
-        // Format: allowed_domains=github.com,pypi.org,example.com
-        let cmdline = {
-            let base = spec.cmdline();
-            let domains = spec.network_allowed_domains();
-            if domains.is_empty() {
-                base.to_string()
-            } else {
-                format!("{} allowed_domains={}", base, domains.join(","))
-            }
-        };
+        let cmdline = spec.cmdline().to_string();
 
         ChVmConfig {
             cpus: ChCpusConfig {

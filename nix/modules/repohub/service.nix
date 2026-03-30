@@ -1,8 +1,10 @@
-{ config, lib, pkgs, ... }:
-
-with lib;
-
-let
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
+with lib; let
   cfg = config.services.procurator.repohub;
 in {
   options.services.procurator.repohub = {
@@ -78,16 +80,18 @@ in {
 
     systemd.services.procurator-repohub = {
       description = "Procurator Repohub Git Service";
-      wantedBy = [ "multi-user.target" ];
-      after = [ "network.target" ];
+      wantedBy = ["multi-user.target"];
+      after = ["network.target"];
 
-      environment = {
-        REPOHUB_ADDR = cfg.addr;
-        REPOHUB_REPOS_DIR = cfg.repositoriesDir;
-        REPOHUB_DATABASE_URL = cfg.databaseUrl;
-      } // optionalAttrs (cfg.webhookUrl != null) {
-        REPOHUB_WEBHOOK_URL = cfg.webhookUrl;
-      };
+      environment =
+        {
+          REPOHUB_ADDR = cfg.addr;
+          REPOHUB_REPOS_DIR = cfg.repositoriesDir;
+          REPOHUB_DATABASE_URL = cfg.databaseUrl;
+        }
+        // optionalAttrs (cfg.webhookUrl != null) {
+          REPOHUB_WEBHOOK_URL = cfg.webhookUrl;
+        };
 
       serviceConfig = {
         Type = "simple";
@@ -102,7 +106,7 @@ in {
         PrivateTmp = true;
         ProtectSystem = "strict";
         ProtectHome = true;
-        ReadWritePaths = [ "/var/lib/procurator-repohub" cfg.repositoriesDir ];
+        ReadWritePaths = ["/var/lib/procurator-repohub" cfg.repositoriesDir];
         StateDirectory = "procurator-repohub";
       };
     };

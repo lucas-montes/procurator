@@ -41,14 +41,14 @@
     vmConfig = vm.vmConfig;
 
     rawImage = vmConfig.config.system.build.rawImage;
-    qcow2Image = vmConfig.config.system.build.qcow2Image;
 
     # Build the full kernel cmdline: the user-specified params + init= pointing to toplevel
     kernelCmdline =
       builtins.concatStringsSep " " vmConfig.config.boot.kernelParams
       + " init=${vmConfig.config.system.build.toplevel}/init";
 
-    # Helper script to launch the VM with cloud-hypervisor
+    # Dev/test launcher. Creates tap0 (if missing), attaches it to br0, runs the VM, then cleans up.
+    # Requires root (sudo nix run .#runVm). In production the worker manages TAPs dynamically.
     runVm = pkgs.writeShellScriptBin "run-vm" ''
       set -euo pipefail
 
@@ -56,21 +56,41 @@
       INITRD="${vmConfig.config.system.build.initialRamdisk}/initrd"
       STORE_DISK="${rawImage}/nixos.img"
       CMDLINE="${kernelCmdline}"
+      TAP="tap0"
+      BRIDGE="br0"
 
-      DISK="''${1:-./nixos-vm.img}"
+      # Set up TAP device and attach to bridge if not already done.
+      # Requires root (script is typically run with sudo).
+      if ! ip link show "$TAP" &>/dev/null; then
+        echo "Creating TAP device $TAP and attaching to $BRIDGE..."
+        ip tuntap add dev "$TAP" mode tap
+        ip link set "$TAP" master "$BRIDGE"
+        ip link set "$TAP" up
+        TAP_CREATED=1
+      else
+        echo "TAP device $TAP already exists."
+        TAP_CREATED=0
+      fi
 
-      echo "Copying disk image to writable location: $DISK"
       DISK="$(mktemp ./nixos-vm.XXXXXX.img)"
+      echo "Copying disk image to writable location: $DISK"
       cp --reflink=auto "$STORE_DISK" "$DISK"
 
-      trap 'rm -f "$DISK"' EXIT
-
+      # Clean up disk and TAP on exit.
+      cleanup() {
+        rm -f "$DISK"
+        if [ "''${TAP_CREATED:-0}" = "1" ]; then
+          ip link delete "$TAP" 2>/dev/null || true
+        fi
+      }
+      trap cleanup EXIT
 
       echo "=== Cloud Hypervisor VM ==="
       echo "  Kernel:  $KERNEL"
       echo "  Initrd:  $INITRD"
       echo "  Disk:    $DISK"
       echo "  Cmdline: $CMDLINE"
+      echo "  TAP:     $TAP -> $BRIDGE"
       echo ""
 
       # Sometimes, depending on the version of ch I need to specify image_type
@@ -83,18 +103,21 @@
         --serial tty \
         --cpus boot=2 \
         --memory size=1024M \
-        --net tap=tap0,mac=AA:00:00:00:00:01
+        --net tap="$TAP",mac=AA:00:00:00:00:01
 
       echo "=== Cloud Hypervisor VM stopped ==="
     '';
 
-    cli = procurator.packages.${system}.cli;
   in {
     packages.${system} = {
       inherit runVm;
     };
 
     apps.${system} = {
+      runVm = {
+        type = "app";
+        program = "${runVm}/bin/run-vm";
+      };
     };
   };
 }

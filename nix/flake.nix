@@ -51,17 +51,7 @@
         packages = packageSet;
       };
     in {
-      nixosModules = {
-        cluster = import ./modules/cluster.nix;
-        host = import ./modules/host;
-        procurator-worker = import ./modules/procurator-worker.nix;
-        procurator-control-plane = import ./modules/procurator-control-plane.nix;
-        cache = import ./modules/cache.nix;
-        ci-service = import ./modules/ci-service.nix;
-        repohub = import ./modules/repohub.nix;
-        guest = import ./lib/image/vm-module.nix;
-        sandbox = import ./lib/sandbox/sandbox-module.nix;
-      };
+      nixosModules.procurator = import ./modules;
 
       libs = import ./lib {
         inherit pkgs nixpkgs system;

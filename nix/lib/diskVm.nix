@@ -5,9 +5,13 @@
   extraPackages ? [pkgs.busybox],
   sshKeys ? [],
   files ? [],
-  # Upstream DNS resolver used by dnsmasq inside the VM to resolve allowed domains.
+  # Upstream DNS resolver for allowed domains.
   # Should point to the host bridge address so the VM goes through the host's dnsmasq.
   upstreamDns ? "192.168.100.1",
+  # List of domains the VM is allowed to reach. All other DNS queries return 0.0.0.0.
+  # Subdomains are included automatically, e.g. "github.com" also covers "api.github.com".
+  # Example: [ "github.com" "pypi.org" ]
+  allowedDomains ? [],
   ...
 }: {
   vmConfig = nixpkgs.lib.nixosSystem {
@@ -90,29 +94,26 @@
         # DNS filtering inside the VM:
         # - dnsmasq listens only on loopback (127.0.0.1), NOT on the network interface.
         #   The host bridge dnsmasq handles DHCP — this one only does DNS filtering.
-        # - Allowed domains are forwarded to the host bridge (upstreamDns) for real resolution.
-        # - All other domains are blocked with 0.0.0.0 (connection refused — no NXDOMAIN spoofing).
-        # - The allowed domain list is injected at VM launch time via the kernel cmdline
-        #   as `allowed_domains=domain1.com,domain2.com`. A one-shot systemd service reads
-        #   /proc/cmdline at boot and writes the dnsmasq config before dnsmasq starts.
+        # - Allowed domains are forwarded to upstreamDns for real resolution.
+        # - All other domains are blocked with 0.0.0.0 (connection refused).
+        # - The allowed domain list is baked into the image from the allowedDomains argument.
         services = {
           dnsmasq = {
             enable = true;
-            # resolveLocalQueries: make the VM itself use dnsmasq for DNS (via 127.0.0.1)
+            # Make the VM itself use dnsmasq for DNS (sets nameserver 127.0.0.1 in resolv.conf)
             resolveLocalQueries = true;
             settings = {
-              # Only listen on loopback — do NOT touch the network interface or serve DHCP.
+              # Only listen on loopback — do NOT serve DHCP or touch the network interface.
               # The host bridge dnsmasq already handles DHCP for this VM.
               listen-address = "127.0.0.1";
               bind-interfaces = true;
               no-dhcp-interface = "";
 
-              # The allowed domain list is written at runtime by dns-filter-setup.service
-              # into /run/dnsmasq-allowed.conf before dnsmasq starts.
-              conf-file = "/run/dnsmasq-allowed.conf";
+              # Forward each allowed domain to the upstream resolver.
+              # Subdomains are covered automatically: "github.com" also matches "api.github.com".
+              server = map (d: "/${d}/${upstreamDns}") allowedDomains;
 
-              # Block everything that isn't matched by the per-domain server= lines.
-              # Returns 0.0.0.0 (connection refused) for blocked domains.
+              # Block everything not matched above — returns 0.0.0.0 (connection refused).
               address = "/#/0.0.0.0";
             };
           };
@@ -128,54 +129,6 @@
           journald = {
             extraConfig = "SystemMaxUse=50m";
           };
-
-          oomd = {
-            enable = true;
-            enableRootSlice = false; # don't kill system services
-            enableUserSlices = false; # don't kill user sessions
-            enableSystemSlice = false;
-          };
-        };
-
-        # dns-filter-setup.service: reads allowed_domains= from /proc/cmdline and
-        # writes /run/dnsmasq-allowed.conf before dnsmasq starts.
-        # The kernel cmdline is set by the Rust worker at VM launch time.
-        # Format: allowed_domains=github.com,pypi.org,example.com
-        systemd.services.dns-filter-setup = {
-          description = "Write dnsmasq allowed-domain config from kernel cmdline";
-          wantedBy = [ "dnsmasq.service" ];
-          before = [ "dnsmasq.service" ];
-          serviceConfig = {
-            Type = "oneshot";
-            RemainAfterExit = true;
-          };
-          script = ''
-            # Read allowed_domains=... from kernel cmdline
-            CMDLINE=$(cat /proc/cmdline)
-            DOMAINS=""
-            for param in $CMDLINE; do
-              case "$param" in
-                allowed_domains=*)
-                  DOMAINS="''${param#allowed_domains=}"
-                  ;;
-              esac
-            done
-
-            CONF=/run/dnsmasq-allowed.conf
-            : > "$CONF"
-
-            if [ -z "$DOMAINS" ]; then
-              echo "# No allowed_domains= found in kernel cmdline — all DNS blocked" >> "$CONF"
-            else
-              # Each comma-separated domain gets a server= line forwarding to the upstream.
-              # Subdomains are included automatically by dnsmasq (server=/github.com/x.x.x.x
-              # matches api.github.com, raw.githubusercontent.com, etc.).
-              IFS=',' read -r -a DOMAIN_LIST <<< "$DOMAINS"
-              for domain in "''${DOMAIN_LIST[@]}"; do
-                echo "server=/$domain/${upstreamDns}" >> "$CONF"
-              done
-            fi
-          '';
         };
 
         # https://wiki.archlinux.org/title/Improving_performance#Storage_devices
@@ -192,6 +145,7 @@
         # Mask blocking wait-online / settle units that commonly delay boot.
         # Keep SSH enabled above; these masks prevent long network/device waits.
         systemd.services = {
+          oomd.enable = true; #This one we might want to keep it disabled?
           NetworkManager-wait-online.enable = false;
           systemd-udev-settle.enable = false;
           # this is the systemd user session manager for root (uid 0). It enables per-user systemd services, timers, and socket activation under the root user. If you don't run any user-level systemd units for root,

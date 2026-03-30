@@ -1,8 +1,10 @@
-{ config, lib, pkgs, ... }:
-
-with lib;
-
-let
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
+with lib; let
   cfg = config.services.procurator.worker;
   clusterCfg = config.cluster.vms or {};
 
@@ -90,8 +92,8 @@ in {
 
     systemd.services.procurator-worker = {
       description = "Procurator Worker Node";
-      wantedBy = [ "multi-user.target" ];
-      after = [ "network.target" ];
+      wantedBy = ["multi-user.target"];
+      after = ["network.target"];
 
       serviceConfig = {
         Type = "simple";
@@ -106,7 +108,7 @@ in {
         PrivateTmp = true;
         ProtectSystem = "strict";
         ProtectHome = true;
-        ReadWritePaths = [ "/var/lib/procurator-worker" ];
+        ReadWritePaths = ["/var/lib/procurator-worker"];
         StateDirectory = "procurator-worker";
       };
     };
