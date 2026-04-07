@@ -1,15 +1,3 @@
-"""
-Procurator network test workload.
-
-Runs inside a Cloud Hypervisor VM. Makes HTTP requests to test domain
-allowlisting:
-  - python.org  → should succeed (in allowedDomains)
-  - google.com  → should be blocked (NOT in allowedDomains)
-
-Writes structured JSON results to a file, reads them back, and prints
-to stdout with delimited markers so the host can parse from serial log.
-"""
-
 import json
 import os
 import sys
@@ -18,8 +6,8 @@ from urllib.request import urlopen
 from urllib.error import URLError
 
 
-ALLOWED_URL = "https://www.python.org"
-BLOCKED_URL = "https://www.google.com"
+ALLOWED_URL = "https://www.google.com"
+BLOCKED_URL = "https://www.python.org"
 TIMEOUT_SECONDS = 10
 
 

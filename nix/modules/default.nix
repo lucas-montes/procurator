@@ -44,7 +44,6 @@ in {
     };
 
     environment.systemPackages = cfg.extraPackages;
-    environment.etc."procurator".source = pkgs.lib.mkForce ./.; # optional: provide repo files to /etc/procurator
 
   };
 }

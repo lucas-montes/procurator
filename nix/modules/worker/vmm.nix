@@ -42,6 +42,22 @@ in {
   };
 
   config = mkIf cfg.enable {
+    # ── Device permissions ──────────────────────────────────────────────
+    # Ensure /dev/net/tun and /dev/kvm are group-accessible so the
+    # unprivileged worker (via kvm/netdev group membership) can open them.
+    # /dev/vhost-net is optional but used by CH for vhost acceleration.
+    #
+    # NixOS already ships kvm udev rules in most kernels, but we add
+    # explicit ones to guarantee correctness on all configurations.
+    services.udev.extraRules = ''
+      # /dev/kvm — hardware virtualisation (group kvm, rw)
+      KERNEL=="kvm", GROUP="kvm", MODE="0660"
+      # /dev/net/tun — TAP device creation (group netdev, rw)
+      KERNEL=="tun", GROUP="netdev", MODE="0660"
+      # /dev/vhost-net — vhost-net acceleration (group kvm, rw)
+      KERNEL=="vhost-net", GROUP="kvm", MODE="0660"
+    '';
+
     networking = {
       # Create the bridge (no physical ports). TAPs are attached at runtime.
       bridges.br0.interfaces = [];
@@ -73,7 +89,6 @@ in {
       enable = true;
       settings = {
         interface = "br0";
-        # bind-interfaces = true;
         # bind-dynamic: attaches when br0 is ready, avoids silent bind failures
         # that occur with bind-interfaces if br0 gets its IP after dnsmasq starts.
         bind-dynamic = true;

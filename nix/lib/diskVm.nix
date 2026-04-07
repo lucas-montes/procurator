@@ -88,7 +88,10 @@
           # speed up DHCP: don't block boot while dhcpcd waits for leases
           dhcpcd = {
             wait = "background";
-            extraConfig = "noarp";
+            # nohook resolv.conf so dhcpcd doesn't overwrite the 127.0.0.1 nameserver after getting a DHCP lease
+            extraConfig = ''
+              nohook resolv.conf
+            '';
           };
         };
         # DNS filtering inside the VM:
@@ -100,6 +103,7 @@
         services = {
           dnsmasq = {
             enable = true;
+            alwaysKeepRunning = true;
             # Make the VM itself use dnsmasq for DNS (sets nameserver 127.0.0.1 in resolv.conf)
             resolveLocalQueries = true;
             settings = {

@@ -86,6 +86,12 @@ in {
       isSystemUser = true;
       group = cfg.group;
       description = "Procurator worker daemon user";
+      createHome = false;
+      shell = pkgs.runtimeShell;
+      # kvm       → /dev/kvm access for hardware-accelerated virtualisation
+      # netdev    → /dev/net/tun access for TAP device creation (ioctl TUNSETIFF)
+      # The "network" group is not a standard NixOS group; replaced by real device groups.
+      extraGroups = [ "kvm" "netdev" ];
     };
 
     users.groups.${cfg.group} = {};
@@ -99,17 +105,56 @@ in {
         Type = "simple";
         User = cfg.user;
         Group = cfg.group;
+
+        # ── Supplementary groups ──────────────────────────────────────
+        # Needed so the service (and child processes like cloud-hypervisor)
+        # can open /dev/kvm and /dev/net/tun without root.
+        SupplementaryGroups = [ "kvm" "netdev" ];
+
         ExecStart = "${cfg.package}/bin/procurator ${configFile}";
         Restart = "on-failure";
         RestartSec = "10s";
 
-        # Security hardening
+        # ── Capabilities ──────────────────────────────────────────────
+        # CAP_NET_ADMIN — create/delete TAP devices, attach to bridges,
+        #                 set link up/down via netlink.
+        # CAP_NET_RAW   — needed by CH for raw packet I/O on virtio-net.
+        #
+        # Ambient caps are inherited by child processes (cloud-hypervisor)
+        # even with NoNewPrivileges=true. This is the correct mechanism:
+        # ambient caps survive fork+exec without requiring setuid or
+        # file capabilities.
+        AmbientCapabilities = [ "CAP_NET_ADMIN" "CAP_NET_RAW" ];
+        CapabilityBoundingSet = [ "CAP_NET_ADMIN" "CAP_NET_RAW" ];
+
+        # ── Device access ─────────────────────────────────────────────
+        # Explicit allowlist prevents future hardening (PrivateDevices)
+        # from accidentally blocking required devices.
+        #   /dev/net/tun — TAP creation via ioctl (worker creates TAPs)
+        #   /dev/kvm     — hardware virtualisation (child CH processes)
+        #   /dev/urandom — entropy source configured in CH's rng.src
+        #   /dev/vhost-net — optional; CH uses it for vhost-net acceleration
+        DevicePolicy = "closed";
+        DeviceAllow = [
+          "/dev/net/tun rw"
+          "/dev/kvm rw"
+          "/dev/urandom r"
+          "/dev/vhost-net rw"
+        ];
+
+        # ── Security hardening ────────────────────────────────────────
         NoNewPrivileges = true;
         PrivateTmp = true;
         ProtectSystem = "strict";
         ProtectHome = true;
-        ReadWritePaths = ["/var/lib/procurator-worker"];
+
+        # ── Writable paths ────────────────────────────────────────────
+        # /tmp/procurator/vms — per-VM dirs: writable disk copies, serial
+        #                       logs, API sockets, CH log files.
+        # /run/procurator-worker — RuntimeDirectory for ephemeral state.
+        ReadWritePaths = [ "/tmp/procurator/vms" ];
         StateDirectory = "procurator-worker";
+        RuntimeDirectory = "procurator-worker";
       };
     };
   };
