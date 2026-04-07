@@ -101,7 +101,6 @@ impl commands::worker_capnp::worker::Server for Server {
                 .map_err(|e| capnp::Error::failed(e.to_string()))?;
 
             if let CommandResponse::VmList(vm_infos) = resp {
-                //TODO: this is ass, there is a better way of doing this, read the docs
                 let mut vms = results.get().init_vms(vm_infos.len() as u32);
                 for (i, info) in vm_infos.iter().enumerate() {
                     let mut vm_status = vms.reborrow().get(i as u32);

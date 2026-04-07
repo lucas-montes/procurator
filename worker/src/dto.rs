@@ -17,8 +17,6 @@ use tokio::sync::{mpsc, oneshot};
 pub enum VmError {
     /// The requested VM does not exist in the manager's table
     NotFound(String),
-    /// A VM with that ID already exists
-    AlreadyExists(String),
     /// The CloudHypervisor REST call failed
     Hypervisor(String),
     /// The CH process failed to spawn or died unexpectedly
@@ -33,7 +31,6 @@ impl fmt::Display for VmError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             VmError::NotFound(id) => write!(f, "VM not found: {id}"),
-            VmError::AlreadyExists(id) => write!(f, "VM already exists: {id}"),
             VmError::Hypervisor(msg) => write!(f, "cloud-hypervisor error: {msg}"),
             VmError::ProcessFailed(msg) => write!(f, "process error: {msg}"),
             VmError::ManagerDown => write!(f, "VM manager is down"),
@@ -182,23 +179,13 @@ impl VmInfo {
 
 #[derive(Debug, Clone)]
 pub enum VmStatus {
-    Creating,
     Running,
-    Paused,
-    Stopping,
-    Stopped,
-    Failed(String),
 }
 
 impl VmStatus {
     pub fn as_str(&self) -> &str {
         match self {
-            VmStatus::Creating => "creating",
             VmStatus::Running => "running",
-            VmStatus::Paused => "paused",
-            VmStatus::Stopping => "stopping",
-            VmStatus::Stopped => "stopped",
-            VmStatus::Failed(_) => "failed",
         }
     }
 
@@ -283,6 +270,7 @@ pub struct Message {
 }
 
 impl Message {
+    #[cfg(test)]
     pub fn from_parts(
         data: CommandPayload,
         reply: oneshot::Sender<Result<CommandResponse, VmError>>,

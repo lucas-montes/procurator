@@ -25,8 +25,6 @@ use crate::dto::{VmError, VmSpec};
 pub trait Vmm: Send + 'static {
     /// VMM-specific configuration type (e.g. ChVmConfig)
     type Config: Debug + Send;
-    /// VMM-specific info type (e.g. ChVmInfo)
-    type Info: Debug + Send;
     /// VMM-specific error type
     type Error: std::error::Error + Send;
 
@@ -44,23 +42,6 @@ pub trait Vmm: Send + 'static {
 
     /// Delete the VM definition (must be shut down first)
     fn delete(&self) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
-
-    /// Get information about this VM
-    fn info(&self) -> impl std::future::Future<Output = Result<Self::Info, Self::Error>> + Send;
-
-    /// Pause the VM (freeze vCPUs)
-    fn pause(&self) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
-
-    /// Resume a paused VM
-    fn resume(&self) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
-
-    /// Get I/O counters (network/disk) for metrics
-    fn counters(
-        &self,
-    ) -> impl std::future::Future<Output = Result<Self::Info, Self::Error>> + Send;
-
-    /// Ping the VMM process to check if it's alive
-    fn ping(&self) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 }
 
 // ─── VMM process handle ───────────────────────────────────────────────────

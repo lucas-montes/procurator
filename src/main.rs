@@ -48,14 +48,14 @@ async fn main() {
 
     tracing::info!(path = ?config_path, ?cfg, "Loaded configuration");
 
-    match cfg.role {
-        Role::Master { peers_addr } => {
-            tracing::info!(?peers_addr, "Starting in Master mode");
-            control_plane::main(cfg.hostname, cfg.addr, peers_addr).await;
-        }
-        Role::Worker { master_addr } => {
-            tracing::info!(?master_addr, "Starting in Worker mode");
-            worker::main(cfg.hostname, cfg.addr, master_addr).await;
-        }
-    }
+    // match cfg.role {
+    //     Role::Master { peers_addr } => {
+    //         tracing::info!(?peers_addr, "Starting in Master mode");
+    //         control_plane::main(cfg.hostname, cfg.addr, peers_addr).await;
+    //     }
+    //     Role::Worker { master_addr } => {
+    //         tracing::info!(?master_addr, "Starting in Worker mode");
+    //         worker::main(cfg.hostname, cfg.addr, master_addr).await;
+    //     }
+    // }
 }

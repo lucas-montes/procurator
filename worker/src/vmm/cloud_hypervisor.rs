@@ -55,9 +55,6 @@ impl CloudHypervisor {
 #[derive(Debug)]
 pub enum Error {
     Communication(String),
-    VmNotFound(String),
-    VmAlreadyExists(String),
-    InvalidConfig(String),
     OperationFailed(String),
     Serialization(serde_json::Error),
     Io(std::io::Error),
@@ -67,9 +64,6 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Communication(msg) => write!(f, "Communication error: {}", msg),
-            Error::VmNotFound(id) => write!(f, "VM not found: {}", id),
-            Error::VmAlreadyExists(id) => write!(f, "VM already exists: {}", id),
-            Error::InvalidConfig(msg) => write!(f, "Invalid configuration: {}", msg),
             Error::OperationFailed(msg) => write!(f, "Operation failed: {}", msg),
             Error::Serialization(err) => write!(f, "Serialization error: {}", err),
             Error::Io(err) => write!(f, "IO error: {}", err),
@@ -101,7 +95,6 @@ impl From<std::io::Error> for Error {
 
 impl Vmm for CloudHypervisor {
     type Config = ChVmConfig;
-    type Info = ChVmInfo;
     type Error = Error;
 
     async fn create(&self, config: Self::Config) -> Result<(), Self::Error> {
@@ -228,123 +221,6 @@ impl Vmm for CloudHypervisor {
         Ok(())
     }
 
-    async fn info(&self) -> Result<Self::Info, Self::Error> {
-        let uri = self.build_uri("/api/v1/vm.info");
-        let req = hyper::Request::builder()
-            .method(hyper::Method::GET)
-            .uri(uri)
-            .body(hyper::Body::empty())
-            .map_err(|e| Error::Communication(e.to_string()))?;
-
-        let resp = self
-            .client
-            .request(req)
-            .await
-            .map_err(|e| Error::Communication(e.to_string()))?;
-
-        if !resp.status().is_success() {
-            return Err(Error::OperationFailed(
-                "Failed to get VM info".into(),
-            ));
-        }
-
-        let body_bytes = hyper::body::to_bytes(resp.into_body())
-            .await
-            .map_err(|e| Error::Communication(e.to_string()))?;
-
-        let ch_info = serde_json::from_slice(&body_bytes)?;
-
-        Ok(ch_info)
-    }
-
-    async fn pause(&self) -> Result<(), Self::Error> {
-        let uri = self.build_uri("/api/v1/vm.pause");
-        let req = hyper::Request::builder()
-            .method(hyper::Method::PUT)
-            .uri(uri)
-            .body(hyper::Body::empty())
-            .map_err(|e| Error::Communication(e.to_string()))?;
-
-        let resp = self
-            .client
-            .request(req)
-            .await
-            .map_err(|e| Error::Communication(e.to_string()))?;
-
-        if !resp.status().is_success() {
-            return Err(Error::OperationFailed("Failed to pause VM".into()));
-        }
-
-        Ok(())
-    }
-
-    async fn resume(&self) -> Result<(), Self::Error> {
-        let uri = self.build_uri("/api/v1/vm.resume");
-        let req = hyper::Request::builder()
-            .method(hyper::Method::PUT)
-            .uri(uri)
-            .body(hyper::Body::empty())
-            .map_err(|e| Error::Communication(e.to_string()))?;
-
-        let resp = self
-            .client
-            .request(req)
-            .await
-            .map_err(|e| Error::Communication(e.to_string()))?;
-
-        if !resp.status().is_success() {
-            return Err(Error::OperationFailed("Failed to resume VM".into()));
-        }
-
-        Ok(())
-    }
-
-    async fn counters(&self) -> Result<Self::Info, Self::Error> {
-        let uri = self.build_uri("/api/v1/vm.counters");
-        let req = hyper::Request::builder()
-            .method(hyper::Method::GET)
-            .uri(uri)
-            .body(hyper::Body::empty())
-            .map_err(|e| Error::Communication(e.to_string()))?;
-
-        let resp = self
-            .client
-            .request(req)
-            .await
-            .map_err(|e| Error::Communication(e.to_string()))?;
-
-        if !resp.status().is_success() {
-            return Err(Error::OperationFailed("Failed to get VM counters".into()));
-        }
-
-        let body_bytes = hyper::body::to_bytes(resp.into_body())
-            .await
-            .map_err(|e| Error::Communication(e.to_string()))?;
-
-        let counters = serde_json::from_slice(&body_bytes)?;
-        Ok(counters)
-    }
-
-    async fn ping(&self) -> Result<(), Self::Error> {
-        let uri = self.build_uri("/api/v1/vmm.ping");
-        let req = hyper::Request::builder()
-            .method(hyper::Method::GET)
-            .uri(uri)
-            .body(hyper::Body::empty())
-            .map_err(|e| Error::Communication(e.to_string()))?;
-
-        let resp = self
-            .client
-            .request(req)
-            .await
-            .map_err(|e| Error::Communication(e.to_string()))?;
-
-        if !resp.status().is_success() {
-            return Err(Error::Communication("VMM ping failed".into()));
-        }
-
-        Ok(())
-    }
 }
 
 // Cloud Hypervisor API data structures — all owned, no lifetimes.
@@ -427,34 +303,6 @@ pub struct ChSerialConfig {
     pub file: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct ChVmInfo {
-    pub state: String,
-    pub config: ChVmConfig,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub memory_actual_size: Option<u64>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ChVmCounters {
-    #[serde(rename = "block")]
-    pub block: Option<ChBlockCounters>,
-    #[serde(rename = "net")]
-    pub net: Option<ChNetCounters>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ChBlockCounters {
-    pub read_bytes: Option<u64>,
-    pub write_bytes: Option<u64>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ChNetCounters {
-    pub rx_bytes: Option<u64>,
-    pub tx_bytes: Option<u64>,
-}
-
 // ─── Process handle ───────────────────────────────────────────────────────
 
 /// Handle to one `cloud-hypervisor` OS process.
@@ -466,6 +314,9 @@ pub struct ChProcess {
     socket_path: PathBuf,
     /// Per-VM working directory (contains writable disk copy, serial log, etc.)
     vm_dir: PathBuf,
+    /// TAP device name owned by this VM. Deleted on cleanup via netlink.
+    /// `None` when the VM was started without networking.
+    tap_name: Option<String>,
 }
 
 impl VmmProcess for ChProcess {
@@ -503,6 +354,15 @@ impl VmmProcess for ChProcess {
             }
         }
 
+        // Delete the TAP device via netlink (best-effort).
+        // The worker already has CAP_NET_ADMIN so this works without root.
+        if let Some(ref tap) = self.tap_name {
+            match delete_tap_device(tap).await {
+                Ok(()) => info!(tap = %tap, "TAP device deleted"),
+                Err(e) => warn!(tap = %tap, error = %e, "Failed to delete TAP device"),
+            }
+        }
+
         if self.socket_path.exists() {
             let _ = tokio::fs::remove_file(&self.socket_path).await;
         }
@@ -512,6 +372,145 @@ impl VmmProcess for ChProcess {
         }
         Ok(())
     }
+}
+
+/// Delete a TAP device by name via netlink.
+///
+/// Requires `CAP_NET_ADMIN` — the worker process holds this via
+/// systemd `AmbientCapabilities`.
+async fn delete_tap_device(tap_name: &str) -> Result<(), VmError> {
+    let (connection, handle, _) = rtnetlink::new_connection()
+        .map_err(|e| VmError::Internal(format!("netlink connection failed: {e}")))?;
+    tokio::spawn(connection);
+
+    let mut links = handle
+        .link()
+        .get()
+        .match_name(tap_name.to_string())
+        .execute();
+    let msg = links
+        .try_next()
+        .await
+        .map_err(|e| VmError::Internal(format!("netlink get {tap_name} failed: {e}")))?;
+
+    if let Some(link) = msg {
+        handle
+            .link()
+            .del(link.header.index)
+            .execute()
+            .await
+            .map_err(|e| VmError::Internal(format!("netlink del {tap_name} failed: {e}")))?;
+    }
+    Ok(())
+}
+
+/// Create a TAP device by name via `ioctl` on `/dev/net/tun`.
+///
+/// TAP devices are created through the TUN/TAP kernel interface, not via
+/// netlink. The process:
+///   1. `open("/dev/net/tun")`  — requires rw access (netdev group + DeviceAllow)
+///   2. `ioctl(fd, TUNSETIFF, &ifreq)` — requires `CAP_NET_ADMIN`
+///   3. `ioctl(fd, TUNSETPERSIST, 1)` — makes the TAP survive fd close
+///
+/// After creation, we use netlink to bring the interface up.
+///
+/// If the TAP already exists (e.g. from a previous crashed VM), it is
+/// deleted first to avoid stale state.
+async fn create_tap_device(tap_name: &str) -> Result<(), VmError> {
+    // Delete stale TAP if it exists (crash recovery).
+    // Best-effort — ignore errors if it doesn't exist.
+    let _ = delete_tap_device(tap_name).await;
+
+    // Create TAP via ioctl on /dev/net/tun.
+    // This is a blocking syscall so we run it on the blocking pool.
+    let name = tap_name.to_string();
+    tokio::task::spawn_blocking(move || create_tap_ioctl(&name))
+        .await
+        .map_err(|e| VmError::Internal(format!("spawn_blocking for TAP creation panicked: {e}")))?
+        .map_err(|e| VmError::Internal(format!("TAP ioctl creation failed: {e}")))?;
+
+    // Bring the TAP up via netlink.
+    let (connection, handle, _) = rtnetlink::new_connection()
+        .map_err(|e| VmError::Internal(format!("netlink connection failed: {e}")))?;
+    tokio::spawn(connection);
+
+    let mut links = handle
+        .link()
+        .get()
+        .match_name(tap_name.to_string())
+        .execute();
+    let msg = links
+        .try_next()
+        .await
+        .map_err(|e| VmError::Internal(format!("netlink get {tap_name} after create: {e}")))?
+        .ok_or_else(|| VmError::Internal(format!("TAP {tap_name} not found after creation")))?;
+
+    handle
+        .link()
+        .set(msg.header.index)
+        .up()
+        .execute()
+        .await
+        .map_err(|e| VmError::Internal(format!("netlink set {tap_name} up failed: {e}")))?;
+
+    info!(tap = %tap_name, "TAP device created and brought up");
+    Ok(())
+}
+
+/// Low-level TAP creation via `ioctl(2)`.
+///
+/// Opens `/dev/net/tun`, issues `TUNSETIFF` with `IFF_TAP | IFF_NO_PI`,
+/// then `TUNSETPERSIST` so the device survives the fd being closed.
+/// The fd is then dropped — CH will re-open the persistent TAP by name.
+fn create_tap_ioctl(tap_name: &str) -> Result<(), std::io::Error> {
+    use std::fs::OpenOptions;
+    use std::os::unix::io::AsRawFd;
+
+    // ioctl constants from <linux/if_tun.h>
+    const TUNSETIFF: libc::c_ulong = 0x400454ca;
+    const TUNSETPERSIST: libc::c_ulong = 0x400454cb;
+    const IFF_TAP: libc::c_short = 0x0002;
+    const IFF_NO_PI: libc::c_short = 0x1000;
+
+    let tun_fd = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/net/tun")?;
+
+    // Build ifreq struct — name + flags
+    let mut ifr: libc::ifreq = unsafe { std::mem::zeroed() };
+    let name_bytes = tap_name.as_bytes();
+    if name_bytes.len() >= libc::IFNAMSIZ {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("TAP name too long: {} (max {})", tap_name, libc::IFNAMSIZ - 1),
+        ));
+    }
+    // Copy name into ifr_name (null-terminated)
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            name_bytes.as_ptr(),
+            ifr.ifr_name.as_mut_ptr().cast::<u8>(),
+            name_bytes.len(),
+        );
+    }
+    ifr.ifr_ifru.ifru_flags = IFF_TAP | IFF_NO_PI;
+
+    // TUNSETIFF — create the TAP device
+    let ret = unsafe { libc::ioctl(tun_fd.as_raw_fd(), TUNSETIFF, &ifr) };
+    if ret < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    // TUNSETPERSIST — keep the TAP alive after we close the fd.
+    // CH will re-open it by name when it starts.
+    let ret = unsafe { libc::ioctl(tun_fd.as_raw_fd(), TUNSETPERSIST, 1_i32) };
+    if ret < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    // fd is dropped here — the persistent TAP remains in the kernel.
+    Ok(())
 }
 
 // ─── Backend factory ──────────────────────────────────────────────────────
@@ -830,7 +829,27 @@ impl VmmBackend for CloudHypervisorBackend {
             None => false,
         };
 
-        // 7. Store prepared state for build_config() and spawn()
+        // 7. Create the TAP device if networking is available.
+        //    The worker creates TAPs (not CH) so we control the lifecycle:
+        //      - create here in prepare()
+        //      - attach to bridge in attach_network() (after CH creates the VM)
+        //      - delete in ChProcess::cleanup() when the VM is destroyed
+        //    TAP is created persistent so it survives the fd being closed.
+        //    CH will re-open it by name via --net tap=<name>.
+        if network_available {
+            create_tap_device(&tap_name).await.map_err(|e| {
+                VmError::Internal(format!(
+                    "Failed to create TAP device {tap_name}: {e}"
+                ))
+            })?;
+            info!(
+                vm_id = %vm_id,
+                tap = %tap_name,
+                "TAP device created for VM"
+            );
+        }
+
+        // 8. Store prepared state for build_config() and spawn()
         let prepared = PreparedVm {
             writable_disk_path,
             serial_log_path,
@@ -911,12 +930,22 @@ impl VmmBackend for CloudHypervisorBackend {
         // 6. Wait for socket to appear
         Self::wait_for_socket(&socket_path, self.config.socket_timeout).await?;
 
-        // 7. Create the REST client and process handle
+        // 7. Look up the TAP name from prepared state (if networking is enabled)
+        let tap_name = self
+            .prepared
+            .lock()
+            .expect("prepared lock poisoned")
+            .get(vm_id)
+            .filter(|p| p.network_available)
+            .map(|p| p.tap_name.clone());
+
+        // 8. Create the REST client and process handle
         let client = CloudHypervisor::new(&socket_path);
         let process = ChProcess {
             child,
             socket_path: socket_path.clone(),
             vm_dir,
+            tap_name,
         };
 
         Ok((client, process, socket_path))

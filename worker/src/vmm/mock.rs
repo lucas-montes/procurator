@@ -105,12 +105,6 @@ pub struct MockVmConfig {
     pub disk_image_path: String,
 }
 
-/// Info type for MockVmm.
-#[derive(Debug)]
-pub struct MockVmInfo {
-    pub state: String,
-}
-
 /// Error type for MockVmm.
 #[derive(Debug)]
 pub struct MockVmError(pub String);
@@ -125,7 +119,6 @@ impl std::error::Error for MockVmError {}
 
 impl Vmm for MockVmm {
     type Config = MockVmConfig;
-    type Info = MockVmInfo;
     type Error = MockVmError;
 
     async fn create(&self, _config: Self::Config) -> Result<(), Self::Error> {
@@ -160,29 +153,6 @@ impl Vmm for MockVmm {
         Ok(())
     }
 
-    async fn info(&self) -> Result<Self::Info, Self::Error> {
-        Ok(MockVmInfo {
-            state: "Running".to_string(),
-        })
-    }
-
-    async fn pause(&self) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    async fn resume(&self) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    async fn counters(&self) -> Result<Self::Info, Self::Error> {
-        Ok(MockVmInfo {
-            state: "Running".to_string(),
-        })
-    }
-
-    async fn ping(&self) -> Result<(), Self::Error> {
-        Ok(())
-    }
 }
 
 // ─── Mock process handle ──────────────────────────────────────────────────

@@ -1,4 +1,7 @@
+use std::path::PathBuf;
+
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use worker::Config;
 
 #[tokio::main]
 async fn main() {
@@ -18,10 +21,21 @@ async fn main() {
         )
         .init();
 
-    worker::main(
-        "hostname".into(),
-        "127.0.0.1:6000".parse().expect("addr shold be valid"),
-        "127.0.0.1:5000".parse().expect("addr shold be valid"),
-    )
+    let config_path = std::env::args()
+        .nth(1)
+        .map(PathBuf::from)
+        .expect("Config path must be provided as the first argument");
+
+    let contents = tokio::fs::read(&config_path).await.unwrap_or_else(|e| {
+        tracing::error!(path = ?config_path, error = %e, "Could not read config");
+        std::process::exit(1);
+    });
+
+    let cfg: Config = serde_json::from_slice(&contents).unwrap_or_else(|e| {
+        tracing::error!(path = ?config_path, error = %e, "Failed to parse config");
+        std::process::exit(1);
+    });
+
+    worker::main(cfg)
     .await;
 }

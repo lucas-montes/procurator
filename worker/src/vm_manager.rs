@@ -27,7 +27,6 @@
 //! → `kill()` → `cleanup()` (socket, disk copy, serial log, VM dir).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
@@ -51,8 +50,6 @@ struct VmHandle<B: VmmBackend> {
     client: B::Client,
     /// OS process handle (e.g. CH child process)
     process: B::Process,
-    /// Path to the API socket (for reference / cleanup)
-    socket_path: PathBuf,
     /// Current observed status
     status: VmStatus,
 }
@@ -198,7 +195,6 @@ impl<B: VmmBackend> VmManager<B> {
             spec,
             client,
             process,
-            socket_path,
             status: VmStatus::Running,
         };
         self.vms.insert(vm_id.clone(), handle);

@@ -15,12 +15,13 @@ with lib; let
     else cfg.masterAddr;
 
   configFile = pkgs.writeText "procurator-worker-config.json" (builtins.toJSON {
-    hostname = cfg.hostname;
-    addr = cfg.addr;
-    role = {
-      Worker = {
-        master_addr = derivedMasterAddr;
-      };
+    listen_addr = cfg.listenAddr;
+    master_addr = derivedMasterAddr;
+    cloud_hypervisor = {
+      binary_path = cfg.cloudHypervisorBinaryPath;
+      socket_dir = cfg.vmRuntimeDir;
+      socket_timeout_secs = cfg.cloudHypervisorSocketTimeoutSeconds;
+      bridge_name = cfg.bridgeName;
     };
   });
 in {
@@ -34,14 +35,7 @@ in {
       description = "The procurator package to use.";
     };
 
-    hostname = mkOption {
-      type = types.str;
-      default = config.networking.hostName;
-      defaultText = literalExpression "config.networking.hostName";
-      description = "Hostname for this worker node.";
-    };
-
-    addr = mkOption {
+    listenAddr = mkOption {
       type = types.str;
       example = "0.0.0.0:8080";
       description = "Address and port for the worker to bind to.";
@@ -79,9 +73,52 @@ in {
       default = "procurator-worker";
       description = "Group under which the worker runs.";
     };
+
+    vmRuntimeDir = mkOption {
+      type = types.str;
+      default = "/run/procurator-worker/vms";
+      example = "/run/procurator-worker/vms";
+      description = "Directory for per-VM runtime artifacts (sockets, writable disks, logs).";
+    };
+
+    cloudHypervisorBinaryPath = mkOption {
+      type = types.str;
+      default = "${pkgs.cloud-hypervisor}/bin/cloud-hypervisor";
+      defaultText = literalExpression "\"${pkgs.cloud-hypervisor}/bin/cloud-hypervisor\"";
+      description = "Absolute path to the cloud-hypervisor binary used by the worker.";
+    };
+
+    cloudHypervisorSocketTimeoutSeconds = mkOption {
+      type = types.ints.positive;
+      default = 10;
+      example = 5;
+      description = "Max seconds to wait for cloud-hypervisor API socket creation.";
+    };
+
+    bridgeName = mkOption {
+      type = types.nullOr types.str;
+      default = "br0";
+      example = "br0";
+      description = "Bridge name used for VM TAP attachment. Set to null to disable VM networking.";
+    };
   };
 
   config = mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = (cfg.master != null) || (cfg.masterAddr != "");
+        message = ''
+          services.procurator.worker: you must set either `master` or `masterAddr`.
+          - Use `master` to reference a VM from `cluster.vms`.
+          - Use `masterAddr` for a direct control-plane address.
+        '';
+      }
+      {
+        assertion = (cfg.master == null) || (builtins.hasAttr cfg.master clusterCfg);
+        message = "services.procurator.worker: `master` is set but not found in `cluster.vms`.";
+      }
+    ];
+
     users.users.${cfg.user} = {
       isSystemUser = true;
       group = cfg.group;
@@ -152,7 +189,7 @@ in {
         # /tmp/procurator/vms — per-VM dirs: writable disk copies, serial
         #                       logs, API sockets, CH log files.
         # /run/procurator-worker — RuntimeDirectory for ephemeral state.
-        ReadWritePaths = [ "/tmp/procurator/vms" ];
+        ReadWritePaths = [ cfg.vmRuntimeDir ];
         StateDirectory = "procurator-worker";
         RuntimeDirectory = "procurator-worker";
       };
