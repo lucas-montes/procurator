@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% block title %}Gerrit Changes - {{ repo_name }} - {{ project_name }} - {{ username }}{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="/">Users</a>
+    <span>/</span>
+    <a href="/{{ username }}">{{ username }}</a>
+    <span>/</span>
+    <a href="/{{ username }}/{{ project_name }}">{{ project_name }}</a>
+    <span>/</span>
+    <a href="/{{ username }}/{{ project_name }}/{{ repo_name }}">{{ repo_name }}</a>
+    <span>/</span>
+    <span>Gerrit</span>
+</div>
+
+<div class="card">
+    <h2>🧪 Gerrit Changes</h2>
+    <p class="meta">Create and review changes for <code>{{ repo_name }}</code>.</p>
+</div>
+
+<div class="card">
+    <h3>Create Change</h3>
+    <form id="create-change-form" style="display:grid; gap:0.75rem; margin-top: 0.75rem;">
+        <input id="subject" type="text" placeholder="Subject" required />
+        <input id="target_branch" type="text" placeholder="Target branch (e.g. main)" value="main" required />
+        <input id="revision" type="text" placeholder="Revision (commit SHA)" required />
+        <button type="submit">Create Gerrit Change</button>
+    </form>
+    <p id="create-change-status" class="meta" style="margin-top:0.5rem;"></p>
+</div>
+
+<div class="card">
+    <h3>Existing Changes</h3>
+    {% if changes.len() == 0 %}
+    <p class="meta">No changes yet.</p>
+    {% else %}
+    <table style="width:100%; border-collapse: collapse; margin-top: 0.75rem;">
+        <thead>
+            <tr>
+                <th style="text-align:left; border-bottom:1px solid #ddd; padding:0.5rem;">ID</th>
+                <th style="text-align:left; border-bottom:1px solid #ddd; padding:0.5rem;">Subject</th>
+                <th style="text-align:left; border-bottom:1px solid #ddd; padding:0.5rem;">Branch</th>
+                <th style="text-align:left; border-bottom:1px solid #ddd; padding:0.5rem;">Status</th>
+                <th style="text-align:left; border-bottom:1px solid #ddd; padding:0.5rem;">Patchset</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for change in changes %}
+            <tr>
+                <td style="padding:0.5rem; border-bottom:1px solid #f0f0f0;">{{ change.id }}</td>
+                <td style="padding:0.5rem; border-bottom:1px solid #f0f0f0;">
+                    <a href="/gerrit/{{ username }}/{{ project_name }}/{{ repo_name }}/changes/{{ change.id }}/ui">{{ change.subject }}</a>
+                </td>
+                <td style="padding:0.5rem; border-bottom:1px solid #f0f0f0;">{{ change.target_branch }}</td>
+                <td style="padding:0.5rem; border-bottom:1px solid #f0f0f0;">{{ change.status }}</td>
+                <td style="padding:0.5rem; border-bottom:1px solid #f0f0f0;">{{ change.current_patch_set }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</div>
+
+<script>
+(() => {
+    const form = document.getElementById('create-change-form');
+    const status = document.getElementById('create-change-status');
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        status.textContent = 'Creating change...';
+        try {
+            const response = await fetch(`/gerrit/{{ username }}/{{ project_name }}/{{ repo_name }}/changes`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    subject: document.getElementById('subject').value,
+                    target_branch: document.getElementById('target_branch').value,
+                    revision: document.getElementById('revision').value,
+                    kind: 'web_upload'
+                })
+            });
+            if (!response.ok) {
+                const text = await response.text();
+                throw new Error(text || `HTTP ${response.status}`);
+            }
+            status.textContent = 'Change created. Reloading list...';
+            window.location.reload();
+        } catch (error) {
+            status.textContent = `Failed to create change: ${error.message}`;
+        }
+    });
+})();
+</script>
+{% endblock %}

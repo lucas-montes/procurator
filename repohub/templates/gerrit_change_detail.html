@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+
+{% block title %}Change {{ detail.change.id }} - Gerrit - {{ repo_name }}{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="/">Users</a>
+    <span>/</span>
+    <a href="/{{ username }}">{{ username }}</a>
+    <span>/</span>
+    <a href="/{{ username }}/{{ project_name }}">{{ project_name }}</a>
+    <span>/</span>
+    <a href="/{{ username }}/{{ project_name }}/{{ repo_name }}">{{ repo_name }}</a>
+    <span>/</span>
+    <a href="/gerrit/{{ username }}/{{ project_name }}/{{ repo_name }}/changes/ui">Gerrit</a>
+    <span>/</span>
+    <span>Change {{ detail.change.id }}</span>
+</div>
+
+<div class="card">
+    <h2>🧾 Change {{ detail.change.id }}</h2>
+    <p><strong>{{ detail.change.subject }}</strong></p>
+    <p class="meta">Status: {{ detail.change.status }} | Branch: {{ detail.change.target_branch }} | Patchset: {{ detail.change.current_patch_set }}</p>
+</div>
+
+<div class="card">
+    <h3>Submit Readiness</h3>
+    <p class="meta">Ready: {% if detail.readiness_ready %}✅ yes{% else %}❌ no{% endif %}</p>
+    <ul>
+        {% for check in detail.readiness_checks %}
+        <li>{{ check.name }}: {% if check.passed %}✅{% else %}❌{% endif %}</li>
+        {% endfor %}
+    </ul>
+</div>
+
+<div class="card">
+    <h3>Approvals</h3>
+    {% if detail.approvals.len() == 0 %}
+    <p class="meta">No approvals yet.</p>
+    {% else %}
+    <table style="width:100%; border-collapse: collapse; margin-top: 0.75rem;">
+        <thead>
+            <tr>
+                <th style="text-align:left; border-bottom:1px solid #ddd; padding:0.5rem;">User ID</th>
+                <th style="text-align:left; border-bottom:1px solid #ddd; padding:0.5rem;">Label</th>
+                <th style="text-align:left; border-bottom:1px solid #ddd; padding:0.5rem;">Value</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for approval in detail.approvals %}
+            <tr>
+                <td style="padding:0.5rem; border-bottom:1px solid #f0f0f0;">{{ approval.user_id }}</td>
+                <td style="padding:0.5rem; border-bottom:1px solid #f0f0f0;">{{ approval.label }}</td>
+                <td style="padding:0.5rem; border-bottom:1px solid #f0f0f0;">{{ approval.value }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h3>Vote</h3>
+    <form id="vote-form" style="display:grid; gap:0.75rem; margin-top:0.75rem;">
+        <input id="reviewer_username" type="text" placeholder="Reviewer username" required />
+        <input id="label" type="text" value="Code-Review" required />
+        <input id="value" type="number" value="1" required />
+        <button type="submit">Apply Vote</button>
+    </form>
+</div>
+
+<div class="card">
+    <h3>Upload Patchset</h3>
+    <form id="patchset-form" style="display:grid; gap:0.75rem; margin-top:0.75rem;">
+        <input id="patch_revision" type="text" placeholder="Revision (commit SHA)" required />
+        <input id="uploader_username" type="text" value="{{ username }}" required />
+        <button type="submit">Upload Patchset</button>
+    </form>
+</div>
+
+<div class="card">
+    <h3>Change Actions</h3>
+    <div style="display:flex; gap:0.75rem; flex-wrap:wrap;">
+        <button id="submit-btn" type="button">Submit</button>
+        <button id="abandon-btn" type="button">Abandon</button>
+        <button id="restore-btn" type="button">Restore</button>
+    </div>
+    <p id="action-status" class="meta" style="margin-top:0.75rem;"></p>
+</div>
+
+<script>
+(() => {
+    const base = `/gerrit/{{ username }}/{{ project_name }}/{{ repo_name }}/changes/{{ detail.change.id }}`;
+    const status = document.getElementById('action-status');
+
+    async function postJson(path, payload) {
+        const response = await fetch(path, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload || {})
+        });
+        if (!response.ok) {
+            const text = await response.text();
+            throw new Error(text || `HTTP ${response.status}`);
+        }
+        return response;
+    }
+
+    document.getElementById('vote-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        status.textContent = 'Applying vote...';
+        try {
+            await postJson(`${base}/votes`, {
+                reviewer_username: document.getElementById('reviewer_username').value,
+                label: document.getElementById('label').value,
+                value: Number(document.getElementById('value').value)
+            });
+            status.textContent = 'Vote saved. Reloading...';
+            window.location.reload();
+        } catch (error) {
+            status.textContent = `Vote failed: ${error.message}`;
+        }
+    });
+
+    document.getElementById('patchset-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        status.textContent = 'Uploading patchset...';
+        try {
+            await postJson(`${base}/patchsets`, {
+                revision: document.getElementById('patch_revision').value,
+                uploader_username: document.getElementById('uploader_username').value,
+                kind: 'web_upload'
+            });
+            status.textContent = 'Patchset uploaded. Reloading...';
+            window.location.reload();
+        } catch (error) {
+            status.textContent = `Patchset upload failed: ${error.message}`;
+        }
+    });
+
+    document.getElementById('submit-btn').addEventListener('click', async () => {
+        status.textContent = 'Submitting change...';
+        try {
+            await postJson(`${base}/submit`, {});
+            status.textContent = 'Submitted. Reloading...';
+            window.location.reload();
+        } catch (error) {
+            status.textContent = `Submit failed: ${error.message}`;
+        }
+    });
+
+    document.getElementById('abandon-btn').addEventListener('click', async () => {
+        status.textContent = 'Abandoning change...';
+        try {
+            await postJson(`${base}/abandon`, {});
+            status.textContent = 'Abandoned. Reloading...';
+            window.location.reload();
+        } catch (error) {
+            status.textContent = `Abandon failed: ${error.message}`;
+        }
+    });
+
+    document.getElementById('restore-btn').addEventListener('click', async () => {
+        status.textContent = 'Restoring change...';
+        try {
+            await postJson(`${base}/restore`, {});
+            status.textContent = 'Restored. Reloading...';
+            window.location.reload();
+        } catch (error) {
+            status.textContent = `Restore failed: ${error.message}`;
+        }
+    });
+})();
+</script>
+{% endblock %}

@@ -1,10 +1,12 @@
 mod config;
-mod database;
-mod models;
 mod services;
-mod web;
+
+pub mod adapters;
+pub mod application;
+pub mod domain;
 
 pub use config::Config;
-pub use database::Database;
+pub use adapters::shared::database::Database;
 pub use services::RepositoryService;
-pub use web::{AppState, routes};
+pub use adapters::gerrit::web::{GerritAppState, routes as gerrit_routes};
+pub use adapters::github::web::{GithubAppState, routes as github_routes};

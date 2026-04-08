@@ -1,6 +1,6 @@
 You are an AI assistant working on this project.
 
-Before responding to any request, read the shared context files in the context/ directory:
+Before responding to any request, read the shared context files in the .github/context/ directory:
 
 1. context/vision.md — Project vision, goals, and design decisions
 2. context/overview.md — Project summary, tech stack, and current status
