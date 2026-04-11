@@ -2,68 +2,60 @@
 //!
 //! Three traits define the abstraction:
 //!
-//! - [`Vmm`] — per-VM client (one instance = one VM = one socket).
+//! - [`Client`] — per-VM client (one instance = one VM = one socket).
 //!   Lifecycle operations: create, boot, shutdown, delete, pause, resume, etc.
 //!
-//! - [`VmmProcess`] — handle to the OS process backing one VM.
+//! - [`Process`] — handle to the OS process backing one VM.
 //!   Allows killing the process and cleaning up resources without knowing
 //!   whether it's a real `tokio::process::Child` or a test stub.
 //!
-//! - [`VmmBackend`] — factory that spawns VMM processes and creates clients.
+//! - [`Backend`] — factory that spawns VMM processes and creates clients.
 //!   The VmManager is generic over this trait so it can be tested without
 //!   touching real hypervisors, sockets, or the filesystem.
 
 use std::fmt::Debug;
-use std::path::PathBuf;
 
-use crate::dto::{VmError, VmSpec};
+use super::{dtos::VmSpec, errors::Error};
 
-// ─── Per-VM client ─────────────────────────────────────────────────────────
-
-/// One Vmm instance = one VM process = one socket. The multi-VM layer
-/// is VmManager, not this trait.
-pub trait Vmm: Send + 'static {
-    /// VMM-specific configuration type (e.g. ChVmConfig)
-    type Config: Debug + Send;
+/// One Vmm instance = one VM process = one socket.
+pub trait Client {
+    /// VMM-specific configuration type (e.g. VmConfig)
+    type Config: Debug;
     /// VMM-specific error type
-    type Error: std::error::Error + Send;
+    type Error: std::error::Error;
 
     /// Create the VM definition (does NOT boot it)
     fn create(
         &self,
         config: Self::Config,
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>>;
 
     /// Boot an already-created VM
-    fn boot(&self) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
+    fn boot(&self) -> impl std::future::Future<Output = Result<(), Self::Error>>;
 
     /// Gracefully shut down the VM
-    fn shutdown(&self) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
+    fn shutdown(&self) -> impl std::future::Future<Output = Result<(), Self::Error>>;
 
     /// Delete the VM definition (must be shut down first)
-    fn delete(&self) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
+    fn delete(&self) -> impl std::future::Future<Output = Result<(), Self::Error>>;
 }
-
-// ─── VMM process handle ───────────────────────────────────────────────────
 
 /// Abstraction over the OS process that backs one VM.
 ///
 /// Production: wraps `tokio::process::Child`.
 /// Tests: a no-op stub that tracks calls.
-pub trait VmmProcess: Send + 'static {
+pub trait Process {
     /// Kill the process. Best-effort — errors are logged, not propagated.
-    fn kill(&mut self) -> impl std::future::Future<Output = Result<(), VmError>> + Send;
+    fn kill(&mut self) -> impl std::future::Future<Output = Result<(), Error>>;
 
     /// Non-blocking check whether the process has exited.
     /// Returns `Ok(Some(status))` if exited, `Ok(None)` if still running.
-    fn try_wait(&mut self) -> Result<Option<std::process::ExitStatus>, VmError>;
+    fn try_wait(&mut self) -> Result<Option<std::process::ExitStatus>, Error>;
 
     /// Clean up resources associated with this process (socket files, TAP
     /// devices, writable disk copies, etc.). Called after `kill`.
-    fn cleanup(&mut self) -> impl std::future::Future<Output = Result<(), VmError>> + Send;
+    fn cleanup(&mut self) -> impl std::future::Future<Output = Result<(), Error>>;
 }
-
-// ─── Backend factory ──────────────────────────────────────────────────────
 
 /// Factory that knows how to spawn VMM processes and build backend-specific
 /// configs from a [`VmSpec`].
@@ -71,11 +63,11 @@ pub trait VmmProcess: Send + 'static {
 /// The VmManager is generic over this trait. In production the backend is
 /// [`CloudHypervisorBackend`](super::cloud_hypervisor::CloudHypervisorBackend);
 /// in tests it can be a mock that returns stub clients and processes.
-pub trait VmmBackend: Send + 'static {
+pub trait Factory {
     /// The per-VM client this backend produces.
-    type Client: Vmm;
+    type Client: Client;
     /// The process handle this backend produces.
-    type Process: VmmProcess;
+    type Process: Process;
 
     /// Ensure the VM's artifacts (kernel, disk image, initrd) are available
     /// on the local filesystem before spawning.
@@ -95,11 +87,8 @@ pub trait VmmBackend: Send + 'static {
     fn prepare(
         &self,
         vm_id: &str,
-        _spec: &VmSpec,
-    ) -> impl std::future::Future<Output = Result<(), VmError>> + Send {
-        let _ = vm_id;
-        std::future::ready(Ok(()))
-    }
+        spec: &VmSpec,
+    ) -> impl std::future::Future<Output = Result<(), Error>>;
 
     /// Spawn a new VMM process for the given VM and return a client + process handle.
     ///
@@ -111,14 +100,14 @@ pub trait VmmBackend: Send + 'static {
     fn spawn(
         &self,
         vm_id: &str,
-    ) -> impl std::future::Future<Output = Result<(Self::Client, Self::Process, PathBuf), VmError>> + Send;
+    ) -> impl std::future::Future<Output = Result<Vmm<Self::Client, Self::Process>, Error>>;
 
     /// Build a backend-specific VM config from the platform-agnostic [`VmSpec`].
     ///
     /// This is where Nix store-path → kernel/disk/initrd resolution happens.
     /// The `vm_id` is provided so the backend can look up per-VM prepared
     /// state (e.g. writable disk path from `prepare()`).
-    fn build_config(&self, vm_id: &str, spec: &VmSpec) -> <Self::Client as Vmm>::Config;
+    fn build_config(&self, vm_id: &str, spec: &VmSpec) -> <Self::Client as Client>::Config;
 
     /// Attach the VM's network interface to the host network.
     ///
@@ -127,11 +116,26 @@ pub trait VmmBackend: Send + 'static {
     /// bridge so the VM can reach the network.
     ///
     /// Default: no-op (for tests or backends without networking).
-    fn attach_network(
-        &self,
-        vm_id: &str,
-    ) -> impl std::future::Future<Output = Result<(), VmError>> + Send {
-        let _ = vm_id;
-        std::future::ready(Ok(()))
+    fn attach_network(&self, vm_id: &str) -> impl std::future::Future<Output = Result<(), Error>>;
+}
+
+/// The main VMM manager struct that holds the client and process for one VM.
+pub struct Vmm<C: Client, P: Process> {
+    client: C,
+    process: P,
+    //TODO: it could hold the id
+}
+
+impl<C: Client, P: Process> Vmm<C, P> {
+    pub fn new(client: C, process: P) -> Self {
+        Self { client, process }
+    }
+
+    pub fn client(&self) -> &C {
+        &self.client
+    }
+
+    pub fn process(&mut self) -> &mut P {
+        &mut self.process
     }
 }

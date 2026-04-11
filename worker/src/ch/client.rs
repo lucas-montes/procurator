@@ -1,0 +1,123 @@
+//! Cloud Hypervisor VMM backend implementation.
+//! It does the requests to the CH API and translates between our internal config and the CH API.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use futures::stream::TryStreamExt;
+use hyper::Uri;
+use hyperlocal::{UnixClientExt, Uri as UnixUri};
+use rtnetlink;
+use serde::Deserialize;
+use serde::de::DeserializeOwned;
+use tokio::process::{Child, Command};
+use tracing::{debug, info, warn};
+
+
+use crate::vmm;
+
+use super::{config::VmConfig, errors::Error};
+
+
+/// Stateless HTTP client to a single CH unix socket.
+pub struct Client {
+    /// Path to the unix socket for the cloud-hypervisor API
+    socket_path: PathBuf,
+    /// HTTP client configured for unix socket communication
+    client: hyper::Client<hyperlocal::UnixConnector>,
+}
+
+impl Client {
+    /// Create a new Client VMM instance
+    pub fn new(socket_path: impl Into<PathBuf>) -> Self {
+        let client = hyper::Client::unix();
+
+        Self {
+            socket_path: socket_path.into(),
+            client,
+        }
+    }
+
+    /// Build the unix socket URI for a given API endpoint
+    fn build_uri(&self, endpoint: &str) -> hyper::Uri {
+        UnixUri::new(&self.socket_path, endpoint).into()
+    }
+}
+
+async fn request<R: DeserializeOwned>(
+    uri: Uri,
+    body: impl Into<hyper::Body>,
+    method: hyper::Method,
+    client: &hyper::Client<hyperlocal::UnixConnector>,
+) -> Result<R, Error> {
+    let req = hyper::Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("Content-Type", "application/json")
+        .body(body.into())
+        .map_err(|e| Error::Communication(e.to_string()))?;
+
+    let resp = client
+        .request(req)
+        .await
+        .map_err(|e| Error::Communication(e.to_string()))?;
+
+    let status = resp.status();
+
+    let bytes = hyper::body::to_bytes(resp.into_body())
+        .await
+        .map_err(|e| Error::Communication(e.to_string()))?;
+
+    if !status.is_success() {
+        let msg = String::from_utf8_lossy(&bytes);
+        //TODO: map the errors and so on into enums
+        return Err(Error::OperationFailed(msg.to_string()));
+    }
+
+    serde_json::from_slice::<R>(&bytes).map_err(|e| Error::Communication(e.to_string()))
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct EmptyBody;
+
+impl vmm::Client for Client {
+    type Config = VmConfig;
+    type Error = Error;
+
+    async fn create(&self, config: Self::Config) -> Result<(), Self::Error> {
+        let body = serde_json::to_string(&config)?;
+        debug!(config_json = %body, "vm.create request");
+
+        let uri = self.build_uri("/api/v1/vm.create");
+        let _ = request::<EmptyBody>(uri, body, hyper::Method::PUT, &self.client).await?;
+
+        info!("vm.create succeeded");
+        Ok(())
+    }
+
+    async fn boot(&self) -> Result<(), Self::Error> {
+        debug!("vm.boot request");
+        let uri = self.build_uri("/api/v1/vm.boot");
+        let _ = request::<EmptyBody>(uri, hyper::Body::empty(), hyper::Method::PUT, &self.client)
+            .await?;
+
+        info!("vm.boot succeeded");
+        Ok(())
+    }
+
+    async fn shutdown(&self) -> Result<(), Self::Error> {
+        let uri = self.build_uri("/api/v1/vm.shutdown");
+        let _ = request::<EmptyBody>(uri, hyper::Body::empty(), hyper::Method::PUT, &self.client)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn delete(&self) -> Result<(), Self::Error> {
+        let uri = self.build_uri("/api/v1/vm.delete");
+        let _ = request::<EmptyBody>(uri, hyper::Body::empty(), hyper::Method::PUT, &self.client)
+            .await?;
+
+        Ok(())
+    }
+}

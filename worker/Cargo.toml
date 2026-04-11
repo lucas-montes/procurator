@@ -13,6 +13,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 commands.workspace = true
 uuid.workspace = true
+sqlx.workspace = true
 
 # low-level netlink library used for attaching TAPs to bridges without spawning `ip`
 rtnetlink = "0.11"

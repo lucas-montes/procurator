@@ -1,26 +1,23 @@
-//! Stateless RPC adapter. Translates Cap'n Proto calls into VmCommands,
-//! sends them to the Node via mpsc channel, and fills responses from oneshot replies.
-//!
-//! Holds only a `CommandSender` (cloneable `mpsc::Sender` wrapper). No VMM, no VM state.
-
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::mpsc::Sender};
 
 use capnp::message::ReaderOptions;
-use capnp_rpc::{RpcSystem, rpc_twoparty_capnp, twoparty};
+use capnp_rpc::{RpcSystem, pry, rpc_twoparty_capnp, twoparty};
 use futures::AsyncReadExt;
 use tracing::{debug, info, instrument};
 
-use crate::dto::{CommandPayload, CommandResponse, CommandSender, VmSpec};
+
+use super::vmm::{Command,VmSpecRef, Factory, Reader, Registry};
 
 #[derive(Clone)]
-pub struct Server {
-    tx: CommandSender,
+pub struct Server<F: Factory + Clone + 'static> {
+    state: Registry<F, Reader>,
+    factory: F,
+    tx: Sender<Command>,
 }
 
-impl Server {
-    #[must_use]
-    pub fn new(tx: CommandSender) -> Self {
-        Server { tx }
+impl<F: Factory + Clone + 'static> Server<F> {
+    pub fn new(state: Registry<F, Reader>, factory: F, tx: Sender<Command>) -> Self {
+        Self { state, factory, tx }
     }
 
     /// # Errors
@@ -54,162 +51,52 @@ impl Server {
     }
 }
 
-impl commands::worker_capnp::worker::Server for Server {
-    fn read(
-        &mut self,
-        _params: commands::worker_capnp::worker::ReadParams,
-        mut results: commands::worker_capnp::worker::ReadResults,
-    ) -> ::capnp::capability::Promise<(), ::capnp::Error> {
-        debug!("Worker.read called");
-
-        let tx = self.tx.clone();
-        ::capnp::capability::Promise::from_future(async move {
-            let resp = tx
-                .request(CommandPayload::GetWorkerStatus)
-                .await
-                .map_err(|e| capnp::Error::failed(e.to_string()))?;
-
-            if let CommandResponse::WorkerInfo(info) = resp {
-                if let Ok(mut data) = results.get().get_data() {
-                    data.set_id(info.id());
-                    data.set_healthy(info.healthy());
-                    data.set_generation(info.generation());
-                    data.set_running_vms(info.running_vms());
-                }
-            } else {
-                return Err(capnp::Error::failed(
-                    "unexpected response for GetWorkerStatus".to_string(),
-                ));
-            }
-
-            Ok(())
-        })
-    }
-
-    fn list_vms(
-        &mut self,
-        _params: commands::worker_capnp::worker::ListVmsParams,
-        mut results: commands::worker_capnp::worker::ListVmsResults,
-    ) -> ::capnp::capability::Promise<(), ::capnp::Error> {
-        debug!("Worker.list_vms called");
-
-        let tx = self.tx.clone();
-        ::capnp::capability::Promise::from_future(async move {
-            let resp = tx
-                .request(CommandPayload::List)
-                .await
-                .map_err(|e| capnp::Error::failed(e.to_string()))?;
-
-            if let CommandResponse::VmList(vm_infos) = resp {
-                let mut vms = results.get().init_vms(vm_infos.len() as u32);
-                for (i, info) in vm_infos.iter().enumerate() {
-                    let mut vm_status = vms.reborrow().get(i as u32);
-                    vm_status.set_id(info.id());
-                    vm_status.set_worker_id(info.worker_id());
-                    vm_status.set_desired_hash(info.desired_hash());
-                    vm_status.set_observed_hash(info.observed_hash());
-                    vm_status.set_status(info.status().as_str());
-                    vm_status.set_drifted(
-                        info.status()
-                            .is_drifted(info.desired_hash(), info.observed_hash()),
-                    );
-                    let mut metrics = vm_status.init_metrics();
-                    metrics.set_cpu_usage(info.metrics().cpu_usage);
-                    metrics.set_memory_usage(info.metrics().memory_usage);
-                    metrics.set_network_rx_bytes(info.metrics().network_rx_bytes);
-                    metrics.set_network_tx_bytes(info.metrics().network_tx_bytes);
-                }
-            } else {
-                return Err(capnp::Error::failed(
-                    "unexpected response for List".to_string(),
-                ));
-            }
-
-            Ok(())
-        })
-    }
-
+impl<F: Factory + Clone + 'static> commands::worker_capnp::worker::Server for Server<F> {
     fn create_vm(
         &mut self,
-        params: commands::worker_capnp::worker::CreateVmParams,
-        mut results: commands::worker_capnp::worker::CreateVmResults,
-    ) -> ::capnp::capability::Promise<(), ::capnp::Error> {
-        debug!("Worker.create_vm called");
+        request: commands::worker_capnp::worker::CreateVmParams,
+        mut response: commands::worker_capnp::worker::CreateVmResults,
+    ) -> capnp::capability::Promise<(), capnp::Error> {
+        let vm_spec = pry!(pry!(request.get()).get_spec());
 
-        let tx = self.tx.clone();
-        ::capnp::capability::Promise::from_future(async move {
-            let spec_reader = params.get()?.get_spec()?;
+        let spec = pry!(VmSpecRef::try_from(vm_spec));
 
-            let mut domains = Vec::new();
-            for d in spec_reader.get_network_allowed_domains()? {
-                domains.push(
-                    d?.to_str()
-                        .map_err(|e| capnp::Error::failed(e.to_string()))?
-                        .to_string(),
-                );
-            }
+        self.factory.
 
-            let to_string = |r: capnp::text::Reader<'_>| -> Result<String, capnp::Error> {
-                r.to_str()
-                    .map(std::string::ToString::to_string)
-                    .map_err(|e| capnp::Error::failed(e.to_string()))
-            };
+        debug!(vm_id = %vm_id, "Received create_vm request");
+        if self.tx.send(Command::Create).is_err() {
+            return capnp::capability::Promise::err(capnp::Error::failed(
+                "Failed to send create command to node".into(),
+            ));
+        }
 
-            let spec = VmSpec::new(
-                to_string(spec_reader.get_toplevel()?)?,
-                to_string(spec_reader.get_kernel_path()?)?,
-                to_string(spec_reader.get_initrd_path()?)?,
-                to_string(spec_reader.get_disk_image_path()?)?,
-                to_string(spec_reader.get_cmdline()?)?,
-                spec_reader.get_cpu(),
-                spec_reader.get_memory_mb(),
-                domains,
-            );
+        response.get().set_id(id);
 
-            let resp = tx
-                .request(CommandPayload::Create(spec))
-                .await
-                .map_err(|e| capnp::Error::failed(e.to_string()))?;
-
-            if let CommandResponse::VmId(id) = resp {
-                results.get().set_id(&id);
-                Ok(())
-            } else {
-                Err(capnp::Error::failed(
-                    "unexpected response for Create".into(),
-                ))
-            }
-        })
+        capnp::capability::Promise::ok(())
     }
 
     fn delete_vm(
         &mut self,
-        params: commands::worker_capnp::worker::DeleteVmParams,
-        _results: commands::worker_capnp::worker::DeleteVmResults,
-    ) -> ::capnp::capability::Promise<(), ::capnp::Error> {
-        debug!("Worker.delete_vm called");
+        request: commands::worker_capnp::worker::DeleteVmParams,
+        _: commands::worker_capnp::worker::DeleteVmResults,
+    ) -> capnp::capability::Promise<(), capnp::Error> {
+        let vm_id = pry!(pry!(request.get()).get_id());
+        capnp::capability::Promise::ok(())
+    }
 
-        let tx = self.tx.clone();
-        ::capnp::capability::Promise::from_future(async move {
-            let id = params
-                .get()?
-                .get_id()?
-                .to_str()
-                .map_err(|e| capnp::Error::failed(e.to_string()))?
-                .to_string();
+    fn list_vms(
+        &mut self,
+        _: commands::worker_capnp::worker::ListVmsParams,
+        _: commands::worker_capnp::worker::ListVmsResults,
+    ) -> capnp::capability::Promise<(), capnp::Error> {
+        capnp::capability::Promise::ok(())
+    }
 
-            let resp = tx
-                .request(CommandPayload::Delete(id))
-                .await
-                .map_err(|e| capnp::Error::failed(e.to_string()))?;
-
-            if let CommandResponse::Unit = resp {
-                Ok(())
-            } else {
-                Err(capnp::Error::failed(
-                    "unexpected response for Delete".into(),
-                ))
-            }
-        })
+    fn read(
+        &mut self,
+        _: commands::worker_capnp::worker::ReadParams,
+        _: commands::worker_capnp::worker::ReadResults,
+    ) -> capnp::capability::Promise<(), capnp::Error> {
+        capnp::capability::Promise::ok(())
     }
 }
