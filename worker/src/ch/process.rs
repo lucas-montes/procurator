@@ -4,10 +4,10 @@ use futures::stream::TryStreamExt;
 
 use rtnetlink;
 
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 use tracing::{debug, info, warn};
 
-use crate::{vmm, vmm::Error as VmError};
+use crate::vmm::Error as VmError;
 
 
 pub struct Process {
@@ -20,21 +20,21 @@ pub struct Process {
     tap_name: Option<String>,
 }
 
-impl vmm::Process for Process {
-    async fn kill(&mut self) -> Result<(), VmError> {
+impl Process {
+    pub async fn kill(&mut self) -> Result<(), VmError> {
         self.child
             .kill()
             .await
             .map_err(|e| VmError::ProcessFailed(format!("Failed to kill CH process: {e}")))
     }
 
-    fn try_wait(&mut self) -> Result<Option<std::process::ExitStatus>, VmError> {
+    pub fn try_wait(&mut self) -> Result<Option<std::process::ExitStatus>, VmError> {
         self.child
             .try_wait()
             .map_err(|e| VmError::ProcessFailed(format!("Failed to check CH process: {e}")))
     }
 
-    async fn cleanup(&mut self) -> Result<(), VmError> {
+    pub async fn cleanup(&mut self) -> Result<(), VmError> {
         // Log CH output for post-mortem debugging before cleaning up.
         let ch_log = self.vm_dir.join("cloud-hypervisor.log");
         if ch_log.exists() {

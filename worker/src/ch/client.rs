@@ -1,20 +1,13 @@
 //! Cloud Hypervisor VMM backend implementation.
 //! It does the requests to the CH API and translates between our internal config and the CH API.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
-use futures::stream::TryStreamExt;
 use hyper::Uri;
 use hyperlocal::{UnixClientExt, Uri as UnixUri};
-use rtnetlink;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
-use tokio::process::{Child, Command};
-use tracing::{debug, info, warn};
-
-
-use crate::vmm;
+use tracing::{debug, info};
 
 use super::{config::VmConfig, errors::Error};
 
@@ -80,11 +73,8 @@ async fn request<R: DeserializeOwned>(
 #[derive(Debug, Deserialize, Default)]
 struct EmptyBody;
 
-impl vmm::Client for Client {
-    type Config = VmConfig;
-    type Error = Error;
-
-    async fn create(&self, config: Self::Config) -> Result<(), Self::Error> {
+impl Client {
+    pub async fn create(&self, config: VmConfig) -> Result<(), Error> {
         let body = serde_json::to_string(&config)?;
         debug!(config_json = %body, "vm.create request");
 
@@ -95,7 +85,7 @@ impl vmm::Client for Client {
         Ok(())
     }
 
-    async fn boot(&self) -> Result<(), Self::Error> {
+    pub async fn boot(&self) -> Result<(), Error> {
         debug!("vm.boot request");
         let uri = self.build_uri("/api/v1/vm.boot");
         let _ = request::<EmptyBody>(uri, hyper::Body::empty(), hyper::Method::PUT, &self.client)
@@ -105,7 +95,7 @@ impl vmm::Client for Client {
         Ok(())
     }
 
-    async fn shutdown(&self) -> Result<(), Self::Error> {
+    pub async fn shutdown(&self) -> Result<(), Error> {
         let uri = self.build_uri("/api/v1/vm.shutdown");
         let _ = request::<EmptyBody>(uri, hyper::Body::empty(), hyper::Method::PUT, &self.client)
             .await?;
@@ -113,7 +103,7 @@ impl vmm::Client for Client {
         Ok(())
     }
 
-    async fn delete(&self) -> Result<(), Self::Error> {
+    pub async fn delete(&self) -> Result<(), Error> {
         let uri = self.build_uri("/api/v1/vm.delete");
         let _ = request::<EmptyBody>(uri, hyper::Body::empty(), hyper::Method::PUT, &self.client)
             .await?;
