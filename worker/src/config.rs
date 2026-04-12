@@ -6,6 +6,8 @@ use std::{
 
 use serde::Deserialize;
 
+use crate::vmm::Factory;
+
 #[derive(Debug, Deserialize)]
 pub struct CloudHypervisorSection {
     binary_path: PathBuf,
@@ -15,14 +17,14 @@ pub struct CloudHypervisorSection {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct Config {
+pub struct Config<F: Factory> {
     pub listen_addr: SocketAddr,
     master_addr: SocketAddr,
     pub health_tick_millis: NonZeroU64,
-    cloud_hypervisor: CloudHypervisorSection,
+    pub vmm: F::Config,
 }
 
-impl Config {
+impl<F: Factory> Config<F> {
     pub fn from_file(path: impl AsRef<Path> + std::fmt::Debug) -> Self {
         let contents = std::fs::read(&path).unwrap_or_else(|e| {
             tracing::error!(path = ?path, error = %e, "Could not read config");

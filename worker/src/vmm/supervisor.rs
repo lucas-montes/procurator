@@ -34,8 +34,6 @@ pub struct Supervisor<F: Factory> {
 }
 
 impl<F: Factory> Supervisor<F> {
-    const HEALTH_TICK: Duration = Duration::from_secs(5);
-
     pub fn new(state: Registry<F, Writer>, rx: Receiver<Command<F>>) -> Self {
         Self { state, rx }
     }

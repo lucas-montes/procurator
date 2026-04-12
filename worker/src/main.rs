@@ -22,5 +22,5 @@ async fn main() {
         .map(PathBuf::from)
         .expect("Config path must be provided as the first argument");
 
-    worker::main(config_path).await;
+    worker::ch_main(config_path).await;
 }

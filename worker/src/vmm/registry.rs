@@ -1,7 +1,7 @@
 use super::interfaces::Factory;
 use crate::database::Database;
 use std::{collections::HashMap, marker::PhantomData, sync::Arc};
-use tokio::sync::{RwLock, RwLockReadGuard};
+use tokio::sync::{OwnedRwLockReadGuard, RwLock};
 
 /// Type to identify what the registry is allowed to do.
 #[derive(Clone)]
@@ -58,9 +58,9 @@ impl<F: Factory, Side> Clone for Registry<F, Side> {
 
 //TODO: this implementation is shit
 impl<F: Factory> Registry<F, Reader> {
-    // fn get(&self) -> RwLockReadGuard<'_, HashMap<String, <F as Factory>::VmHandle>> {
-    //     self.ephemeral.read().unwrap()
-    // }
+    async fn get(self) -> OwnedRwLockReadGuard<HashMap<String, <F as Factory>::VmHandle>> {
+        self.ephemeral.read_owned().await
+    }
 
     async fn with_handle<R>(&self, id: &str, f: impl FnOnce(Option<&F::VmHandle>) -> R) -> R {
         let guard = self.ephemeral.read().await;

@@ -1,8 +1,8 @@
-mod ch;
 mod config;
 mod database;
 mod server;
 mod vmm;
+mod ch;
 
 use std::path::Path;
 use tokio::sync::mpsc;
@@ -11,22 +11,27 @@ use server::Server;
 use tokio::join;
 use tokio::task;
 
-use crate::config::Config;
-use crate::vmm::Factory;
-use crate::vmm::Registry;
-use crate::vmm::Supervisor;
+use config::Config;
+use vmm::{Supervisor, Registry, Factory};
 
-pub async fn main<F>(path: impl AsRef<Path> + std::fmt::Debug, factory: F)
+
+pub async fn ch_main(path: impl AsRef<Path> + std::fmt::Debug) {
+    main::<ch::Factory>(path).await;
+}
+
+async fn main<F>(path: impl AsRef<Path> + std::fmt::Debug)
 where
     F: Factory + Clone + 'static,
 {
-    let config = Config::from_file(path);
+    let config: Config<F> = Config::from_file(path);
     let db = database::Database::new("sqlite::memory:").await;
 
     let registry: Registry<F, _> = Registry::new(db);
     let (reader_registry, writer_registry) = registry.split();
 
     let (tx, rx) = mpsc::channel(100);
+
+    let factory = F::new(config.vmm);
 
     let server = Server::new(reader_registry, factory, tx);
     let supervisor = Supervisor::new(writer_registry, rx);
