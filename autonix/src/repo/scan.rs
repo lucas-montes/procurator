@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::mapping::{
-    TaskFile, CiCdFile, ContainerFile, Language, LockFile, ManifestFile, ParseError, Parseable
+    CiCdFile, ContainerFile, Language, LockFile, ManifestFile, ParseError, Parseable, TaskFile,
 };
 
 const IGNORED_DIR_BASENAMES: [&str; 32] = [

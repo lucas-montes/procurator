@@ -81,7 +81,6 @@ impl RepoPath {
         format!("git@{}:{}/{}.git", domain, self.username, self.repo_name)
     }
 
-
     /// Build a Nix-compatible git+file:// URL (without revision)
     pub fn to_nix_url(&self) -> String {
         format!("git+file://{}", self.bare_repo_path().display())
@@ -143,7 +142,11 @@ pub fn clone_into_bare(bare_path: &Path, remote_url: &str) -> Result<()> {
         return Err(RepoError::AlreadyExists(bare_path.display().to_string()));
     }
 
-    info!("Cloning remote '{}' into bare repository at: {}", remote_url, bare_path.display());
+    info!(
+        "Cloning remote '{}' into bare repository at: {}",
+        remote_url,
+        bare_path.display()
+    );
 
     let output = Command::new("git")
         .args(["clone", "--bare", remote_url, &bare_path.to_string_lossy()])
@@ -151,7 +154,10 @@ pub fn clone_into_bare(bare_path: &Path, remote_url: &str) -> Result<()> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(RepoError::GitError(format!("Failed to clone repository: {}", stderr)));
+        return Err(RepoError::GitError(format!(
+            "Failed to clone repository: {}",
+            stderr
+        )));
     }
 
     Ok(())
@@ -182,7 +188,6 @@ mod tests {
         assert_eq!(path.repo_name(), "myrepo");
     }
 
-
     #[test]
     fn test_repo_path_bare_repo_path_various_names() {
         // Simple name
@@ -191,15 +196,24 @@ mod tests {
 
         // Name with hyphens
         let path = RepoPath::new("/base", "user", "my-repo");
-        assert_eq!(path.bare_repo_path(), PathBuf::from("/base/user/my-repo.git"));
+        assert_eq!(
+            path.bare_repo_path(),
+            PathBuf::from("/base/user/my-repo.git")
+        );
 
         // Name with underscores
         let path = RepoPath::new("/base", "user", "my_repo");
-        assert_eq!(path.bare_repo_path(), PathBuf::from("/base/user/my_repo.git"));
+        assert_eq!(
+            path.bare_repo_path(),
+            PathBuf::from("/base/user/my_repo.git")
+        );
 
         // Name with numbers
         let path = RepoPath::new("/base", "user", "repo123");
-        assert_eq!(path.bare_repo_path(), PathBuf::from("/base/user/repo123.git"));
+        assert_eq!(
+            path.bare_repo_path(),
+            PathBuf::from("/base/user/repo123.git")
+        );
     }
 
     #[test]
@@ -213,10 +227,19 @@ mod tests {
     fn test_repo_path_to_ssh_url_various_domains() {
         let path = RepoPath::new("/base", "user", "repo");
 
-        assert_eq!(path.to_ssh_url("github.com"), "git@github.com:user/repo.git");
-        assert_eq!(path.to_ssh_url("gitlab.com"), "git@gitlab.com:user/repo.git");
+        assert_eq!(
+            path.to_ssh_url("github.com"),
+            "git@github.com:user/repo.git"
+        );
+        assert_eq!(
+            path.to_ssh_url("gitlab.com"),
+            "git@gitlab.com:user/repo.git"
+        );
         assert_eq!(path.to_ssh_url("localhost"), "git@localhost:user/repo.git");
-        assert_eq!(path.to_ssh_url("192.168.1.1"), "git@192.168.1.1:user/repo.git");
+        assert_eq!(
+            path.to_ssh_url("192.168.1.1"),
+            "git@192.168.1.1:user/repo.git"
+        );
     }
 
     #[test]
@@ -225,7 +248,6 @@ mod tests {
         let nix_url = path.to_nix_url();
         assert_eq!(nix_url, "git+file:///base/path/testuser/myrepo.git");
     }
-
 
     #[test]
     fn test_repo_path_to_nix_url_with_various_commits() {
@@ -237,9 +259,11 @@ mod tests {
 
         // Full commit hash
         let url = path.to_nix_url_with_rev("abc123def456789012345678901234567890abcd");
-        assert_eq!(url, "git+file:///base/user/repo.git?rev=abc123def456789012345678901234567890abcd");
+        assert_eq!(
+            url,
+            "git+file:///base/user/repo.git?rev=abc123def456789012345678901234567890abcd"
+        );
     }
-
 
     #[test]
     fn test_repo_path_display() {
@@ -251,24 +275,39 @@ mod tests {
     #[test]
     fn test_repo_path_with_special_characters_in_username() {
         let path = RepoPath::new("/base", "user-name", "repo");
-        assert_eq!(path.bare_repo_path(), PathBuf::from("/base/user-name/repo.git"));
+        assert_eq!(
+            path.bare_repo_path(),
+            PathBuf::from("/base/user-name/repo.git")
+        );
 
         let path = RepoPath::new("/base", "user_name", "repo");
-        assert_eq!(path.bare_repo_path(), PathBuf::from("/base/user_name/repo.git"));
+        assert_eq!(
+            path.bare_repo_path(),
+            PathBuf::from("/base/user_name/repo.git")
+        );
 
         let path = RepoPath::new("/base", "user.name", "repo");
-        assert_eq!(path.bare_repo_path(), PathBuf::from("/base/user.name/repo.git"));
+        assert_eq!(
+            path.bare_repo_path(),
+            PathBuf::from("/base/user.name/repo.git")
+        );
     }
 
     #[test]
     fn test_repo_path_complex_paths() {
         // Test with path containing dots
         let path = RepoPath::new("/base", "user", "my.repo.name");
-        assert_eq!(path.bare_repo_path(), PathBuf::from("/base/user/my.repo.name.git"));
+        assert_eq!(
+            path.bare_repo_path(),
+            PathBuf::from("/base/user/my.repo.name.git")
+        );
 
         // Test with path containing numbers and special chars
         let path = RepoPath::new("/base", "user123", "repo-v2.0");
-        assert_eq!(path.bare_repo_path(), PathBuf::from("/base/user123/repo-v2.0.git"));
+        assert_eq!(
+            path.bare_repo_path(),
+            PathBuf::from("/base/user123/repo-v2.0.git")
+        );
     }
 
     #[test]
@@ -283,7 +322,6 @@ mod tests {
         let url = path.to_nix_url_with_rev("v1.0.0");
         assert!(url.contains("?rev=v1.0.0"));
     }
-
 
     #[test]
     fn test_repo_path_all_url_methods() {

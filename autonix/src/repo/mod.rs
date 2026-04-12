@@ -3,9 +3,9 @@
 // is equivalent to a single service that will output a single flake. They are different from
 // projects which are a collection of repos.
 
-mod parser;
-mod scan;
 mod analysis;
 mod flake;
+mod parser;
+mod scan;
 
 pub use parser::Parser;

@@ -1,6 +1,5 @@
-use std::{iter::Peekable, str::FromStr};
 use serde::Serialize;
-
+use std::{iter::Peekable, str::FromStr};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum Version {
@@ -12,7 +11,7 @@ pub enum Version {
 
 impl Version {
     //TOOD: avoid converting to String, again
-    pub fn to_nix(&self)->String {
+    pub fn to_nix(&self) -> String {
         match self {
             Version::SemVer(semver) => format!("{:?}", semver),
             Version::Docker(docker_str) => docker_str.to_owned(),
@@ -21,7 +20,7 @@ impl Version {
                 let mut versions_str = String::from("[ ");
                 for v in versions {
                     versions_str.push_str(&v.to_nix());
-                        versions_str.push(' ');
+                    versions_str.push(' ');
                 }
                 versions_str.push(']');
                 versions_str
@@ -42,7 +41,6 @@ impl Default for Version {
         Self::Unknown(None)
     }
 }
-
 
 //TODO: remove the clone
 
@@ -415,8 +413,7 @@ mod tests {
 
     #[test]
     fn test_version_with_build() {
-        let SemVerVersion::Build { core, build } =
-            SemVerVersion::from_str("1.2.3+001").unwrap()
+        let SemVerVersion::Build { core, build } = SemVerVersion::from_str("1.2.3+001").unwrap()
         else {
             panic!("Expected Build")
         };
@@ -428,8 +425,11 @@ mod tests {
 
     #[test]
     fn test_version_with_pre_release_and_build() {
-        let SemVerVersion::PreReleaseAndBuild { core, pre_release, build } =
-            SemVerVersion::from_str("1.2.3-alpha.1+001").unwrap()
+        let SemVerVersion::PreReleaseAndBuild {
+            core,
+            pre_release,
+            build,
+        } = SemVerVersion::from_str("1.2.3-alpha.1+001").unwrap()
         else {
             panic!("Expected PreReleaseAndBuild")
         };

@@ -125,7 +125,14 @@ fn parse_makefile(content: &str, result: &mut ParsedTaskFile) {
         }
 
         // Extract common system dependencies from variable assignments or commands
-        for dep in ["pkg-config", "openssl", "curl", "postgresql", "sqlite", "zlib"] {
+        for dep in [
+            "pkg-config",
+            "openssl",
+            "curl",
+            "postgresql",
+            "sqlite",
+            "zlib",
+        ] {
             if trimmed.to_lowercase().contains(dep) {
                 if !result.system_deps.contains(&dep.to_string()) {
                     result.system_deps.push(dep.to_string());

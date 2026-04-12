@@ -9,7 +9,6 @@ use tracing::{debug, info, warn};
 
 use crate::vmm::Error as VmError;
 
-
 pub struct Process {
     child: Child,
     socket_path: PathBuf,

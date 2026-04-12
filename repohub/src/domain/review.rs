@@ -100,7 +100,9 @@ impl ReviewPolicy {
     }
 
     pub fn label_definition(&self, name: &str) -> Option<&LabelDefinition> {
-        self.labels.iter().find(|definition| definition.name == name)
+        self.labels
+            .iter()
+            .find(|definition| definition.name == name)
     }
 }
 
@@ -123,7 +125,11 @@ pub struct SubmitReadiness {
 }
 
 impl SubmitReadiness {
-    pub fn evaluate(policy: &ReviewPolicy, approvals: &[ApprovalRecord], verified_ok: bool) -> Self {
+    pub fn evaluate(
+        policy: &ReviewPolicy,
+        approvals: &[ApprovalRecord],
+        verified_ok: bool,
+    ) -> Self {
         let mut maxima: HashMap<&str, i32> = HashMap::new();
         for record in approvals {
             let current = maxima

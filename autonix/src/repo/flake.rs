@@ -23,7 +23,6 @@ pub struct Configuration<'write> {
     outputs: Outputs,
 }
 
-
 impl<'write> From<Analysis> for Configuration<'write> {
     fn from(analysis: Analysis) -> Self {
         // Filter out empty RepoAnalysis (no packages, no checks, no meaningful data)
@@ -258,12 +257,10 @@ impl ServiceDefinition {
 /// Project metadata
 #[derive(Debug, Serialize)]
 struct ProjectMetadata {
-
     name: String,
     languages: Vec<Language>,
     package_managers: Vec<PackageManager>,
 }
-
 
 fn collect_packages(repos: &[&RepoAnalysis]) -> HashMap<String, PackageOutput> {
     let mut packages = HashMap::new();
@@ -382,11 +379,7 @@ fn collect_checks(repos: &[&RepoAnalysis]) -> HashMap<String, CheckOutput> {
                 command: check.command().to_string(),
                 toolchain: ToolchainConfig::from(check.toolchain()),
                 dependencies: extract_dep_names(check.dependencies()),
-                services: check
-                    .services()
-                    .iter()
-                    .map(ServiceConfig::from)
-                    .collect(),
+                services: check.services().iter().map(ServiceConfig::from).collect(),
             };
 
             checks.insert(check_name, check_output);
@@ -411,7 +404,7 @@ fn extract_extensions(repos: &[&RepoAnalysis]) -> ProcuratorExtensions {
                 name: service.name().to_string(),
                 version: Some(service.version().to_nix()),
                 port: infer_default_port(service.name()),
-                health_check: None, // TODO: Extract from docker-compose
+                health_check: None,     // TODO: Extract from docker-compose
                 depends_on: Vec::new(), // TODO: Extract dependencies
                 env_vars: HashMap::new(),
             };
@@ -497,5 +490,4 @@ mod tests {
             .join("fixtures")
             .join("analysis")
     }
-
 }

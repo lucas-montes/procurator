@@ -1,5 +1,5 @@
 mod mapping;
-mod repo;
 mod project;
+mod repo;
 
 pub use repo::Parser;

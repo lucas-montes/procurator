@@ -3,7 +3,9 @@ use tokio::sync::{
     oneshot::{self, Receiver},
 };
 
-pub enum NodeEvent{Apply}
+pub enum NodeEvent {
+    Apply,
+}
 
 pub enum NodeError {}
 
@@ -30,9 +32,7 @@ impl NodeMessage {
     }
 }
 
-
 pub struct NodeReceiver(Receiver<NodeResult>);
-
 
 #[derive(Clone)]
 pub struct NodeMessenger(Sender<NodeMessage>);

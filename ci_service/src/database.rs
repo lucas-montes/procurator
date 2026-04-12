@@ -62,7 +62,6 @@ pub struct BuildRow {
     finished_at: Option<String>,
 }
 
-
 // Structured summary placeholder - stores arbitrary JSON produced by the runner
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BuildSummary;
@@ -146,11 +145,12 @@ impl Database {
         .execute(&self.pool)
         .await?;
 
-
         // Create indexes for performance
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_builds_status_created ON builds(status, created_at)")
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_builds_status_created ON builds(status, created_at)",
+        )
+        .execute(&self.pool)
+        .await?;
 
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_builds_repo_path ON builds(repo_path)")
             .execute(&self.pool)

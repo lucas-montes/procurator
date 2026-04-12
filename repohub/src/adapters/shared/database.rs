@@ -5,7 +5,7 @@
 
 use std::{ops::Deref, str::FromStr};
 
-use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
+use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
 use tracing::info;
 
 #[derive(Debug)]
@@ -468,11 +468,7 @@ impl Database {
         Ok(result.last_insert_rowid())
     }
 
-    pub async fn get_repository(
-        &self,
-        project_id: i64,
-        repo_name: &str,
-    ) -> Result<RepositoryRow> {
+    pub async fn get_repository(&self, project_id: i64, repo_name: &str) -> Result<RepositoryRow> {
         sqlx::query_as::<_, RepositoryRow>(
             r#"
             SELECT id, project_id, name, git_url, created_at

@@ -20,7 +20,6 @@ pub async fn main<F>(path: impl AsRef<Path> + std::fmt::Debug, factory: F)
 where
     F: Factory + Clone + 'static,
 {
-
     let config = Config::from_file(path);
     let db = database::Database::new("sqlite::memory:").await;
 

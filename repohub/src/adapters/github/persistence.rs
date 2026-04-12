@@ -58,7 +58,8 @@ impl GithubPort for SqliteGithubRepository {
     fn list_projects_by_owner<'a>(
         &'a self,
         owner_id: i64,
-    ) -> PortFuture<'a, Result<Vec<crate::adapters::shared::database::ProjectRow>, GithubError>> {
+    ) -> PortFuture<'a, Result<Vec<crate::adapters::shared::database::ProjectRow>, GithubError>>
+    {
         Box::pin(async move {
             self.db
                 .list_projects_by_owner(owner_id)
@@ -97,10 +98,8 @@ impl GithubPort for SqliteGithubRepository {
     fn list_repositories_by_project<'a>(
         &'a self,
         project_id: i64,
-    ) -> PortFuture<
-        'a,
-        Result<Vec<crate::adapters::shared::database::RepositoryRow>, GithubError>,
-    > {
+    ) -> PortFuture<'a, Result<Vec<crate::adapters::shared::database::RepositoryRow>, GithubError>>
+    {
         Box::pin(async move {
             self.db
                 .list_repositories_by_project(project_id)

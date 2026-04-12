@@ -102,7 +102,7 @@ struct ClusterArgs {
 /// Declarative cluster lifecycle commands
 #[derive(Debug, Subcommand)]
 enum ClusterCommands {
-    Status
+    Status,
 }
 
 /// Arguments for init command

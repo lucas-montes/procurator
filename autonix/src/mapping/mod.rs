@@ -1,19 +1,19 @@
 // Enums mapping from files to their respective types in the Autonix system.
 
-mod tasks;
+mod cicdfiles;
+mod containers;
+mod languages;
 mod lockfiles;
 mod manifests;
-mod languages;
 mod outils;
-mod containers;
+mod tasks;
 mod version;
-mod cicdfiles;
 
-pub use version::{Version, SemVerParser};
 pub use cicdfiles::{CiCdFile, CiJob, CiService, CiStep, ParsedCiCdFile};
 pub use containers::{ContainerFile, ContainerService, ParsedContainerFile};
 pub use languages::{Language, PackageManager};
-pub use tasks::{TaskFile, BuildSystem, ParsedTaskFile};
 pub use lockfiles::LockFile;
 pub use manifests::{ManifestFile, ParsedManifest};
 pub use outils::{ParseError, Parseable};
+pub use tasks::{BuildSystem, ParsedTaskFile, TaskFile};
+pub use version::{SemVerParser, Version};

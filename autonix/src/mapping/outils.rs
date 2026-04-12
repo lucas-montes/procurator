@@ -1,6 +1,5 @@
 use std::path::Path;
 
-
 /// Trait for parsing manifest files
 pub trait Parseable {
     type Output;

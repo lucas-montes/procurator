@@ -1,21 +1,10 @@
 use crate::{
     adapters::shared::database::Database,
     application::gerrit::{
-        ChangeSummary,
-        ChangeCommandPort,
-        ChangeQueryPort,
-        PortFuture,
-        PolicyPort,
-        ReviewError,
+        ChangeCommandPort, ChangeQueryPort, ChangeSummary, PolicyPort, PortFuture, ReviewError,
     },
     domain::{
-        Approval,
-        ApprovalRecord,
-        Change,
-        ChangeStatus,
-        PatchSet,
-        PatchSetKind,
-        ReviewPolicy,
+        Approval, ApprovalRecord, Change, ChangeStatus, PatchSet, PatchSetKind, ReviewPolicy,
     },
 };
 
@@ -96,11 +85,17 @@ impl ChangeCommandPort for SqliteReviewRepository {
                 .await
                 .map_err(Self::map_db_error)?;
 
-            Ok(Change { id: change_id, ..change })
+            Ok(Change {
+                id: change_id,
+                ..change
+            })
         })
     }
 
-    fn append_patch_set<'a>(&'a self, patch_set: PatchSet) -> PortFuture<'a, Result<(), ReviewError>> {
+    fn append_patch_set<'a>(
+        &'a self,
+        patch_set: PatchSet,
+    ) -> PortFuture<'a, Result<(), ReviewError>> {
         Box::pin(async move {
             self.db
                 .append_review_patch_set(
@@ -277,19 +272,14 @@ impl PolicyPort for SqliteReviewRepository {
         approval: &'a Approval,
     ) -> PortFuture<'a, Result<(), ReviewError>> {
         Box::pin(async move {
-            let definition = policy
-                .label_definition(&approval.label)
-                .ok_or_else(|| {
-                    ReviewError::PolicyViolation(format!("Unknown label: {}", approval.label))
-                })?;
+            let definition = policy.label_definition(&approval.label).ok_or_else(|| {
+                ReviewError::PolicyViolation(format!("Unknown label: {}", approval.label))
+            })?;
 
             if approval.value < definition.min || approval.value > definition.max {
                 return Err(ReviewError::PolicyViolation(format!(
                     "Vote {} for label {} is out of range [{}..{}]",
-                    approval.value,
-                    approval.label,
-                    definition.min,
-                    definition.max
+                    approval.value, approval.label, definition.min, definition.max
                 )));
             }
 

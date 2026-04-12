@@ -1,13 +1,12 @@
+mod dtos;
 mod errors;
 mod interfaces;
-mod dtos;
 mod registry;
 mod supervisor;
 
-
-pub use interfaces::{Factory, Handle};
-pub use registry::{Registry, Reader};
-pub use supervisor::{Command, Supervisor};
 pub use dtos::VmSpecRef;
+pub use interfaces::{Factory, Handle};
+pub use registry::{Reader, Registry};
+pub use supervisor::{Command, Supervisor};
 
 pub use errors::Error;

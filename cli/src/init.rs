@@ -23,7 +23,10 @@ pub fn init(path: Option<PathBuf>) {
 
     save_and_log(|p| parser.as_json(p), &config_path);
     save_and_log(|p| parser.as_nix(p), &config_path.with_extension("nix"));
-    save_and_log(|p| parser.generate(p), &config_path.with_file_name("flake.nix"));
+    save_and_log(
+        |p| parser.generate(p),
+        &config_path.with_file_name("flake.nix"),
+    );
 
     // parser
     //     .as_json(&config_path)

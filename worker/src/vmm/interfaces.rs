@@ -4,7 +4,6 @@ use crate::vmm::supervisor::CreateCommand;
 
 use super::VmSpecRef;
 
-
 #[derive(Debug)]
 pub enum Error {
     CreationFailed(String),
@@ -37,7 +36,12 @@ impl From<Error> for capnp::Error {
 pub trait Factory {
     type VmHandle: Handle + Send + 'static + Sync;
 
-    fn create_vm(&self, spec: VmSpecRef) -> impl Future<Output = Result<CreateCommand<Self>, Error>> where Self: Sized;
+    fn create_vm(
+        &self,
+        spec: VmSpecRef,
+    ) -> impl Future<Output = Result<CreateCommand<Self>, Error>>
+    where
+        Self: Sized;
 
     fn delete_vm(&self, id: &str) -> impl Future<Output = Result<(), Error>>;
 }

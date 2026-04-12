@@ -1,9 +1,8 @@
-use std::path::Path;
 use std::collections::HashMap;
+use std::path::Path;
 
-use serde::Deserialize;
 use crate::mapping::{ParseError, Parseable};
-
+use serde::Deserialize;
 
 /// CI/CD configuration files
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -62,7 +61,7 @@ pub struct CiStep {
 #[derive(Debug, Clone)]
 pub struct CiService {
     pub name: String,
-    pub image: String,  // e.g., "postgres:15"
+    pub image: String, // e.g., "postgres:15"
     pub env: HashMap<String, String>,
 }
 
@@ -289,10 +288,7 @@ mod tests {
         );
 
         // GitLab CI
-        assert_eq!(
-            CiCdFile::try_from(".gitlab-ci.yml"),
-            Ok(CiCdFile::GitLabCI)
-        );
+        assert_eq!(CiCdFile::try_from(".gitlab-ci.yml"), Ok(CiCdFile::GitLabCI));
         assert_eq!(
             CiCdFile::try_from("path/to/.gitlab-ci.yaml"),
             Ok(CiCdFile::GitLabCI)
@@ -305,20 +301,14 @@ mod tests {
         );
 
         // Jenkins
-        assert_eq!(
-            CiCdFile::try_from("Jenkinsfile"),
-            Ok(CiCdFile::Jenkinsfile)
-        );
+        assert_eq!(CiCdFile::try_from("Jenkinsfile"), Ok(CiCdFile::Jenkinsfile));
         assert_eq!(
             CiCdFile::try_from("path/to/Jenkinsfile"),
             Ok(CiCdFile::Jenkinsfile)
         );
 
         // Travis CI
-        assert_eq!(
-            CiCdFile::try_from(".travis.yml"),
-            Ok(CiCdFile::TravisCI)
-        );
+        assert_eq!(CiCdFile::try_from(".travis.yml"), Ok(CiCdFile::TravisCI));
 
         // Unknown file
         assert!(CiCdFile::try_from("random.txt").is_err());
@@ -328,7 +318,9 @@ mod tests {
     fn test_parse_github_actions() {
         let path = fixtures_path().join("github-workflow.yml");
         let cicd_file = CiCdFile::GitHubActions;
-        let result = cicd_file.parse(&path).expect("Failed to parse GitHub Actions workflow");
+        let result = cicd_file
+            .parse(&path)
+            .expect("Failed to parse GitHub Actions workflow");
 
         // Check global environment variables
         assert_eq!(result.env.len(), 2);
@@ -339,53 +331,101 @@ mod tests {
         assert_eq!(result.jobs.len(), 3);
 
         // Check test job
-        let test_job = result.jobs.iter().find(|j| j.name == "Run Tests").expect("Test job not found");
+        let test_job = result
+            .jobs
+            .iter()
+            .find(|j| j.name == "Run Tests")
+            .expect("Test job not found");
         assert_eq!(test_job.name, "Run Tests");
 
         // Check test job services
         assert_eq!(test_job.services.len(), 2);
 
-        let postgres = test_job.services.iter().find(|s| s.name == "postgres").expect("Postgres service not found");
+        let postgres = test_job
+            .services
+            .iter()
+            .find(|s| s.name == "postgres")
+            .expect("Postgres service not found");
         assert_eq!(postgres.image, "postgres:15");
-        assert_eq!(postgres.env.get("POSTGRES_PASSWORD"), Some(&"postgres".to_string()));
-        assert_eq!(postgres.env.get("POSTGRES_DB"), Some(&"test_db".to_string()));
+        assert_eq!(
+            postgres.env.get("POSTGRES_PASSWORD"),
+            Some(&"postgres".to_string())
+        );
+        assert_eq!(
+            postgres.env.get("POSTGRES_DB"),
+            Some(&"test_db".to_string())
+        );
 
-        let redis = test_job.services.iter().find(|s| s.name == "redis").expect("Redis service not found");
+        let redis = test_job
+            .services
+            .iter()
+            .find(|s| s.name == "redis")
+            .expect("Redis service not found");
         assert_eq!(redis.image, "redis:7-alpine");
 
         // Check test job environment
-        assert_eq!(test_job.env.get("DATABASE_URL"), Some(&"postgresql://postgres:postgres@localhost:5432/test_db".to_string()));
-        assert_eq!(test_job.env.get("REDIS_URL"), Some(&"redis://localhost:6379".to_string()));
+        assert_eq!(
+            test_job.env.get("DATABASE_URL"),
+            Some(&"postgresql://postgres:postgres@localhost:5432/test_db".to_string())
+        );
+        assert_eq!(
+            test_job.env.get("REDIS_URL"),
+            Some(&"redis://localhost:6379".to_string())
+        );
 
         // Check test job steps
         assert!(test_job.steps.len() >= 2);
-        let test_steps: Vec<_> = test_job.steps.iter()
+        let test_steps: Vec<_> = test_job
+            .steps
+            .iter()
             .filter_map(|s| s.run.as_ref())
             .collect();
         assert!(test_steps.iter().any(|s| s.contains("cargo test")));
 
         // Check lint job
-        let lint_job = result.jobs.iter().find(|j| j.name == "Lint and Format").expect("Lint job not found");
+        let lint_job = result
+            .jobs
+            .iter()
+            .find(|j| j.name == "Lint and Format")
+            .expect("Lint job not found");
         assert_eq!(lint_job.services.len(), 0);
-        let lint_steps: Vec<_> = lint_job.steps.iter()
+        let lint_steps: Vec<_> = lint_job
+            .steps
+            .iter()
             .filter_map(|s| s.run.as_ref())
             .collect();
         assert!(lint_steps.iter().any(|s| s.contains("clippy")));
         assert!(lint_steps.iter().any(|s| s.contains("fmt")));
 
         // Check build job
-        let build_job = result.jobs.iter().find(|j| j.name == "Build Release").expect("Build job not found");
-        let build_steps: Vec<_> = build_job.steps.iter()
+        let build_job = result
+            .jobs
+            .iter()
+            .find(|j| j.name == "Build Release")
+            .expect("Build job not found");
+        let build_steps: Vec<_> = build_job
+            .steps
+            .iter()
             .filter_map(|s| s.run.as_ref())
             .collect();
-        assert!(build_steps.iter().any(|s| s.contains("cargo build --release")));
+        assert!(
+            build_steps
+                .iter()
+                .any(|s| s.contains("cargo build --release"))
+        );
     }
 
     #[test]
     fn test_extract_env_map() {
         let mut yaml_map = HashMap::new();
-        yaml_map.insert("STRING_VAR".to_string(), serde_yaml_ng::Value::String("value".to_string()));
-        yaml_map.insert("NUMBER_VAR".to_string(), serde_yaml_ng::Value::Number(42.into()));
+        yaml_map.insert(
+            "STRING_VAR".to_string(),
+            serde_yaml_ng::Value::String("value".to_string()),
+        );
+        yaml_map.insert(
+            "NUMBER_VAR".to_string(),
+            serde_yaml_ng::Value::Number(42.into()),
+        );
         yaml_map.insert("BOOL_VAR".to_string(), serde_yaml_ng::Value::Bool(true));
         yaml_map.insert("NULL_VAR".to_string(), serde_yaml_ng::Value::Null);
 

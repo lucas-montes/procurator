@@ -53,19 +53,19 @@ pub trait ChangeCommandPort {
         change_id: i64,
         vote: ApprovalRecord,
     ) -> PortFuture<'a, Result<(), ReviewError>>;
-	fn update_change_status<'a>(
-		&'a self,
-		change_id: i64,
-		status: &'a str,
-	) -> PortFuture<'a, Result<(), ReviewError>>;
+    fn update_change_status<'a>(
+        &'a self,
+        change_id: i64,
+        status: &'a str,
+    ) -> PortFuture<'a, Result<(), ReviewError>>;
 }
 
 pub trait ChangeQueryPort {
     fn get_change<'a>(&'a self, change_id: i64) -> PortFuture<'a, Result<Change, ReviewError>>;
-	fn list_changes_by_repository<'a>(
-		&'a self,
-		repository_id: i64,
-	) -> PortFuture<'a, Result<Vec<ChangeSummary>, ReviewError>>;
+    fn list_changes_by_repository<'a>(
+        &'a self,
+        repository_id: i64,
+    ) -> PortFuture<'a, Result<Vec<ChangeSummary>, ReviewError>>;
     fn list_approvals<'a>(
         &'a self,
         change_id: i64,

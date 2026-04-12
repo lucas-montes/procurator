@@ -1,6 +1,3 @@
-
-
-
 #[derive(Debug)]
 pub enum Error {
     Communication(String),

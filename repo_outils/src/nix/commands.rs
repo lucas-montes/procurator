@@ -139,10 +139,7 @@ pub async fn eval_cluster_metadata(
 }
 
 /// Build cluster images (no link) and return output paths
-pub async fn build_cluster_images(
-    flake_path: impl AsRef<Path>,
-    attr: &str,
-) -> Result<Vec<String>> {
+pub async fn build_cluster_images(flake_path: impl AsRef<Path>, attr: &str) -> Result<Vec<String>> {
     let path = flake_path.as_ref();
     validate_path(path)?;
 

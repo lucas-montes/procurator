@@ -1,5 +1,3 @@
-
-
 impl<'a> TryFrom<commands::common_capnp::vm_spec::Reader<'a>> for VmSpecRef<'a> {
     type Error = capnp::Error;
 

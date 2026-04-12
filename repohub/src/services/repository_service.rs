@@ -1,8 +1,8 @@
-use std::path::PathBuf;
-use std::fmt;
-use repo_outils::git::{RepoPath, create_bare_repo, clone_into_bare};
-use repo_outils::nix::{FlakeMetadata, Infrastructure};
 use crate::config::Config;
+use repo_outils::git::{RepoPath, clone_into_bare, create_bare_repo};
+use repo_outils::nix::{FlakeMetadata, Infrastructure};
+use std::fmt;
+use std::path::PathBuf;
 
 #[derive(Debug)]
 pub enum RepositoryError {
@@ -16,7 +16,9 @@ impl fmt::Display for RepositoryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             RepositoryError::DirectoryCreation(e) => write!(f, "Failed to create directory: {}", e),
-            RepositoryError::BareRepoCreation(msg) => write!(f, "Failed to create bare repository: {}", msg),
+            RepositoryError::BareRepoCreation(msg) => {
+                write!(f, "Failed to create bare repository: {}", msg)
+            }
             RepositoryError::CloneFailed(msg) => write!(f, "Failed to clone repository: {}", msg),
             RepositoryError::InvalidPath => write!(f, "Invalid repository path"),
         }
@@ -84,11 +86,7 @@ impl RepositoryService {
     }
 
     /// Parse flake metadata for a repository (best-effort)
-    pub fn parse_flake_metadata(
-        &self,
-        username: &str,
-        repo_name: &str,
-    ) -> Option<FlakeMetadata> {
+    pub fn parse_flake_metadata(&self, username: &str, repo_name: &str) -> Option<FlakeMetadata> {
         let repo_path = RepoPath::new(&self.repos_base_path, username, repo_name);
 
         match FlakeMetadata::try_from(&repo_path) {
@@ -104,11 +102,7 @@ impl RepositoryService {
     }
 
     /// Parse infrastructure specification from a repository (best-effort)
-    pub fn parse_infrastructure(
-        &self,
-        username: &str,
-        repo_name: &str,
-    ) -> Option<Infrastructure> {
+    pub fn parse_infrastructure(&self, username: &str, repo_name: &str) -> Option<Infrastructure> {
         let repo_path = RepoPath::new(&self.repos_base_path, username, repo_name);
 
         match Infrastructure::try_from(&repo_path) {

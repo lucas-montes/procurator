@@ -290,7 +290,10 @@ impl Default for ParsedManifest {
     }
 }
 
-fn parse_cargo_toml(content: &str, manifest_type: ManifestFile) -> Result<ParsedManifest, ParseError> {
+fn parse_cargo_toml(
+    content: &str,
+    manifest_type: ManifestFile,
+) -> Result<ParsedManifest, ParseError> {
     let cargo: CargoToml = toml::from_str(content)?;
     let mut result = ParsedManifest::from(cargo);
     result.manifest_type = manifest_type;
@@ -323,7 +326,10 @@ impl From<CargoToml> for ParsedManifest {
     }
 }
 
-fn parse_package_json(content: &str, manifest_type: ManifestFile) -> Result<ParsedManifest, ParseError> {
+fn parse_package_json(
+    content: &str,
+    manifest_type: ManifestFile,
+) -> Result<ParsedManifest, ParseError> {
     let pkg: PackageJson = serde_json::from_str(content)?;
     let mut result = ParsedManifest::from(pkg);
     result.manifest_type = manifest_type;
@@ -365,7 +371,10 @@ impl From<PackageJson> for ParsedManifest {
     }
 }
 
-fn parse_pyproject_toml(content: &str, manifest_type: ManifestFile) -> Result<ParsedManifest, ParseError> {
+fn parse_pyproject_toml(
+    content: &str,
+    manifest_type: ManifestFile,
+) -> Result<ParsedManifest, ParseError> {
     let pyproject: PyprojectToml = toml::from_str(content)?;
 
     if let Some(project) = pyproject.project {
@@ -471,8 +480,18 @@ mod tests {
             Some("A test Rust project".to_string())
         );
         assert_eq!(result.metadata.authors.len(), 2);
-        assert!(result.metadata.authors.contains(&"Alice <alice@example.com>".to_string()));
-        assert!(result.metadata.authors.contains(&"Bob <bob@example.com>".to_string()));
+        assert!(
+            result
+                .metadata
+                .authors
+                .contains(&"Alice <alice@example.com>".to_string())
+        );
+        assert!(
+            result
+                .metadata
+                .authors
+                .contains(&"Bob <bob@example.com>".to_string())
+        );
         assert_eq!(result.metadata.license, Some("MIT".to_string()));
         assert_eq!(result.entry_points.len(), 2);
         assert!(result.entry_points.contains(&"test-binary".to_string()));
@@ -484,7 +503,9 @@ mod tests {
     fn test_parse_cargo_workspace() {
         let path = fixtures_path().join("Cargo-workspace.toml");
         let manifest = ManifestFile::CargoToml;
-        let result = manifest.parse(&path).expect("Failed to parse Cargo workspace");
+        let result = manifest
+            .parse(&path)
+            .expect("Failed to parse Cargo workspace");
 
         assert!(result.names.is_empty());
         assert!(result.version.is_none());
@@ -505,7 +526,10 @@ mod tests {
             result.metadata.description,
             Some("A test JavaScript project".to_string())
         );
-        assert_eq!(result.metadata.authors, vec!["Charlie <charlie@example.com>"]);
+        assert_eq!(
+            result.metadata.authors,
+            vec!["Charlie <charlie@example.com>"]
+        );
         assert_eq!(result.metadata.license, Some("Apache-2.0".to_string()));
         assert_eq!(result.toolchain_version, Some(">=18.0.0".to_string()));
 
@@ -514,7 +538,10 @@ mod tests {
         assert_eq!(result.scripts.get("test"), Some(&"jest".to_string()));
         assert_eq!(result.scripts.get("lint"), Some(&"eslint .".to_string()));
         assert_eq!(result.scripts.get("build"), Some(&"webpack".to_string()));
-        assert_eq!(result.scripts.get("start"), Some(&"node index.js".to_string()));
+        assert_eq!(
+            result.scripts.get("start"),
+            Some(&"node index.js".to_string())
+        );
 
         // Check entry points (bin)
         assert_eq!(result.entry_points.len(), 2);
@@ -528,20 +555,27 @@ mod tests {
     fn test_parse_package_json_workspace_array() {
         let path = fixtures_path().join("package-workspace.json");
         let manifest = ManifestFile::PackageJson;
-        let result = manifest.parse(&path).expect("Failed to parse package workspace");
+        let result = manifest
+            .parse(&path)
+            .expect("Failed to parse package workspace");
 
         assert_eq!(result.names, vec!["test-monorepo"]);
         assert_eq!(result.workspace_members.len(), 2);
         assert!(result.workspace_members.contains(&"packages/*".to_string()));
         assert!(result.workspace_members.contains(&"apps/*".to_string()));
-        assert_eq!(result.scripts.get("test"), Some(&"npm run test --workspaces".to_string()));
+        assert_eq!(
+            result.scripts.get("test"),
+            Some(&"npm run test --workspaces".to_string())
+        );
     }
 
     #[test]
     fn test_parse_package_json_workspace_object() {
         let path = fixtures_path().join("package-workspace-object.json");
         let manifest = ManifestFile::PackageJson;
-        let result = manifest.parse(&path).expect("Failed to parse package workspace object");
+        let result = manifest
+            .parse(&path)
+            .expect("Failed to parse package workspace object");
 
         assert_eq!(result.names, vec!["test-monorepo-obj"]);
         assert_eq!(result.workspace_members.len(), 2);
@@ -553,7 +587,9 @@ mod tests {
     fn test_parse_pyproject_toml() {
         let path = fixtures_path().join("pyproject.toml");
         let manifest = ManifestFile::PyprojectToml;
-        let result = manifest.parse(&path).expect("Failed to parse pyproject.toml");
+        let result = manifest
+            .parse(&path)
+            .expect("Failed to parse pyproject.toml");
 
         assert_eq!(result.names, vec!["test-python-project"]);
         assert_eq!(result.version, Some("3.2.1".to_string()));
@@ -587,7 +623,9 @@ mod tests {
     fn test_parse_pyproject_toml_simple() {
         let path = fixtures_path().join("pyproject-simple.toml");
         let manifest = ManifestFile::PyprojectToml;
-        let result = manifest.parse(&path).expect("Failed to parse simple pyproject.toml");
+        let result = manifest
+            .parse(&path)
+            .expect("Failed to parse simple pyproject.toml");
 
         assert_eq!(result.names, vec!["simple-python-app"]);
         assert_eq!(result.version, Some("1.0.0".to_string()));
@@ -616,7 +654,9 @@ mod tests {
     fn test_parse_python_version() {
         let path = fixtures_path().join(".python-version");
         let manifest = ManifestFile::PythonVersion;
-        let result = manifest.parse(&path).expect("Failed to parse .python-version");
+        let result = manifest
+            .parse(&path)
+            .expect("Failed to parse .python-version");
 
         assert!(result.names.is_empty());
         assert!(result.version.is_none());
@@ -644,7 +684,9 @@ mod tests {
     fn test_parse_package_json_single_bin() {
         let path = fixtures_path().join("package-single-bin.json");
         let manifest = ManifestFile::PackageJson;
-        let result = manifest.parse(&path).expect("Failed to parse package.json with single bin");
+        let result = manifest
+            .parse(&path)
+            .expect("Failed to parse package.json with single bin");
 
         assert_eq!(result.names, vec!["simple-cli"]);
         assert_eq!(result.entry_points.len(), 1);
@@ -655,7 +697,9 @@ mod tests {
     fn test_parse_cargo_minimal() {
         let path = fixtures_path().join("Cargo-minimal.toml");
         let manifest = ManifestFile::CargoToml;
-        let result = manifest.parse(&path).expect("Failed to parse minimal Cargo.toml");
+        let result = manifest
+            .parse(&path)
+            .expect("Failed to parse minimal Cargo.toml");
 
         assert_eq!(result.names, vec!["minimal-crate"]);
         assert_eq!(result.version, Some("0.1.0".to_string()));
@@ -665,7 +709,6 @@ mod tests {
         assert!(result.metadata.license.is_none());
         assert!(result.entry_points.is_empty());
     }
-
 }
 
 /// Convert ManifestFile to Language
@@ -684,7 +727,10 @@ impl From<&ManifestFile> for Language {
             | ManifestFile::CondaYaml
             | ManifestFile::EnvironmentYml => Language::Python,
             ManifestFile::GoMod => Language::Go,
-            ManifestFile::PomXml | ManifestFile::BuildGradle | ManifestFile::BuildGradleKts | ManifestFile::BuildSbt => Language::Java,
+            ManifestFile::PomXml
+            | ManifestFile::BuildGradle
+            | ManifestFile::BuildGradleKts
+            | ManifestFile::BuildSbt => Language::Java,
             ManifestFile::Csproj | ManifestFile::Fsproj | ManifestFile::Sln => Language::CSharp,
             ManifestFile::Gemfile => Language::Ruby,
             ManifestFile::ComposerJson => Language::PHP,
@@ -708,7 +754,9 @@ impl From<&ManifestFile> for PackageManager {
             ManifestFile::PomXml => PackageManager::Maven,
             ManifestFile::BuildGradle | ManifestFile::BuildGradleKts => PackageManager::Gradle,
             ManifestFile::BuildSbt => PackageManager::Sbt,
-            ManifestFile::Csproj | ManifestFile::Fsproj | ManifestFile::Sln => PackageManager::Nuget,
+            ManifestFile::Csproj | ManifestFile::Fsproj | ManifestFile::Sln => {
+                PackageManager::Nuget
+            }
             ManifestFile::Gemfile => PackageManager::Bundler,
             ManifestFile::ComposerJson => PackageManager::Composer,
         }

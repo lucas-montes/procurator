@@ -2,7 +2,7 @@
 // railpack and direnv.
 use std::path::PathBuf;
 
-use super::{analysis::Analysis,flake::Configuration, scan::Scan};
+use super::{analysis::Analysis, flake::Configuration, scan::Scan};
 
 #[derive(Debug)]
 pub struct Parser<T = PathBuf>(T);
@@ -26,13 +26,11 @@ impl Parser<Scan> {
     }
 }
 
-
 impl Parser<Analysis> {
     pub fn build<'write>(self) -> Parser<Configuration<'write>> {
         //TODO: maybe we want to pass an iterator? not sure that we want to do the merging in the iterator
         Parser(Configuration::from(self.0))
     }
-
 }
 
 impl Parser<Configuration<'_>> {

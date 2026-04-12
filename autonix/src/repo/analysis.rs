@@ -23,7 +23,6 @@ impl From<ScanIter> for Analysis {
     }
 }
 
-
 /// Complete configuration for a single repo
 ///
 /// A repo can contain multiple packages (e.g., Rust workspace, npm workspaces)
@@ -238,9 +237,15 @@ impl From<&ExtractionContext<'_>> for Checks {
                 for step in &job.steps {
                     if let Some(run_cmd) = &step.run {
                         let lower = run_cmd.to_lowercase();
-                        if lower.contains("test") || lower.contains("jest") || lower.contains("pytest") {
+                        if lower.contains("test")
+                            || lower.contains("jest")
+                            || lower.contains("pytest")
+                        {
                             test_commands.push(run_cmd.clone());
-                        } else if lower.contains("lint") || lower.contains("eslint") || lower.contains("clippy") {
+                        } else if lower.contains("lint")
+                            || lower.contains("eslint")
+                            || lower.contains("clippy")
+                        {
                             lint_commands.push(run_cmd.clone());
                         } else if lower.contains("build") || lower.contains("compile") {
                             build_commands.push(run_cmd.clone());
@@ -748,9 +753,10 @@ mod tests {
         let scan = Scan::from(rust_project.clone());
         let result = Analysis::from(scan.into_iter());
 
-        let pkg_config_dep = Dependencies(vec![
-            Dependency { name: "pkg-config".to_string(), version: Version::Unknown(None) },
-        ]);
+        let pkg_config_dep = Dependencies(vec![Dependency {
+            name: "pkg-config".to_string(),
+            version: Version::Unknown(None),
+        }]);
 
         let expected = Analysis(vec![
             RepoAnalysis {
@@ -861,9 +867,10 @@ mod tests {
         let scan = Scan::from(js_python_project.clone());
         let result = Analysis::from(scan.into_iter());
 
-        let shared_deps = Dependencies(vec![
-            Dependency { name: "postgresql".to_string(), version: Version::Unknown(None) },
-        ]);
+        let shared_deps = Dependencies(vec![Dependency {
+            name: "postgresql".to_string(),
+            version: Version::Unknown(None),
+        }]);
 
         let expected = Analysis(vec![RepoAnalysis {
             name: "js_and_python".to_string(),
@@ -880,7 +887,10 @@ mod tests {
                     dependencies: shared_deps.clone(),
                     metadata: Metadata {
                         version: Version::Unknown(Some("1.5.0".to_string())),
-                        description: Some("Full-stack monorepo with Node.js API and Python ML service".to_string()),
+                        description: Some(
+                            "Full-stack monorepo with Node.js API and Python ML service"
+                                .to_string(),
+                        ),
                         authors: vec!["Development Team <dev@example.com>".to_string()],
                         license: Some("MIT".to_string()),
                     },

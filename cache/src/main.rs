@@ -1,16 +1,15 @@
 // cache_service/src/nix_serve.rs
 use axum::{
     Router,
-    routing::get,
+    body::Body,
     extract::{Path, State},
     http::StatusCode,
-    response::{Response, IntoResponse},
-    body::Body,
+    response::{IntoResponse, Response},
+    routing::get,
 };
+use std::sync::Arc;
 use tokio::process::Command;
 use tokio_util::io::ReaderStream;
-use std::sync::Arc;
-
 
 pub struct NixServeState {
     store_dir: String,
@@ -19,8 +18,7 @@ pub struct NixServeState {
 
 impl NixServeState {
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let store_dir = std::env::var("NIX_STORE_DIR")
-            .unwrap_or_else(|_| "/nix/store".to_string());
+        let store_dir = std::env::var("NIX_STORE_DIR").unwrap_or_else(|_| "/nix/store".to_string());
 
         tracing::info!("Using store directory: {}", store_dir);
 
@@ -38,7 +36,10 @@ impl NixServeState {
             tracing::warn!("No secret key configured - cache will not sign packages");
         }
 
-        Ok(Self { store_dir, secret_key })
+        Ok(Self {
+            store_dir,
+            secret_key,
+        })
     }
 }
 
@@ -53,9 +54,7 @@ pub fn router() -> Router {
         .with_state(Arc::new(state))
 }
 
-async fn nix_cache_info(
-    State(state): State<Arc<NixServeState>>,
-) -> impl IntoResponse {
+async fn nix_cache_info(State(state): State<Arc<NixServeState>>) -> impl IntoResponse {
     let response = format!(
         "StoreDir: {}\nWantMassQuery: 1\nPriority: 30\n",
         state.store_dir
@@ -73,13 +72,17 @@ async fn narinfo(
     Path(hash_narinfo): Path<String>,
 ) -> Result<Response, StatusCode> {
     // Extract hash part from "hash.narinfo"
-    let hash_part = hash_narinfo.strip_suffix(".narinfo")
+    let hash_part = hash_narinfo
+        .strip_suffix(".narinfo")
         .ok_or(StatusCode::BAD_REQUEST)?;
 
     tracing::debug!("Requested narinfo for hash: {}", hash_part);
 
     // Validate hash part (only lowercase hex)
-    if !hash_part.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()) {
+    if !hash_part
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    {
         tracing::warn!("Invalid hash part format: {}", hash_part);
         return Err(StatusCode::BAD_REQUEST);
     }
@@ -104,11 +107,10 @@ async fn narinfo(
     tracing::debug!("Found store path: {}", store_path);
 
     // Query path info
-    let path_info = query_path_info(&store_path).await
-        .map_err(|e| {
-            tracing::error!("Failed to query path info: {}", e);
-            StatusCode::NOT_FOUND
-        })?;
+    let path_info = query_path_info(&store_path).await.map_err(|e| {
+        tracing::error!("Failed to query path info: {}", e);
+        StatusCode::NOT_FOUND
+    })?;
 
     // Extract sha256 hash from nar_hash (format: "sha256:base32hash")
     let nar_hash_parts: Vec<&str> = path_info.nar_hash.split(':').collect();
@@ -130,19 +132,12 @@ async fn narinfo(
          Compression: none\n\
          NarHash: {}\n\
          NarSize: {}\n",
-        store_path,
-        hash_part,
-        nar_hash2,
-        path_info.nar_hash,
-        path_info.nar_size
+        store_path, hash_part, nar_hash2, path_info.nar_hash, path_info.nar_size
     );
 
     // Add references
     if !path_info.references.is_empty() {
-        let refs: Vec<String> = path_info.references
-            .iter()
-            .map(|r| strip_path(r))
-            .collect();
+        let refs: Vec<String> = path_info.references.iter().map(|r| strip_path(r)).collect();
         response.push_str(&format!("References: {}\n", refs.join(" ")));
     }
 
@@ -160,11 +155,10 @@ async fn narinfo(
             &path_info.references,
         );
         tracing::debug!("Fingerprint to sign: {}", fingerprint);
-        let signature = sign_string(secret_key, &fingerprint)
-            .map_err(|e| {
-                tracing::error!("Failed to sign: {}", e);
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
+        let signature = sign_string(secret_key, &fingerprint).map_err(|e| {
+            tracing::error!("Failed to sign: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
         tracing::debug!("Generated signature: {}", signature);
         response.push_str(&format!("Sig: {}\n", signature));
     } else if !path_info.signatures.is_empty() {
@@ -191,11 +185,10 @@ async fn nar_handler(
     tracing::debug!("NAR request for file: {}", nar_file);
 
     // Parse filename: either "hash_part-nar_hash.nar" or "hash_part.nar" (legacy)
-    let filename = nar_file.strip_suffix(".nar")
-        .ok_or_else(|| {
-            tracing::warn!("Invalid NAR filename: {}", nar_file);
-            StatusCode::BAD_REQUEST
-        })?;
+    let filename = nar_file.strip_suffix(".nar").ok_or_else(|| {
+        tracing::warn!("Invalid NAR filename: {}", nar_file);
+        StatusCode::BAD_REQUEST
+    })?;
 
     let (hash_part, expected_nar_hash) = if let Some(dash_pos) = filename.rfind('-') {
         // New format: "hash_part-nar_hash.nar"
@@ -210,7 +203,10 @@ async fn nar_handler(
     };
 
     // Validate hash part
-    if !hash_part.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()) {
+    if !hash_part
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    {
         tracing::warn!("Invalid hash part: {}", hash_part);
         return Err(StatusCode::BAD_REQUEST);
     }
@@ -218,17 +214,19 @@ async fn nar_handler(
     let store_path = format!("{}/{}", state.store_dir, hash_part);
 
     // Query path info
-    let path_info = query_path_info(&store_path).await
-        .map_err(|e| {
-            tracing::error!("Failed to query path info for {}: {}", store_path, e);
-            StatusCode::NOT_FOUND
-        })?;
+    let path_info = query_path_info(&store_path).await.map_err(|e| {
+        tracing::error!("Failed to query path info for {}: {}", store_path, e);
+        StatusCode::NOT_FOUND
+    })?;
 
     // Verify NAR hash if provided (new format)
     if let Some(expected) = expected_nar_hash {
         if path_info.nar_hash != format!("sha256:{}", expected) {
-            tracing::warn!("NAR hash mismatch: expected sha256:{}, got {}",
-                expected, path_info.nar_hash);
+            tracing::warn!(
+                "NAR hash mismatch: expected sha256:{}, got {}",
+                expected,
+                path_info.nar_hash
+            );
             return Err(StatusCode::NOT_FOUND);
         }
     }
@@ -238,8 +236,10 @@ async fn nar_handler(
     // Stream NAR file
     let child = Command::new("nix")
         .args([
-            "--extra-experimental-features", "nix-command",
-            "store", "dump-path",
+            "--extra-experimental-features",
+            "nix-command",
+            "store",
+            "dump-path",
             "--",
             &store_path,
         ])
@@ -274,7 +274,8 @@ async fn log(
 
     let child = Command::new("nix")
         .args([
-            "--extra-experimental-features", "nix-command",
+            "--extra-experimental-features",
+            "nix-command",
             "log",
             &store_path,
         ])
@@ -315,7 +316,14 @@ async fn query_path_info(store_path: &str) -> Result<PathInfo, Box<dyn std::erro
 
     // Query using nix-store
     let output = Command::new("nix-store")
-        .args(["--query", "--deriver", "--hash", "--size", "--references", store_path])
+        .args([
+            "--query",
+            "--deriver",
+            "--hash",
+            "--size",
+            "--references",
+            store_path,
+        ])
         .output()
         .await?;
 
@@ -333,7 +341,12 @@ async fn query_path_info(store_path: &str) -> Result<PathInfo, Box<dyn std::erro
     let nar_size: u64 = lines.get(1).unwrap_or(&"0").parse().unwrap_or(0);
     let references: Vec<String> = lines.iter().skip(2).map(|s| s.to_string()).collect();
 
-    tracing::debug!("Path info: hash={}, size={}, refs={}", nar_hash, nar_size, references.len());
+    tracing::debug!(
+        "Path info: hash={}, size={}, refs={}",
+        nar_hash,
+        nar_size,
+        references.len()
+    );
 
     // Query signatures
     let sigs_output = Command::new("nix-store")
@@ -375,8 +388,8 @@ fn fingerprint_path(
 }
 
 fn sign_string(secret_key: &str, message: &str) -> Result<String, Box<dyn std::error::Error>> {
-    use ed25519_dalek::{Signer, SigningKey};
     use base64::{Engine as _, engine::general_purpose};
+    use ed25519_dalek::{Signer, SigningKey};
 
     // Parse secret key (format: "keyname:base64key")
     let parts: Vec<&str> = secret_key.split(':').collect();

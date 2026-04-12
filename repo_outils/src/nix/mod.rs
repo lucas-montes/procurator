@@ -1,8 +1,6 @@
+mod commands;
 mod flake;
 mod logs;
-mod commands;
 
+pub use commands::{Error, VmMetadata, build_cluster_images, eval_cluster_metadata, flake_check};
 pub use flake::{FlakeMetadata, Infrastructure};
-pub use commands::{
-	flake_check, build_cluster_images, eval_cluster_metadata, Error, VmMetadata,
-};

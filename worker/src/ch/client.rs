@@ -11,7 +11,6 @@ use tracing::{debug, info};
 
 use super::{config::VmConfig, errors::Error};
 
-
 /// Stateless HTTP client to a single CH unix socket.
 pub struct Client {
     /// Path to the unix socket for the cloud-hypervisor API

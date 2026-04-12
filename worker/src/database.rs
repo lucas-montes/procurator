@@ -8,5 +8,4 @@ impl Database {
         let pool = SqlitePool::connect(path).await.unwrap();
         Self(pool)
     }
-
 }

@@ -9,8 +9,8 @@
 //! - **Repositories**: Individual Git repositories within a project
 //! - **Collaboration**: Multiple users can collaborate on projects
 
-use tracing::info;
 use axum::Router;
+use tracing::info;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -35,7 +35,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let gerrit_state = repohub::GerritAppState::new(db);
 
     let github_app = repohub::github_routes().with_state(github_state);
-    let gerrit_app = Router::new().nest("/gerrit", repohub::gerrit_routes().with_state(gerrit_state));
+    let gerrit_app =
+        Router::new().nest("/gerrit", repohub::gerrit_routes().with_state(gerrit_state));
     let app = github_app.merge(gerrit_app);
 
     info!("Listening on {}", config.bind_address);
