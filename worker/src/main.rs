@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use worker::Config;
+
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -26,16 +26,7 @@ async fn main() {
         .map(PathBuf::from)
         .expect("Config path must be provided as the first argument");
 
-    let contents = tokio::fs::read(&config_path).await.unwrap_or_else(|e| {
-        tracing::error!(path = ?config_path, error = %e, "Could not read config");
-        std::process::exit(1);
-    });
 
-    let cfg: Config = serde_json::from_slice(&contents).unwrap_or_else(|e| {
-        tracing::error!(path = ?config_path, error = %e, "Failed to parse config");
-        std::process::exit(1);
-    });
-
-    worker::main(cfg)
+    worker::main(config_path)
     .await;
 }

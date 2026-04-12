@@ -1,22 +1,22 @@
-use std::{net::SocketAddr, sync::mpsc::Sender};
+use std::net::SocketAddr;
+use tokio::sync::mpsc::Sender;
 
 use capnp::message::ReaderOptions;
 use capnp_rpc::{RpcSystem, pry, rpc_twoparty_capnp, twoparty};
 use futures::AsyncReadExt;
 use tracing::{debug, info, instrument};
 
-
-use super::vmm::{Command,VmSpecRef, Factory, Reader, Registry};
+use super::vmm::{Command, Factory, Reader, Registry, VmSpecRef};
 
 #[derive(Clone)]
 pub struct Server<F: Factory + Clone + 'static> {
     state: Registry<F, Reader>,
     factory: F,
-    tx: Sender<Command>,
+    tx: Sender<Command<F>>,
 }
 
 impl<F: Factory + Clone + 'static> Server<F> {
-    pub fn new(state: Registry<F, Reader>, factory: F, tx: Sender<Command>) -> Self {
+    pub fn new(state: Registry<F, Reader>, factory: F, tx: Sender<Command<F>>) -> Self {
         Self { state, factory, tx }
     }
 
@@ -57,22 +57,34 @@ impl<F: Factory + Clone + 'static> commands::worker_capnp::worker::Server for Se
         request: commands::worker_capnp::worker::CreateVmParams,
         mut response: commands::worker_capnp::worker::CreateVmResults,
     ) -> capnp::capability::Promise<(), capnp::Error> {
-        let vm_spec = pry!(pry!(request.get()).get_spec());
+        let factory = self.factory.clone();
+        let tx = self.tx.clone();
 
-        let spec = pry!(VmSpecRef::try_from(vm_spec));
+        capnp::capability::Promise::from_future(async move {
+            let vm_spec = request.get()?.get_spec()?;
 
-        self.factory.
+            let spec = VmSpecRef::try_from(vm_spec)?;
 
-        debug!(vm_id = %vm_id, "Received create_vm request");
-        if self.tx.send(Command::Create).is_err() {
-            return capnp::capability::Promise::err(capnp::Error::failed(
-                "Failed to send create command to node".into(),
-            ));
-        }
+            let msg = factory
+                .create_vm(spec)
+                .await
+                .map_err(|e| capnp::Error::failed(format!("Failed to create vm {e:?}")))?;
 
-        response.get().set_id(id);
+            let id = msg.id();
 
-        capnp::capability::Promise::ok(())
+            tracing::debug!(id, "VM creation command created successfully");
+            response.get().set_id(id);
+
+            // TODO: this could be an issue, and maybe we need a better way to handle the fact that sending a message with the process could fail
+            // The current idea is to prepare, create and spawn the vm here.
+            // Do we want to retry ourself or we let the user handle the retries?
+            if tx.send(Command::Create(msg)).await.is_err() {
+                return Err(capnp::Error::failed(
+                    "Failed to send create command to node".into(),
+                ));
+            }
+            Ok(())
+        })
     }
 
     fn delete_vm(
@@ -80,8 +92,19 @@ impl<F: Factory + Clone + 'static> commands::worker_capnp::worker::Server for Se
         request: commands::worker_capnp::worker::DeleteVmParams,
         _: commands::worker_capnp::worker::DeleteVmResults,
     ) -> capnp::capability::Promise<(), capnp::Error> {
-        let vm_id = pry!(pry!(request.get()).get_id());
-        capnp::capability::Promise::ok(())
+        let factory = self.factory.clone();
+        let tx = self.tx.clone();
+
+        capnp::capability::Promise::from_future(async move {
+            let vm_id = request.get()?.get_id()?.to_str()?;
+            if let Err(err) = factory.delete_vm(vm_id).await {
+                return Err(capnp::Error::failed(format!(
+                    "Failed to delete VM: {:?}",
+                    err
+                )));
+            };
+            Ok(())
+        })
     }
 
     fn list_vms(

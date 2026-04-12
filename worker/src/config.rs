@@ -1,7 +1,10 @@
-use std::{net::SocketAddr, path::PathBuf};
+use std::{
+    net::SocketAddr,
+    num::NonZeroU64,
+    path::{Path, PathBuf},
+};
 
 use serde::Deserialize;
-
 
 #[derive(Debug, Deserialize)]
 pub struct CloudHypervisorSection {
@@ -13,7 +16,22 @@ pub struct CloudHypervisorSection {
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
-    listen_addr: SocketAddr,
+    pub listen_addr: SocketAddr,
     master_addr: SocketAddr,
+    pub health_tick_millis: NonZeroU64,
     cloud_hypervisor: CloudHypervisorSection,
+}
+
+impl Config {
+    pub fn from_file(path: impl AsRef<Path> + std::fmt::Debug) -> Self {
+        let contents = std::fs::read(&path).unwrap_or_else(|e| {
+            tracing::error!(path = ?path, error = %e, "Could not read config");
+            std::process::exit(1);
+        });
+
+        serde_json::from_slice(&contents).unwrap_or_else(|e| {
+            tracing::error!(path = ?path, error = %e, "Failed to parse config");
+            std::process::exit(1);
+        })
+    }
 }
