@@ -1,8 +1,8 @@
+mod ch;
 mod config;
 mod database;
 mod server;
 mod vmm;
-mod ch;
 
 use std::path::Path;
 use tokio::sync::mpsc;
@@ -12,8 +12,7 @@ use tokio::join;
 use tokio::task;
 
 use config::Config;
-use vmm::{Supervisor, Registry, Factory};
-
+use vmm::{Factory, Registry, Supervisor};
 
 pub async fn ch_main(path: impl AsRef<Path> + std::fmt::Debug) {
     main::<ch::Factory>(path).await;

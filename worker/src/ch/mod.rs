@@ -1,8 +1,8 @@
 mod client;
 mod config;
-mod errors;
-mod process;
-mod factory;
 mod dtos;
+mod errors;
+mod factory;
+mod process;
 
 pub use factory::Factory;

@@ -16,7 +16,6 @@ pub struct BackendConfigRef<'a> {
     payload: PayloadConfigRef<'a>,
 }
 
-
 #[derive(Debug, Deserialize)]
 pub struct CreateVmSpecRef<'a> {
     toplevel: &'a str,
@@ -28,10 +27,14 @@ pub struct CreateVmSpecRef<'a> {
     backend_config: BackendConfigRef<'a>,
 }
 
-impl<'a> TryFrom<commands::common_capnp::vm_spec::Reader<'a, commands::ch_capnp::vm_config::Owned>> for CreateVmSpecRef<'a> {
+impl<'a> TryFrom<commands::common_capnp::vm_spec::Reader<'a, commands::ch_capnp::vm_config::Owned>>
+    for CreateVmSpecRef<'a>
+{
     type Error = capnp::Error;
 
-    fn try_from(reader: commands::common_capnp::vm_spec::Reader<'a, commands::ch_capnp::vm_config::Owned>) -> Result<Self, Self::Error> {
+    fn try_from(
+        reader: commands::common_capnp::vm_spec::Reader<'a, commands::ch_capnp::vm_config::Owned>,
+    ) -> Result<Self, Self::Error> {
         let allowed_domains = reader.get_network_allowed_domains()?;
         let mut network_allowed_domains = Vec::with_capacity(allowed_domains.len() as usize);
         for i in 0..allowed_domains.len() {

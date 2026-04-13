@@ -52,10 +52,7 @@ impl<F: Factory> Server<F> {
     }
 }
 
-impl<F> commands::worker_capnp::worker::Server<F::BackendConfig> for Server<F>
-where
-    F: Factory,
-{
+impl<F: Factory> commands::worker_capnp::worker::Server<F::BackendConfig> for Server<F> {
     fn create_vm(
         &mut self,
         request: commands::worker_capnp::worker::CreateVmParams<F::BackendConfig>,
