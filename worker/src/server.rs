@@ -2,20 +2,20 @@ use std::net::SocketAddr;
 use tokio::sync::mpsc::Sender;
 
 use capnp::message::ReaderOptions;
-use capnp_rpc::{RpcSystem, pry, rpc_twoparty_capnp, twoparty};
+use capnp_rpc::{RpcSystem, rpc_twoparty_capnp, twoparty};
 use futures::AsyncReadExt;
 use tracing::{debug, info, instrument};
 
-use super::vmm::{Command, Factory, Reader, Registry, VmSpecRef};
+use super::vmm::{Command, Factory, Reader, Registry};
 
 #[derive(Clone)]
-pub struct Server<F: Factory + Clone + 'static> {
+pub struct Server<F: Factory> {
     state: Registry<F, Reader>,
     factory: F,
     tx: Sender<Command<F>>,
 }
 
-impl<F: Factory + Clone + 'static> Server<F> {
+impl<F: Factory> Server<F> {
     pub fn new(state: Registry<F, Reader>, factory: F, tx: Sender<Command<F>>) -> Self {
         Self { state, factory, tx }
     }
@@ -30,7 +30,8 @@ impl<F: Factory + Clone + 'static> Server<F> {
         info!(addr = %addr, "Starting server");
         let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-        let client: commands::worker_capnp::worker::Client = capnp_rpc::new_client(self);
+        let client: commands::worker_capnp::worker::Client<F::BackendConfig> =
+            capnp_rpc::new_client(self);
 
         loop {
             let (stream, peer_addr) = listener.accept().await?;
@@ -51,22 +52,22 @@ impl<F: Factory + Clone + 'static> Server<F> {
     }
 }
 
-impl<F: Factory + Clone + 'static> commands::worker_capnp::worker::Server for Server<F> {
+impl<F> commands::worker_capnp::worker::Server<F::BackendConfig> for Server<F>
+where
+    F: Factory,
+{
     fn create_vm(
         &mut self,
-        request: commands::worker_capnp::worker::CreateVmParams,
-        mut response: commands::worker_capnp::worker::CreateVmResults,
+        request: commands::worker_capnp::worker::CreateVmParams<F::BackendConfig>,
+        mut response: commands::worker_capnp::worker::CreateVmResults<F::BackendConfig>,
     ) -> capnp::capability::Promise<(), capnp::Error> {
         let factory = self.factory.clone();
         let tx = self.tx.clone();
 
         capnp::capability::Promise::from_future(async move {
             let vm_spec = request.get()?.get_spec()?;
-
-            let spec = VmSpecRef::try_from(vm_spec)?;
-
             let msg = factory
-                .create_vm(spec)
+                .create_vm(vm_spec.try_into()?)
                 .await
                 .map_err(|e| capnp::Error::failed(format!("Failed to create vm {e:?}")))?;
 
@@ -89,11 +90,10 @@ impl<F: Factory + Clone + 'static> commands::worker_capnp::worker::Server for Se
 
     fn delete_vm(
         &mut self,
-        request: commands::worker_capnp::worker::DeleteVmParams,
-        _: commands::worker_capnp::worker::DeleteVmResults,
+        request: commands::worker_capnp::worker::DeleteVmParams<F::BackendConfig>,
+        _: commands::worker_capnp::worker::DeleteVmResults<F::BackendConfig>,
     ) -> capnp::capability::Promise<(), capnp::Error> {
         let factory = self.factory.clone();
-        let tx = self.tx.clone();
 
         capnp::capability::Promise::from_future(async move {
             let vm_id = request.get()?.get_id()?.to_str()?;
@@ -109,16 +109,16 @@ impl<F: Factory + Clone + 'static> commands::worker_capnp::worker::Server for Se
 
     fn list_vms(
         &mut self,
-        _: commands::worker_capnp::worker::ListVmsParams,
-        _: commands::worker_capnp::worker::ListVmsResults,
+        _: commands::worker_capnp::worker::ListVmsParams<F::BackendConfig>,
+        _: commands::worker_capnp::worker::ListVmsResults<F::BackendConfig>,
     ) -> capnp::capability::Promise<(), capnp::Error> {
         capnp::capability::Promise::ok(())
     }
 
     fn read(
         &mut self,
-        _: commands::worker_capnp::worker::ReadParams,
-        _: commands::worker_capnp::worker::ReadResults,
+        _: commands::worker_capnp::worker::ReadParams<F::BackendConfig>,
+        _: commands::worker_capnp::worker::ReadResults<F::BackendConfig>,
     ) -> capnp::capability::Promise<(), capnp::Error> {
         capnp::capability::Promise::ok(())
     }

@@ -4,6 +4,11 @@ pub mod common_capnp {
 }
 
 #[allow(clippy::all, clippy::pedantic, warnings)]
+pub mod ch_capnp {
+    include!(concat!(env!("OUT_DIR"), "/ch_capnp.rs"));
+}
+
+#[allow(clippy::all, clippy::pedantic, warnings)]
 pub mod master_capnp {
     include!(concat!(env!("OUT_DIR"), "/master_capnp.rs"));
 }

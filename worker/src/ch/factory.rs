@@ -2,9 +2,9 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
-use crate::vmm::{Handle as VmHandle, Factory as VmFactory, CreateCommand, Error as VmError, VmSpecRef};
+use crate::{ vmm::{CreateCommand, Error as VmError, Factory as VmFactory, Handle as VmHandle}};
 
-use super::{client::Client, process::Process};
+use super::{client::Client, process::Process, dtos::CreateVmSpecRef};
 
 pub struct Handle {
     vm_id: String,
@@ -15,6 +15,13 @@ pub struct Handle {
 
 impl VmHandle for Handle {}
 
+
+
+/// The structure responsible to spin up vm managed with cloud hypervisor. We need the socket and the binary to be able to call and communicate
+/// with the child processes. We also need to have a bridge name to be able to attach the TAP interfaces to it. I don't really mind cloning it,
+/// even if maybe using an Arc would be better? Not, sure, some path we need to modify them to add the uuid to identify each vmm/vm, but not the
+/// binary path nor the bridge_name. Also instead of cloning them I should have a function that returns a hadnle, which whil hold the logic
+/// to make the vm do stuff?
 #[derive(Debug, Clone)]
 pub struct Factory {
     socket_dir: PathBuf,
@@ -26,6 +33,8 @@ pub struct Factory {
 impl VmFactory for Factory {
     type VmHandle = Handle;
     type Config = Config;
+    type BackendConfig = commands::ch_capnp::vm_config::Owned;
+    type CreateVmSpec<'a> = CreateVmSpecRef<'a>;
 
     fn new(config: Self::Config) -> Self
         where
@@ -37,10 +46,10 @@ impl VmFactory for Factory {
         }
     }
 
-    async fn create_vm<'a>(
-        &self,
-        spec: VmSpecRef<'a>,
-    ) -> Result<CreateCommand<Self>, VmError> {
+    async fn create_vm(&self, source: Self::CreateVmSpec<'_>) -> Result<CreateCommand<Self>, VmError> {
+        // let _spec = CreateVmSpecRef::try_from(source)
+        //     .map_err(|e| VmError::Internal(format!("Invalid VM spec: {e}")))?;
+
         // 1) generate vm id
         // 2) prepare vm dir + writable disk + tap
         // 3) spawn cloud-hypervisor process
