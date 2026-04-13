@@ -2,9 +2,9 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
-use crate::{ vmm::{CreateCommand, Error as VmError, Factory as VmFactory, Handle as VmHandle}};
+use crate::vmm::{CreateCommand, Error as VmError, Factory as VmFactory, Handle as VmHandle};
 
-use super::{client::Client, process::Process, dtos::CreateVmSpecRef};
+use super::{client::Client, dtos::CreateVmSpecRef, process::Process};
 
 pub struct Handle {
     vm_id: String,
@@ -14,8 +14,6 @@ pub struct Handle {
 }
 
 impl VmHandle for Handle {}
-
-
 
 /// The structure responsible to spin up vm managed with cloud hypervisor. We need the socket and the binary to be able to call and communicate
 /// with the child processes. We also need to have a bridge name to be able to attach the TAP interfaces to it. I don't really mind cloning it,
@@ -29,6 +27,15 @@ pub struct Factory {
     bridge_name: String,
 }
 
+impl From<Config> for Factory {
+    fn from(config: Config) -> Self {
+        Self {
+            socket_dir: config.socket_dir,
+            ch_binary: config.binary_path,
+            bridge_name: config.bridge_name,
+        }
+    }
+}
 
 impl VmFactory for Factory {
     type VmHandle = Handle;
@@ -36,17 +43,10 @@ impl VmFactory for Factory {
     type BackendConfig = commands::ch_capnp::vm_config::Owned;
     type CreateVmSpec<'a> = CreateVmSpecRef<'a>;
 
-    fn new(config: Self::Config) -> Self
-        where
-            Self: Sized {
-        Self{
-            socket_dir: config.socket_dir,
-            ch_binary: config.binary_path,
-            bridge_name: config.bridge_name,
-        }
-    }
-
-    async fn create_vm(&self, source: Self::CreateVmSpec<'_>) -> Result<CreateCommand<Self>, VmError> {
+    async fn create_vm(
+        &self,
+        source: Self::CreateVmSpec<'_>,
+    ) -> Result<CreateCommand<Self>, VmError> {
         // let _spec = CreateVmSpecRef::try_from(source)
         //     .map_err(|e| VmError::Internal(format!("Invalid VM spec: {e}")))?;
 

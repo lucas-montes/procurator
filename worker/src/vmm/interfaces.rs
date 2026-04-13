@@ -4,7 +4,7 @@ use super::{Error, supervisor::CreateCommand};
 
 /// This is the interface that should create process and talk to the hypervisor or whatever backend we are using to manage vms/vmms
 /// The questions is, do all backends need a client and a process like cloud hypervisor?
-pub trait Factory: Clone + 'static {
+pub trait Factory: Clone + 'static + From<Self::Config> {
     //NOTE: we need the Clone + 'static either way
     type VmHandle: Handle + Send + 'static + Sync;
     type Config: DeserializeOwned + std::fmt::Debug;
@@ -18,10 +18,6 @@ pub trait Factory: Clone + 'static {
             commands::common_capnp::vm_spec::Reader<'a, Self::BackendConfig>,
             Error = capnp::Error,
         >;
-
-    fn new(config: Self::Config) -> Self
-    where
-        Self: Sized;
 
     fn create_vm(
         &self,

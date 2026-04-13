@@ -31,7 +31,7 @@ where
 
     let (tx, rx) = mpsc::channel(100);
 
-    let factory = F::new(config.vmm);
+    let factory = F::from(config.vmm);
 
     let server = Server::new(reader_registry, factory, tx);
     let supervisor = Supervisor::new(writer_registry, rx);
