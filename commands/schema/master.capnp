@@ -3,13 +3,13 @@
 using Common = import "common.capnp";
 using WorkerModule = import "worker.capnp";
 
-interface Master {
+interface Master(BackendConfig) {
   # CD platform publishes new commits and desired cluster state
   publishState @0 (
     commit :Text,
     generation :UInt64,
     intentHash :Text,
-    vmSpecs :List(Common.VmSpec)
+    vmSpecs :List(Common.VmSpec(BackendConfig))
   ) -> (result :Common.Result(Common.Empty, Text));
 
   # Workers get assignments

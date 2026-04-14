@@ -9,11 +9,11 @@ mod node;
 mod scheduler;
 mod server;
 
-pub async fn main(_hostname: String, addr: SocketAddr, peers_addr: Vec<SocketAddr>) {
+pub async fn main<T: capnp::traits::Owned  + 'static>(_hostname: String, addr: SocketAddr, peers_addr: Vec<SocketAddr>) {
     let (tx, rx) = channel(100);
 
     let node = Node::new(rx, peers_addr);
-    let server = Server::new(tx);
+    let server: Server<T> = Server::new(tx);
 
     tracing::info!(?addr, "Starting control plane server",);
 

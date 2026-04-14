@@ -14,7 +14,7 @@ async fn main() {
         )
         .init();
 
-    control_plane::main(
+    control_plane::main::<capnp::any_pointer::Owned>(
         "hostname".into(),
         "127.0.0.1:5000".parse().expect("addr shold be valid"),
         vec![],
