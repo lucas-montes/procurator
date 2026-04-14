@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use tracing::{debug, info};
 
-use super::{config::VmConfig, errors::Error};
+use super::{dtos::VmConfigRef, errors::Error};
 
 /// Stateless HTTP client to a single CH unix socket.
 pub struct Client {
@@ -66,6 +66,11 @@ async fn request<R: DeserializeOwned>(
         return Err(Error::OperationFailed(msg.to_string()));
     }
 
+    if bytes.is_empty() {
+        return serde_json::from_str::<R>("{}")
+            .map_err(|e| Error::Communication(e.to_string()));
+    }
+
     serde_json::from_slice::<R>(&bytes).map_err(|e| Error::Communication(e.to_string()))
 }
 
@@ -73,7 +78,7 @@ async fn request<R: DeserializeOwned>(
 struct EmptyBody;
 
 impl Client {
-    pub async fn create(&self, config: VmConfig) -> Result<(), Error> {
+    pub async fn create(&self, config: &VmConfigRef<'_>) -> Result<(), Error> {
         let body = serde_json::to_string(&config)?;
         debug!(config_json = %body, "vm.create request");
 

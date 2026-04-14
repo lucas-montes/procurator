@@ -96,10 +96,10 @@ in {
     };
 
     bridgeName = mkOption {
-      type = types.nullOr types.str;
+      type = types.str;
       default = "br0";
       example = "br0";
-      description = "Bridge name used for VM TAP attachment. Set to null to disable VM networking.";
+      description = "Bridge name used for VM TAP attachment.";
     };
   };
 

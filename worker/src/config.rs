@@ -13,7 +13,7 @@ pub struct CloudHypervisorSection {
     binary_path: PathBuf,
     socket_dir: PathBuf,
     socket_timeout_secs: u64,
-    bridge_name: Option<String>,
+    bridge_name: String,
 }
 
 #[derive(Debug, Deserialize)]

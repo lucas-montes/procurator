@@ -19,6 +19,8 @@ pub trait Factory: Clone + 'static + From<Self::Config> {
             Error = capnp::Error,
         >;
 
+    fn create_id() -> String; //TODO: maybe this should be a tpye of the interface?
+
     fn create_vm(
         &self,
         source: Self::CreateVmSpec<'_>,

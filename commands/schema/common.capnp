@@ -9,24 +9,8 @@ struct Result(Ok, Err) {
   }
 }
 
-# ============================================================================
-# Data Structures
-# ============================================================================
-
-# Desired state for a single VM (output of Nix evaluation)
 struct VmSpec(BackendConfig) {
-  toplevel @0 :Text;                # /nix/store/...-nixos-system (for nix copy)
-  kernelPath @1 :Text;              # /nix/store/... path to kernel (bzImage)
-  initrdPath @2 :Text;              # /nix/store/... path to initramfs
-  diskImagePath @3 :Text;           # /nix/store/... path to root disk image
-  cmdline @4 :Text;                 # Kernel command line (e.g. "console=ttyS0 root=/dev/vda")
-  networkAllowedDomains @5 :List(Text);  # Domains the VM can reach (empty = isolated)
-  backendConfig @6 :BackendConfig;
-}
-
-struct Label {
-  key @0 :Text;
-  value @1 :Text;
+  spec @0 :BackendConfig;
 }
 
 # Running VM observed on a worker
@@ -84,9 +68,9 @@ struct Resources {
   memoryBytes @1 :UInt64;
 }
 
-struct Assignment {
+struct Assignment(BackendConfig) {
   generation @0 :UInt64;        # Current master generation
-  desiredVms @1 :List(VmSpec(Empty));  # Full specs for this worker's VMs
+  desiredVms @1 :List(VmSpec(BackendConfig));  # Full specs for this worker's VMs
 }
 
 struct ClusterStatus {

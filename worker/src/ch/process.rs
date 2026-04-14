@@ -20,6 +20,20 @@ pub struct Process {
 }
 
 impl Process {
+    pub fn new(
+        child: Child,
+        socket_path: PathBuf,
+        vm_dir: PathBuf,
+        tap_name: Option<String>,
+    ) -> Self {
+        Self {
+            child,
+            socket_path,
+            vm_dir,
+            tap_name,
+        }
+    }
+
     pub async fn kill(&mut self) -> Result<(), VmError> {
         self.child
             .kill()
@@ -78,7 +92,7 @@ impl Process {
 ///
 /// Requires `CAP_NET_ADMIN` — the worker process holds this via
 /// systemd `AmbientCapabilities`.
-async fn delete_tap_device(tap_name: &str) -> Result<(), VmError> {
+pub(crate) async fn delete_tap_device(tap_name: &str) -> Result<(), VmError> {
     let (connection, handle, _) = rtnetlink::new_connection()
         .map_err(|e| VmError::Internal(format!("netlink connection failed: {e}")))?;
     tokio::spawn(connection);
@@ -116,7 +130,7 @@ async fn delete_tap_device(tap_name: &str) -> Result<(), VmError> {
 ///
 /// If the TAP already exists (e.g. from a previous crashed VM), it is
 /// deleted first to avoid stale state.
-async fn create_tap_device(tap_name: &str) -> Result<(), VmError> {
+pub(crate) async fn create_tap_device(tap_name: &str) -> Result<(), VmError> {
     // Delete stale TAP if it exists (crash recovery).
     // Best-effort — ignore errors if it doesn't exist.
     let _ = delete_tap_device(tap_name).await;
