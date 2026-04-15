@@ -490,3 +490,72 @@ pub struct Config {
     #[serde(default)]
     artifact_sources: Vec<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use capnp::message::{Builder, HeapAllocator};
+    use std::path::PathBuf;
+
+    use crate::ch::dtos::CreateVmSpecRef;
+
+    use super::Config;
+
+    fn test_config(socket_dir: PathBuf) -> Config {
+        Config {
+            binary_path: PathBuf::from("/bin/true"),
+            socket_dir,
+            socket_timeout_secs: 2,
+            bridge_name: String::from("br0"),
+            artifact_sources: Vec::new(),
+        }
+    }
+
+    fn build_vm_spec_message(
+        root_disk: &str,
+        kernel: &str,
+        initramfs: &str,
+    ) -> Builder<HeapAllocator> {
+        let mut message = Builder::new_default();
+        let mut vm_spec =
+            message.init_root::<commands::common_capnp::vm_spec::Builder<commands::ch_capnp::vm_config::Owned>>();
+        let mut vm_cfg = vm_spec.reborrow().init_spec();
+
+        {
+            let mut cpus = vm_cfg.reborrow().init_cpus();
+            cpus.set_boot_vcpus(1);
+        }
+
+        {
+            let mut memory = vm_cfg.reborrow().init_memory();
+            memory.set_size(512 * 1024 * 1024);
+        }
+
+        {
+            let mut payload = vm_cfg.reborrow().init_payload();
+            payload.set_kernel(kernel);
+            payload.set_cmdline("console=ttyS0");
+            payload.set_initramfs(initramfs);
+        }
+
+        {
+            let mut disks = vm_cfg.reborrow().init_disks(1);
+            let mut disk = disks.reborrow().get(0);
+            disk.set_path(root_disk);
+        }
+
+        message
+    }
+
+    fn vm_spec_from_message<'a>(message: &'a Builder<HeapAllocator>) -> CreateVmSpecRef<'a> {
+        let reader: commands::common_capnp::vm_spec::Reader<
+            'a,
+            commands::ch_capnp::vm_config::Owned,
+        > = message
+            .get_root_as_reader()
+            .expect("capnp root reader should be available");
+        CreateVmSpecRef::try_from(reader).expect("CreateVmSpecRef conversion should succeed")
+    }
+
+    #[test]
+    fn test_name() {}
+}

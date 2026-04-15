@@ -17,18 +17,15 @@ pub struct VmConfigRef<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     net: Option<Vec<NetConfigRef<'a>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    rng: Option<RngConfigRef<'a>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     console: Option<ConsoleConfigRef<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     serial: Option<ConsoleConfigRef<'a>>,
 }
 
-/// Maps to `CpusConfig` in ch.capnp. Both fields are required by the CH API.
+/// Maps to `CpusConfig` in ch.capnp.
 #[derive(Debug, Clone, Serialize)]
 pub struct CpusConfigRef {
     boot_vcpus: u32,
-    max_vcpus: u32,
 }
 
 /// Maps to `MemoryConfig` in ch.capnp. `size` is required by the CH API.
@@ -37,38 +34,16 @@ pub struct MemoryConfigRef {
     size: u64,
 }
 
-/// Maps to `DiskConfig` in ch.capnp.
+/// Maps to `DiskConfig` in ch.capnp. The worker overrides path at runtime.
 #[derive(Debug, Clone, Serialize)]
 pub struct DiskConfigRef<'a> {
     path: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    readonly: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    direct: Option<bool>,
 }
 
-/// Maps to `NetConfig` in ch.capnp.
-/// All fields are optional; omitting `tap` lets CH create a user-mode network.
+/// Maps to `NetConfig` in ch.capnp. Only `tap` is used; CH fills in defaults for the rest.
 #[derive(Debug, Clone, Serialize)]
 pub struct NetConfigRef<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tap: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ip: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    mask: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    mac: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    host_mac: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    mtu: Option<u32>,
-}
-
-/// Maps to `RngConfig` in ch.capnp. `src` is required by the CH API.
-#[derive(Debug, Clone, Serialize)]
-pub struct RngConfigRef<'a> {
-    src: &'a str,
+    tap: &'a str,
 }
 
 /// Maps to `ConsoleConfig` in ch.capnp.
@@ -91,33 +66,18 @@ impl<'a> VmConfigRef<'a> {
     ) -> Self {
         if let Some(first_disk) = self.disks.first_mut() {
             first_disk.path = writable_disk_path;
-            first_disk.readonly = Some(false);
         } else {
             self.disks.push(DiskConfigRef {
                 path: writable_disk_path,
-                readonly: Some(false),
-                direct: None,
             });
         }
 
         self.net = if network_enabled {
-            Some(vec![NetConfigRef {
-                tap: Some(tap_name),
-                ip: None,
-                mask: None,
-                mac: None,
-                host_mac: None,
-                mtu: None,
-            }])
+            Some(vec![NetConfigRef { tap: tap_name }])
         } else {
             None
         };
 
-        if self.rng.is_none() {
-            self.rng = Some(RngConfigRef {
-                src: "/dev/urandom",
-            });
-        }
         self.console = Some(ConsoleConfigRef {
             mode: "Off",
             file: None,
@@ -136,8 +96,6 @@ impl<'a> VmConfigRef<'a> {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PayloadConfigRef<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    firmware: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     kernel: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -164,8 +122,6 @@ impl<'a> TryFrom<commands::ch_capnp::vm_config::Reader<'a>> for VmConfigRef<'a> 
             let disk = disks_reader.get(i);
             disks.push(DiskConfigRef {
                 path: disk.get_path()?.to_str()?,
-                readonly: Some(disk.get_readonly()),
-                direct: Some(disk.get_direct()),
             });
         }
 
@@ -174,16 +130,12 @@ impl<'a> TryFrom<commands::ch_capnp::vm_config::Reader<'a>> for VmConfigRef<'a> 
                 let mut nets = Vec::with_capacity(net_reader.len() as usize);
                 for i in 0..net_reader.len() {
                     let net_cfg = net_reader.get(i);
-                    nets.push(NetConfigRef {
-                        tap: non_empty(net_cfg.get_tap()?.to_str()?),
-                        ip: non_empty(net_cfg.get_ip()?.to_str()?),
-                        mask: non_empty(net_cfg.get_mask()?.to_str()?),
-                        mac: non_empty(net_cfg.get_mac()?.to_str()?),
-                        host_mac: non_empty(net_cfg.get_host_mac()?.to_str()?),
-                        mtu: Some(net_cfg.get_mtu()).filter(|mtu| *mtu > 0),
-                    });
+                    let tap = net_cfg.get_tap()?.to_str()?;
+                    if !tap.is_empty() {
+                        nets.push(NetConfigRef { tap });
+                    }
                 }
-                Some(nets)
+                if nets.is_empty() { None } else { Some(nets) }
             }
             _ => None,
         };
@@ -218,31 +170,20 @@ impl<'a> TryFrom<commands::ch_capnp::vm_config::Reader<'a>> for VmConfigRef<'a> 
             Err(_) => None,
         };
 
-        let rng = match reader.get_rng() {
-            Ok(rng_reader) => {
-                let src = rng_reader.get_src()?.to_str()?;
-                non_empty(src).map(|src| RngConfigRef { src })
-            }
-            Err(_) => None,
-        };
-
         Ok(Self {
             cpus: CpusConfigRef {
                 boot_vcpus: cpus.get_boot_vcpus(),
-                max_vcpus: cpus.get_max_vcpus(),
             },
             memory: MemoryConfigRef {
                 size: memory.get_size(),
             },
             payload: PayloadConfigRef {
-                firmware: non_empty(payload.get_firmware()?.to_str()?),
                 kernel: non_empty(payload.get_kernel()?.to_str()?),
                 cmdline: non_empty(payload.get_cmdline()?.to_str()?),
                 initramfs: non_empty(payload.get_initramfs()?.to_str()?),
             },
             disks,
             net,
-            rng,
             console,
             serial,
         })
