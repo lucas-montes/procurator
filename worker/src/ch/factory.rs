@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use serde::Deserialize;
+use serde::{Deserialize, de};
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -15,7 +15,7 @@ use super::{
 };
 
 pub struct Handle {
-    vm_id: String,
+    id: String,
     client: Client,
     process: Process,
     socket_path: PathBuf,
@@ -74,328 +74,6 @@ impl From<Error> for VmError {
     }
 }
 
-struct Artifacts {
-    vm_dir: PathBuf,
-    serial_log_path: PathBuf,
-    writable_disk_path: PathBuf,
-}
-
-impl Factory {
-    /// We need to get the artifacts generated from the nix build.
-    /// TODO: We should have sources to fetch from, probably passed from the config at start.
-    /// The way we fetch them is by calling `nix copy --from <source> <paths>` for each source
-    /// this implies we have nix installed tho
-    async fn fetch_artifacts(&self, spec: &CreateVmSpecRef<'_>) -> Result<(), Error> {
-        let mut required_paths = Vec::new();
-
-        if let Some(kernel) = spec.kernel() {
-            required_paths.push(kernel);
-        }
-        if let Some(initramfs) = spec.initramfs() {
-            required_paths.push(initramfs);
-        }
-
-        let root_disk = spec.root_disk().ok_or_else(|| {
-            Error::ArtifactsMissing("VM config must contain at least one disk path".to_string())
-        })?;
-        required_paths.push(root_disk);
-
-        let mut missing: Vec<&str> = required_paths
-            .into_iter()
-            .filter(|path| !std::path::Path::new(path).exists())
-            .collect();
-
-        if missing.is_empty() {
-            return Ok(());
-        }
-
-        if self.artifact_sources.is_empty() {
-            return Err(Error::ArtifactsMissing(format!(
-                "Missing artifacts ({}) and no artifact_sources configured",
-                missing.join(", ")
-            )));
-        }
-
-        //TODO: check if this command is ok or we need something fancier
-        // either way it should be in repo_outils/nix
-        for source in &self.artifact_sources {
-            let mut command = Command::new("nix");
-            command.arg("copy").arg("--from").arg(source);
-            for path in &missing {
-                command.arg(path);
-            }
-            match command.output().await {
-                Ok(output) if output.status.success() => {
-                    info!(source = %source, "Fetched artifacts from source");
-                    missing.retain(|path| !std::path::Path::new(path).exists());
-                    if missing.is_empty() {
-                        return Ok(());
-                    }
-                }
-                Ok(output) => {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    warn!(source = %source, stderr = %stderr, "Failed to fetch artifacts from source");
-                }
-                Err(error) => {
-                    warn!(source = %source, error = %error, "Failed to run nix copy for artifacts");
-                }
-            }
-        }
-
-        Err(Error::ArtifactsMissing(format!(
-            "Artifacts still missing after fetch attempt: {}",
-            missing.join(", ")
-        )))
-    }
-
-    /// We first create the directory to store the artifacts and later on possibly to create the socket too
-    async fn prepare_vm_dir_and_disk(
-        &self,
-        vm_id: &str,
-        spec: &CreateVmSpecRef<'_>,
-    ) -> Result<Artifacts, VmError> {
-        let vm_dir = self.socket_dir.join(vm_id);
-        tokio::fs::create_dir_all(&vm_dir).await.map_err(|e| {
-            VmError::ProcessFailed(format!(
-                "Failed to create VM directory {}: {e}",
-                vm_dir.display()
-            ))
-        })?;
-
-        let writable_disk_path = vm_dir.join("disk.img");
-        let root_disk = spec.root_disk().ok_or_else(|| {
-            VmError::Internal("VM config must contain at least one disk path".to_string())
-        })?;
-
-        tokio::fs::copy(root_disk, &writable_disk_path)
-            .await
-            .map_err(|e| {
-                VmError::Internal(format!(
-                    "Failed to copy disk image from {} to {}: {e}",
-                    root_disk,
-                    writable_disk_path.display()
-                ))
-            })?;
-
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = std::fs::Permissions::from_mode(0o644);
-            tokio::fs::set_permissions(&writable_disk_path, perms)
-                .await
-                .map_err(|e| {
-                    VmError::Internal(format!(
-                        "Failed to set writable permissions on {}: {e}",
-                        writable_disk_path.display()
-                    ))
-                })?;
-        }
-
-        let serial_log_path = vm_dir.join("serial.log");
-        Ok(Artifacts {
-            vm_dir,
-            serial_log_path,
-            writable_disk_path,
-        })
-    }
-
-    async fn setup_network(&self, vm_id: &str) -> Result<(String, bool), VmError> {
-        let tap_name = format!("pcr-{}", &vm_id[..vm_id.len().min(11)]);
-        let bridge_exists =
-            std::path::Path::new(&format!("/sys/class/net/{}", self.bridge_name)).exists();
-        if !bridge_exists {
-            warn!(
-                vm_id = %vm_id,
-                bridge = %self.bridge_name,
-                "Bridge device does not exist — VM will boot without network"
-            );
-            return Ok((tap_name, false));
-        }
-
-        create_tap_device(&tap_name).await.map_err(|e| {
-            VmError::Internal(format!("Failed to create TAP device {tap_name}: {e}"))
-        })?;
-        info!(vm_id = %vm_id, tap = %tap_name, "TAP device created for VM");
-
-        Ok((tap_name, true))
-    }
-
-    async fn spawn_ch(
-        &self,
-        vm_id: &str,
-        vm_dir: &std::path::Path,
-    ) -> Result<(tokio::process::Child, PathBuf), VmError> {
-        tokio::fs::create_dir_all(&self.socket_dir)
-            .await
-            .map_err(|e| VmError::ProcessFailed(format!("Failed to create socket dir: {e}")))?;
-
-        let socket_path = self.socket_dir.join(format!("{vm_id}.sock"));
-        if socket_path.exists() {
-            let _ = tokio::fs::remove_file(&socket_path).await;
-        }
-
-        let ch_log_path = vm_dir.join("cloud-hypervisor.log");
-        let ch_log_file = std::fs::File::create(&ch_log_path).map_err(|e| {
-            VmError::ProcessFailed(format!(
-                "Failed to create CH log file {}: {e}",
-                ch_log_path.display()
-            ))
-        })?;
-        let stderr_file = ch_log_file.try_clone().map_err(|e| {
-            VmError::ProcessFailed(format!("Failed to clone CH log file handle: {e}"))
-        })?;
-
-        let child = Command::new(&self.ch_binary)
-            .arg("--api-socket")
-            .arg(&socket_path)
-            .stdout(std::process::Stdio::from(ch_log_file))
-            .stderr(std::process::Stdio::from(stderr_file))
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|e| {
-                VmError::ProcessFailed(format!("Failed to spawn {}: {e}", self.ch_binary.display()))
-            })?;
-
-        Ok((child, socket_path))
-    }
-
-    async fn wait_for_socket(path: &std::path::Path, timeout: Duration) -> Result<(), VmError> {
-        let start = Instant::now();
-        let mut delay = Duration::from_millis(10);
-
-        while start.elapsed() < timeout {
-            if path.exists() {
-                debug!(path = %path.display(), "Socket ready");
-                return Ok(());
-            }
-            tokio::time::sleep(delay).await;
-            delay = (delay * 2).min(Duration::from_millis(500));
-        }
-
-        Err(VmError::ProcessFailed(format!(
-            "Socket {} did not appear within {:?}",
-            path.display(),
-            timeout,
-        )))
-    }
-
-    // The spec already carries a CH-shaped config from capnp.
-    // This step only applies worker-local runtime overrides that cannot be known
-    // upstream (writable disk path, host TAP wiring, serial log path, fallback RNG).
-    fn finalize_vm_config_for_runtime<'a>(
-        &self,
-        spec: &'a CreateVmSpecRef<'a>,
-        writable_disk_path: &'a str,
-        serial_log_path: &'a str,
-        tap_name: &'a str,
-        network_enabled: bool,
-    ) -> VmConfigRef<'a> {
-        spec.vm_config().clone().finalize_for_runtime(
-            writable_disk_path,
-            serial_log_path,
-            tap_name,
-            network_enabled,
-        )
-    }
-
-    fn path_to_str<'a>(&self, path: &'a Path, field_name: &str) -> Result<&'a str, Error> {
-        path.to_str().ok_or_else(|| Error::InvalidPathUtf8 {
-            field: field_name.to_string(),
-            path: path.display().to_string(),
-        })
-    }
-
-    async fn attach_tap_to_bridge(&self, vm_id: &str, tap_name: &str) -> Result<(), VmError> {
-        use futures::stream::TryStreamExt;
-
-        async fn link_index(
-            handle: &rtnetlink::Handle,
-            name: &str,
-        ) -> Result<Option<u32>, VmError> {
-            let mut links = handle.link().get().match_name(name.to_string()).execute();
-            let opt_msg = links
-                .try_next()
-                .await
-                .map_err(|e| VmError::Internal(format!("netlink get failed: {e}")))?;
-            Ok(opt_msg.map(|msg| msg.header.index))
-        }
-
-        let (connection, handle, _) = rtnetlink::new_connection()
-            .map_err(|e| VmError::Internal(format!("netlink connection failed: {e}")))?;
-        tokio::spawn(connection);
-
-        let max_attempts = 20;
-        for attempt in 1..=max_attempts {
-            match link_index(&handle, tap_name).await? {
-                Some(tap_index) => {
-                    let Some(bridge_index) = link_index(&handle, &self.bridge_name).await? else {
-                        return Err(VmError::Internal(format!(
-                            "bridge {} not found when attaching TAP",
-                            self.bridge_name
-                        )));
-                    };
-
-                    let attach_result = handle
-                        .link()
-                        .set(tap_index)
-                        .master(bridge_index)
-                        .up()
-                        .execute()
-                        .await;
-                    match attach_result {
-                        Ok(()) => {
-                            info!(
-                                vm_id = %vm_id,
-                                tap = %tap_name,
-                                bridge = %self.bridge_name,
-                                attempts = attempt,
-                                "TAP attached to bridge"
-                            );
-                            return Ok(());
-                        }
-                        Err(e) => {
-                            warn!(
-                                vm_id = %vm_id,
-                                tap = %tap_name,
-                                bridge = %self.bridge_name,
-                                attempts = attempt,
-                                stderr = %e,
-                                "Failed to attach TAP to bridge — VM may have no network"
-                            );
-                            return Ok(());
-                        }
-                    }
-                }
-                None if attempt < max_attempts => {
-                    debug!(
-                        vm_id = %vm_id,
-                        tap = %tap_name,
-                        bridge = %self.bridge_name,
-                        attempts = attempt,
-                        "TAP not visible yet; retrying bridge attach"
-                    );
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                }
-                None => {
-                    warn!(
-                        vm_id = %vm_id,
-                        tap = %tap_name,
-                        bridge = %self.bridge_name,
-                        "TAP still missing after retries — VM may have no network"
-                    );
-                    return Ok(());
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn cleanup_failed_creation(process: &mut Process) {
-        let _ = process.kill().await;
-        let _ = process.cleanup().await;
-    }
-}
-
 impl VmFactory for Factory {
     type VmHandle = Handle;
     type Config = Config;
@@ -412,72 +90,7 @@ impl VmFactory for Factory {
     ) -> Result<CreateCommand<Self>, VmError> {
         let vm_id = Self::create_id();
         debug!(vm_id = %vm_id, "creating VM from spec");
-        self.fetch_artifacts(&source).await?;
-
-        let artifacts = self.prepare_vm_dir_and_disk(&vm_id, &source).await?;
-        let (tap_name, network_enabled) = self.setup_network(&vm_id).await?;
-        let (child, socket_path) = self.spawn_ch(&vm_id, &artifacts.vm_dir).await?;
-        Self::wait_for_socket(&socket_path, self.socket_timeout).await?;
-
-        let writable_disk_path =
-            self.path_to_str(&artifacts.writable_disk_path, "writable_disk")?;
-        let serial_log_path = self.path_to_str(&artifacts.serial_log_path, "serial_log")?;
-
-        let vm_config = self.finalize_vm_config_for_runtime(
-            &source,
-            &writable_disk_path,
-            &serial_log_path,
-            &tap_name,
-            network_enabled,
-        );
-
-        let client = Client::new(&socket_path);
-        let mut process = Process::new(
-            child,
-            socket_path.clone(),
-            artifacts.vm_dir,
-            network_enabled.then_some(tap_name.clone()),
-        );
-
-        if let Err(err) = client.create(&vm_config).await {
-            Self::cleanup_failed_creation(&mut process).await;
-            return Err(VmError::Hypervisor(format!("Failed to create VM: {err}")));
-        }
-
-        if network_enabled {
-            self.attach_tap_to_bridge(&vm_id, &tap_name).await?;
-        }
-
-        if let Err(err) = client.boot().await {
-            Self::cleanup_failed_creation(&mut process).await;
-            return Err(VmError::Hypervisor(format!("Failed to boot VM: {err}")));
-        }
-
-        let handle = Handle {
-            vm_id: vm_id.clone(),
-            client,
-            process,
-            socket_path,
-        };
-
-        Ok(CreateCommand::new(handle, vm_id))
-    }
-
-    async fn delete_vm(&self, id: &str) -> Result<(), VmError> {
-        let socket_path = self.socket_dir.join(format!("{id}.sock"));
-        if socket_path.exists() {
-            let _ = tokio::fs::remove_file(&socket_path).await;
-        }
-
-        let vm_dir = self.socket_dir.join(id);
-        if vm_dir.exists() {
-            let _ = tokio::fs::remove_dir_all(&vm_dir).await;
-        }
-
-        let tap_name = format!("pcr-{}", &id[..id.len().min(11)]);
-        let _ = delete_tap_device(&tap_name).await;
-
-        Ok(())
+        todo!()
     }
 }
 
@@ -491,14 +104,259 @@ pub struct Config {
     artifact_sources: Vec<String>,
 }
 
+struct VmDir {
+    vm_dir: PathBuf,
+    socket_path: PathBuf,
+}
+
+// ── Step 1: Create VM directory ───────────────────────────────────────
+
+/// Creates the per-VM working directory under `<socket_dir>/<vm_id>/`
+/// and returns `(vm_dir, socket_path)`.
+///
+/// The directory layout:
+/// ```text
+/// <socket_dir>/<vm_id>/
+/// ├── ch-api.sock   (created later by CH)
+/// ├── root.img      (writable copy, created in step 2)
+/// └── serial.log    (created later by CH)
+/// ```
+async fn create_vm_dir(socket_dir: PathBuf, vm_id: &str) -> Result<VmDir, VmError> {
+    let vm_dir = socket_dir.join(vm_id);
+    debug!(vm_id = %vm_id, vm_dir = %vm_dir.display(), "creating VM directory");
+    tokio::fs::create_dir_all(&vm_dir).await.map_err(|e| {
+        VmError::Internal(format!("failed to create VM dir {}: {e}", vm_dir.display()))
+    })?;
+
+    let socket_path = vm_dir.join("ch-api.sock");
+    debug!(vm_dir = %vm_dir.display(), socket = %socket_path.display(), "VM directory created");
+    Ok(VmDir {
+        vm_dir,
+        socket_path,
+    })
+}
+
+/// Generates a TAP device name from a VM id.
+///
+/// Uses `tap-` prefix + first 8 hex chars of the UUID (no hyphens)
+/// to stay within the `IFNAMSIZ` limit of 15 characters.
+///
+/// Example: `019712ab-1234-...` → `tap-019712ab`
+fn tap_name_from_id(vm_id: &str) -> String {
+    let mut hex = String::with_capacity(12);
+    hex.push_str("tap-");
+    vm_id
+        .chars()
+        .filter(|c| c != &'-')
+        .take(8)
+        .for_each(|c| hex.push(c));
+    hex
+}
+
+trait ArtifactsResolver {
+    async fn fetch(source_path: &Path, destination: &Path) -> Result<(), VmError>;
+    async fn verify(path: &Path) -> Result<(), VmError>;
+}
+
+// TODO: maybe only used for tests, therefor move it to the test part?
+struct LocalArtifactResolver;
+
+impl ArtifactsResolver for LocalArtifactResolver {
+    async fn fetch(source_path: &Path, destination: &Path) -> Result<(), VmError> {
+        if !source_path.exists() {
+            return Err(Error::ArtifactsMissing(format!(
+                "artifact not found locally: {}",
+                source_path.display()
+            ))
+            .into());
+        }
+
+        tokio::fs::copy(source_path, destination)
+            .await
+            .map_err(|e| {
+                VmError::Internal(format!(
+                    "failed to copy artifact {} → {}: {e}",
+                    source_path.display(),
+                    destination.display()
+                ))
+            })?;
+
+        Ok(())
+    }
+
+    async fn verify(path: &Path) -> Result<(), VmError> {
+        if !path.exists() {
+            return Err(Error::ArtifactsMissing(format!(
+                "artifact not found locally: {}",
+                path.display()
+            ))
+            .into());
+        }
+        Ok(())
+    }
+}
+
+struct Artifacts {
+    writable_disk: PathBuf,
+    serial_log: PathBuf,
+}
+
+// ── Step 2: Prepare artifacts ─────────────────────────────────────────
+
+/// Verifies that kernel and initramfs exist locally (read-only access)
+/// and copies the root disk into the VM directory (writable).
+///
+/// Returns `(writable_disk_path, serial_log_path)`.
+async fn prepare_artifacts<A: ArtifactsResolver>(
+    vm_dir: &Path,
+    spec: &CreateVmSpecRef<'_>,
+) -> Result<Artifacts, VmError> {
+    // Verify read-only artifacts exist.
+    A::verify(Path::new(spec.kernel())).await?;
+    A::verify(Path::new(spec.initramfs())).await?;
+    // Copy root disk into VM dir (writable copy).
+    let source_disk = Path::new(spec.root_disk());
+    A::verify(source_disk).await?;
+
+    let writable_disk = vm_dir.join("root.img");
+    A::fetch(source_disk, &writable_disk).await?;
+
+    let serial_log = vm_dir.join("serial.log");
+
+    debug!(
+        kernel = %spec.kernel(),
+        initramfs = %spec.initramfs(),
+        serial_log = %serial_log.display(),
+        writable_disk = %writable_disk.display(),
+        "artifacts prepared"
+    );
+
+    Ok(Artifacts {
+        writable_disk,
+        serial_log,
+    })
+}
+
+// ── Step 3: Create TAP + attach to bridge ─────────────────────────────
+
+/// Creates a persistent TAP device and attaches it to the configured bridge.
+///
+/// Returns the TAP device name. Hard-errors if the bridge does not exist.
+async fn setup_networking(bridge_name: &str, vm_id: &str) -> Result<String, VmError> {
+    let tap = tap_name_from_id(vm_id);
+
+    create_tap_device(&tap).await?;
+    // attach_tap_to_bridge(&tap, bridge_name).await?;
+
+    info!(bridge_name, tap = %tap, "networking configured");
+    Ok(tap)
+}
+
+// ── Step 4: Finalize VM config ────────────────────────────────────────
+
+/// Takes the capnp-derived config and patches it with runtime paths
+/// (writable disk, serial log, TAP name).
+fn finalize_config<'a>(
+    config: VmConfigRef<'a>,
+    writable_disk: &'a str,
+    serial_log: &'a str,
+    tap_name: &'a str,
+) -> VmConfigRef<'a> {
+    config.finalize_for_runtime(writable_disk, serial_log, Some(tap_name))
+}
+
+// ── Step 5: Spawn CH process ──────────────────────────────────────────
+
+/// Spawns the `cloud-hypervisor` binary, waits for the API socket to
+/// appear, then sends the `vm.create` API call.
+///
+/// Does **not** call `vm.boot` — the caller is responsible for that
+/// so boot can happen asynchronously for faster user response.
+async fn spawn_and_create(
+    vm_id: &str,
+    vm_dir: &Path,
+    socket_path: &Path,
+    tap_name: &str,
+    ch_binary: &Path,
+    socket_timeout: Duration,
+    config: &VmConfigRef<'_>,
+) -> Result<(Process, Client), VmError> {
+    let log_file = vm_dir.join("cloud-hypervisor.log");
+
+    let child = Command::new(ch_binary)
+        .arg("--api-socket")
+        .arg(socket_path.as_os_str())
+        .arg("--log-file")
+        .arg(log_file.as_os_str())
+        .arg("-v")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| {
+            VmError::ProcessFailed(format!("failed to spawn {}: {e}", ch_binary.display()))
+        })?;
+
+    info!(
+        vm_id = %vm_id,
+        pid = child.id().unwrap_or(0),
+        "cloud-hypervisor process spawned"
+    );
+
+    // Wait for the API socket to appear.
+    wait_for_socket(socket_timeout, socket_path).await?;
+
+    let client = Client::new(socket_path);
+    let process = Process::new(
+        child,
+        socket_path.to_path_buf(),
+        vm_dir.to_path_buf(),
+        Some(tap_name.to_string()),
+    );
+
+    // Send vm.create — configures the VM but does not boot it.
+    client
+        .create(config)
+        .await
+        .map_err(|e| VmError::ProcessFailed(format!("vm.create API call failed: {e}")))?;
+
+    info!(vm_id = %vm_id, "vm.create succeeded — VM is ready to boot");
+    Ok((process, client))
+}
+
+/// Polls for the API socket file to appear on disk, with a timeout.
+async fn wait_for_socket(socket_timeout: Duration, socket_path: &Path) -> Result<(), VmError> {
+    let start = Instant::now();
+    let poll_interval = Duration::from_millis(50);
+
+    loop {
+        if socket_path.exists() {
+            debug!(socket = %socket_path.display(), "API socket appeared");
+            return Ok(());
+        }
+        if start.elapsed() > socket_timeout {
+            return Err(VmError::ProcessFailed(format!(
+                "API socket {} did not appear within {:?}",
+                socket_path.display(),
+                socket_timeout,
+            )));
+        }
+        tokio::time::sleep(poll_interval).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use capnp::message::{Builder, HeapAllocator};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use crate::ch::dtos::CreateVmSpecRef;
+    use crate::vmm::Factory as VmFactory;
 
-    use super::Config;
+    use super::{
+        Config, Factory, LocalArtifactResolver, create_vm_dir, finalize_config, prepare_artifacts,
+        tap_name_from_id,
+    };
 
     fn test_config(socket_dir: PathBuf) -> Config {
         Config {
@@ -543,6 +401,16 @@ mod tests {
             disk.set_path(root_disk);
         }
 
+        {
+            let mut console = vm_cfg.reborrow().init_console();
+            console.set_mode("Off");
+        }
+
+        {
+            let mut serial = vm_cfg.reborrow().init_serial();
+            serial.set_mode("Tty");
+        }
+
         message
     }
 
@@ -556,6 +424,167 @@ mod tests {
         CreateVmSpecRef::try_from(reader).expect("CreateVmSpecRef conversion should succeed")
     }
 
+    use std::sync::Once;
+    use tracing_subscriber::{EnvFilter, fmt};
+
+    static TRACING_INIT: Once = Once::new();
+
+    fn init_tracing() {
+        TRACING_INIT.call_once(|| {
+            let _ = fmt()
+                .with_env_filter(EnvFilter::new("debug"))
+                .with_test_writer()
+                .try_init();
+        });
+    }
+
+    #[tokio::test]
+    async fn create_vm_dir_creates_directory_and_socket_path() {
+        init_tracing();
+        let socket_dir = PathBuf::from("tests/data/tmp/sockets");
+
+        let vm_id = "test-vm-001";
+        let result = create_vm_dir(socket_dir, vm_id).await.unwrap();
+
+        assert_eq!(
+            result.vm_dir.to_str(),
+            Some("tests/data/tmp/sockets/test-vm-001")
+        );
+        assert_eq!(
+            result.socket_path,
+            PathBuf::from("tests/data/tmp/sockets/test-vm-001/ch-api.sock")
+        );
+        // Socket file itself is NOT created — CH will create it.
+        assert!(!result.socket_path.exists());
+        tokio::fs::remove_dir_all(&result.vm_dir)
+            .await
+            .expect("cleanup should succeed");
+    }
+
+    // ── Step 2: Artifact preparation ──────────────────────────────────────
+
+    /// Creates a temp dir with fake kernel, initramfs and root disk files.
+    /// Returns `(temp_dir_guard, kernel_path, initramfs_path, root_disk_path)`.
+    fn create_fake_artifacts(tmp: &Path) -> (PathBuf, PathBuf, PathBuf) {
+        let kernel = tmp.join("kernel");
+        let initramfs = tmp.join("initramfs");
+        let root_disk = tmp.join("root.img");
+
+        std::fs::write(&kernel, b"fake-kernel").unwrap();
+        std::fs::write(&initramfs, b"fake-initramfs").unwrap();
+        std::fs::write(&root_disk, b"fake-root-disk").unwrap();
+
+        (kernel, initramfs, root_disk)
+    }
+
+    #[tokio::test]
+    async fn prepare_artifacts_copies_disk_and_verifies_ro_files() {
+        init_tracing();
+        let tmp = PathBuf::from("tests/data");
+        let (kernel, initramfs, root_disk) = create_fake_artifacts(&tmp);
+        let vm_dir = tmp.join("vm-artifacts-test");
+        std::fs::create_dir_all(&vm_dir).unwrap();
+
+        let message = build_vm_spec_message(
+            root_disk.to_str().unwrap(),
+            kernel.to_str().unwrap(),
+            initramfs.to_str().unwrap(),
+        );
+        let spec = vm_spec_from_message(&message);
+
+        let result = prepare_artifacts::<LocalArtifactResolver>(&vm_dir, &spec)
+            .await
+            .unwrap();
+
+        // Writable disk is a copy inside vm_dir.
+        assert_eq!(result.writable_disk, vm_dir.join("root.img"));
+        assert!(result.writable_disk.exists());
+        assert_eq!(
+            std::fs::read(&result.writable_disk).unwrap(),
+            b"fake-root-disk"
+        );
+
+        // Serial log path is defined but not yet created.
+        assert_eq!(result.serial_log, vm_dir.join("serial.log"));
+        assert!(!result.serial_log.exists());
+    }
+
+    #[tokio::test]
+    async fn prepare_artifacts_fails_when_kernel_missing() {
+        init_tracing();
+        let tmp = PathBuf::from("tests/data");
+        let (_kernel, initramfs, root_disk) = create_fake_artifacts(&tmp);
+        let vm_dir = tmp.join("vm-kernel-missing");
+        std::fs::create_dir_all(&vm_dir).unwrap();
+
+        let message = build_vm_spec_message(
+            root_disk.to_str().unwrap(),
+            "/nonexistent/kernel",
+            initramfs.to_str().unwrap(),
+        );
+        let spec = vm_spec_from_message(&message);
+
+        let result = prepare_artifacts::<LocalArtifactResolver>(&vm_dir, &spec).await;
+        assert!(result.is_err());
+    }
+
+    // ── TAP naming ────────────────────────────────────────────────────────
+
     #[test]
-    fn test_name() {}
+    fn tap_name_strips_hyphens_and_takes_first_8() {
+        // v7 UUID example: 019712ab-3c4d-7e5f-8a9b-0c1d2e3f4a5b
+        let name = tap_name_from_id("019712ab-3c4d-7e5f-8a9b-0c1d2e3f4a5b");
+        assert_eq!(name, "tap-019712ab");
+        // IFNAMSIZ = 16 (15 chars + null), our name is "tap-" (4) + 8 = 12
+        assert!(name.len() <= 15, "TAP name too long: {name}");
+    }
+
+
+    #[test]
+    fn finalize_config_patches_disk_serial_and_net() {
+        init_tracing();
+        let tmp = PathBuf::from("tests/data");
+        let (kernel, initramfs, root_disk) = create_fake_artifacts(&tmp);
+
+        let message = build_vm_spec_message(
+            root_disk.to_str().unwrap(),
+            kernel.to_str().unwrap(),
+            initramfs.to_str().unwrap(),
+        );
+        let spec = vm_spec_from_message(&message);
+
+        let config = finalize_config(
+            spec.vm_config().clone(),
+            "/vm/root.img",
+            "/vm/serial.log",
+            "tap-aabbccdd",
+        );
+
+        // Serialize to JSON and verify the fields were patched.
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+
+        assert_eq!(json["disks"][0]["path"], "/vm/root.img");
+        assert_eq!(json["serial"]["mode"], "File");
+        assert_eq!(json["serial"]["file"], "/vm/serial.log");
+        assert_eq!(json["console"]["mode"], "Off");
+        assert_eq!(json["net"][0]["tap"], "tap-aabbccdd");
+    }
+
+    #[tokio::test]
+    async fn test_name() {
+        init_tracing();
+
+        let message =
+            build_vm_spec_message("/path/to/root.img", "/path/to/kernel", "/path/to/initramfs");
+        let spec_ref = vm_spec_from_message(&message);
+        println!("{:?}", spec_ref);
+
+        let config = test_config(PathBuf::from("/tmp/sockets"));
+        let factory = Factory::from(config);
+
+        println!("{:?}", factory);
+
+        factory.create_vm(spec_ref).await.unwrap();
+    }
 }

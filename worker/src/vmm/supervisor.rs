@@ -24,7 +24,7 @@ impl<F: Factory> CreateCommand<F> {
 
 pub enum Command<F: Factory> {
     Create(CreateCommand<F>),
-    Delete,
+    Delete(String),
 }
 
 /// Background structure that will save processes running, check their status, and make operations to the state if needed. It will be the primary writter for blocking operations
@@ -53,7 +53,7 @@ impl<F: Factory> Supervisor<F> {
     fn handle_command(&mut self, cmd: Command<F>) {
         match cmd {
             Command::Create(cmd) => self.handle_create(cmd),
-            Command::Delete => self.handle_delete(),
+            Command::Delete(id) => self.handle_delete(id),
         }
     }
 
@@ -62,7 +62,7 @@ impl<F: Factory> Supervisor<F> {
         // TODO: persist + insert in registry
     }
 
-    fn handle_delete(&mut self) {
+    fn handle_delete(&mut self, id: String) {
         let _ = &self.state;
         // TODO: remove from registry + cleanup state
     }

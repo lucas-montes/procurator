@@ -1,3 +1,5 @@
+use std::ops::Not;
+
 use serde::Serialize;
 
 // ── CH API-facing DTOs ────────────────────────────────────────────────────────
@@ -16,10 +18,8 @@ pub struct VmConfigRef<'a> {
     disks: Vec<DiskConfigRef<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     net: Option<Vec<NetConfigRef<'a>>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    console: Option<ConsoleConfigRef<'a>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    serial: Option<ConsoleConfigRef<'a>>,
+    console: ConsoleConfigRef<'a>,
+    serial: ConsoleConfigRef<'a>,
 }
 
 /// Maps to `CpusConfig` in ch.capnp.
@@ -51,7 +51,7 @@ pub struct NetConfigRef<'a> {
 /// `mode` is required; `file` is only meaningful when `mode = "File"`.
 #[derive(Debug, Clone, Serialize)]
 pub struct ConsoleConfigRef<'a> {
-    mode: &'a str,
+    mode: &'a str, //TODO: this could be an enum I think
     #[serde(skip_serializing_if = "Option::is_none")]
     file: Option<&'a str>,
 }
@@ -61,8 +61,7 @@ impl<'a> VmConfigRef<'a> {
         mut self,
         writable_disk_path: &'a str,
         serial_log_path: &'a str,
-        tap_name: &'a str,
-        network_enabled: bool,
+        tap_name: Option<&'a str>,
     ) -> Self {
         if let Some(first_disk) = self.disks.first_mut() {
             first_disk.path = writable_disk_path;
@@ -72,20 +71,16 @@ impl<'a> VmConfigRef<'a> {
             });
         }
 
-        self.net = if network_enabled {
-            Some(vec![NetConfigRef { tap: tap_name }])
-        } else {
-            None
-        };
+        self.net = tap_name.map(|name| vec![NetConfigRef { tap: name }]);
 
-        self.console = Some(ConsoleConfigRef {
+        self.console = ConsoleConfigRef {
             mode: "Off",
             file: None,
-        });
-        self.serial = Some(ConsoleConfigRef {
+        };
+        self.serial = ConsoleConfigRef {
             mode: "File",
             file: Some(serial_log_path),
-        });
+        };
 
         self
     }
@@ -96,97 +91,22 @@ impl<'a> VmConfigRef<'a> {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PayloadConfigRef<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    kernel: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cmdline: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    initramfs: Option<&'a str>,
+    kernel: &'a str,
+    cmdline: &'a str,
+    initramfs: &'a str,
 }
 
 fn non_empty(value: &str) -> Option<&str> {
     if value.is_empty() { None } else { Some(value) }
 }
 
-impl<'a> TryFrom<commands::ch_capnp::vm_config::Reader<'a>> for VmConfigRef<'a> {
-    type Error = capnp::Error;
-
-    fn try_from(reader: commands::ch_capnp::vm_config::Reader<'a>) -> Result<Self, Self::Error> {
-        let cpus = reader.get_cpus()?;
-        let memory = reader.get_memory()?;
-        let payload = reader.get_payload()?;
-
-        let disks_reader = reader.get_disks()?;
-        let mut disks = Vec::with_capacity(disks_reader.len() as usize);
-        for i in 0..disks_reader.len() {
-            let disk = disks_reader.get(i);
-            disks.push(DiskConfigRef {
-                path: disk.get_path()?.to_str()?,
-            });
-        }
-
-        let net = match reader.get_net() {
-            Ok(net_reader) if net_reader.len() > 0 => {
-                let mut nets = Vec::with_capacity(net_reader.len() as usize);
-                for i in 0..net_reader.len() {
-                    let net_cfg = net_reader.get(i);
-                    let tap = net_cfg.get_tap()?.to_str()?;
-                    if !tap.is_empty() {
-                        nets.push(NetConfigRef { tap });
-                    }
-                }
-                if nets.is_empty() { None } else { Some(nets) }
-            }
-            _ => None,
-        };
-
-        let console = match reader.get_console() {
-            Ok(console_reader) => {
-                let mode = console_reader.get_mode()?.to_str()?;
-                if mode.is_empty() {
-                    None
-                } else {
-                    Some(ConsoleConfigRef {
-                        mode,
-                        file: non_empty(console_reader.get_file()?.to_str()?),
-                    })
-                }
-            }
-            Err(_) => None,
-        };
-
-        let serial = match reader.get_serial() {
-            Ok(serial_reader) => {
-                let mode = serial_reader.get_mode()?.to_str()?;
-                if mode.is_empty() {
-                    None
-                } else {
-                    Some(ConsoleConfigRef {
-                        mode,
-                        file: non_empty(serial_reader.get_file()?.to_str()?),
-                    })
-                }
-            }
-            Err(_) => None,
-        };
-
-        Ok(Self {
-            cpus: CpusConfigRef {
-                boot_vcpus: cpus.get_boot_vcpus(),
-            },
-            memory: MemoryConfigRef {
-                size: memory.get_size(),
-            },
-            payload: PayloadConfigRef {
-                kernel: non_empty(payload.get_kernel()?.to_str()?),
-                cmdline: non_empty(payload.get_cmdline()?.to_str()?),
-                initramfs: non_empty(payload.get_initramfs()?.to_str()?),
-            },
-            disks,
-            net,
-            console,
-            serial,
-        })
+fn require_non_empty<'a>(value: &'a str, field: &'static str) -> Result<&'a str, capnp::Error> {
+    if value.is_empty() {
+        Err(capnp::Error::failed(format!(
+            "required field '{field}' is empty"
+        )))
+    } else {
+        Ok(value)
     }
 }
 
@@ -200,16 +120,16 @@ impl<'a> CreateVmSpecRef<'a> {
         &self.vm_config
     }
 
-    pub fn kernel(&self) -> Option<&str> {
+    pub fn kernel(&self) -> &str {
         self.vm_config.payload.kernel
     }
 
-    pub fn initramfs(&self) -> Option<&str> {
+    pub fn initramfs(&self) -> &str {
         self.vm_config.payload.initramfs
     }
 
-    pub fn root_disk(&self) -> Option<&str> {
-        self.vm_config.disks.first().map(|disk| disk.path)
+    pub fn root_disk(&self) -> &str {
+        self.vm_config.disks[0].path
     }
 }
 
@@ -221,8 +141,187 @@ impl<'a> TryFrom<commands::common_capnp::vm_spec::Reader<'a, commands::ch_capnp:
     fn try_from(
         reader: commands::common_capnp::vm_spec::Reader<'a, commands::ch_capnp::vm_config::Owned>,
     ) -> Result<Self, Self::Error> {
-        let vm_config = VmConfigRef::try_from(reader.get_spec()?)?;
+        let reader = reader.get_spec()?;
+        let cpus = reader.get_cpus()?;
+        let memory = reader.get_memory()?;
+        let payload = reader.get_payload()?;
 
-        Ok(Self { vm_config })
+        let disks_reader = reader.get_disks()?;
+        if disks_reader.is_empty() {
+            return Err(capnp::Error::failed(
+                "vm config must contain at least one disk".to_string(),
+            ));
+        }
+        let mut disks: Vec<DiskConfigRef<'_>> = Vec::with_capacity(disks_reader.len() as usize);
+        for disk in disks_reader {
+            disks.push(DiskConfigRef {
+                path: require_non_empty(disk.get_path()?.to_str()?, "disk.path")?,
+            });
+        }
+
+        let net = match reader.get_net() {
+            Ok(net_reader) if net_reader.is_empty().not() => {
+                let mut nets = Vec::with_capacity(net_reader.len() as usize);
+                for net_cfg in net_reader {
+                    nets.push(NetConfigRef {
+                        tap: require_non_empty(net_cfg.get_tap()?.to_str()?, "net.tap")?,
+                    });
+                }
+                Some(nets)
+            }
+            _ => None,
+        };
+
+        let console_reader = reader.get_console()?;
+        let console = ConsoleConfigRef {
+            mode: require_non_empty(console_reader.get_mode()?.to_str()?, "console.mode")?,
+            file: non_empty(console_reader.get_file()?.to_str()?),
+        };
+
+        let serial_reader = reader.get_serial()?;
+        let serial = ConsoleConfigRef {
+            mode: require_non_empty(serial_reader.get_mode()?.to_str()?, "serial.mode")?,
+            file: non_empty(serial_reader.get_file()?.to_str()?),
+        };
+
+        Ok(Self {
+            vm_config: VmConfigRef {
+                cpus: CpusConfigRef {
+                    boot_vcpus: cpus.get_boot_vcpus(),
+                },
+                memory: MemoryConfigRef {
+                    size: memory.get_size(),
+                },
+                payload: PayloadConfigRef {
+                    kernel: require_non_empty(payload.get_kernel()?.to_str()?, "payload.kernel")?,
+                    cmdline: require_non_empty(
+                        payload.get_cmdline()?.to_str()?,
+                        "payload.cmdline",
+                    )?,
+                    initramfs: require_non_empty(
+                        payload.get_initramfs()?.to_str()?,
+                        "payload.initramfs",
+                    )?,
+                },
+                disks,
+                net,
+                console,
+                serial,
+            },
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ConsoleConfigRef, CpusConfigRef, CreateVmSpecRef, DiskConfigRef, MemoryConfigRef,
+        NetConfigRef, PayloadConfigRef, VmConfigRef,
+    };
+
+    fn make_vm_config<'a>(
+        disk_path: &'a str,
+        net: Option<Vec<NetConfigRef<'a>>>,
+    ) -> VmConfigRef<'a> {
+        VmConfigRef {
+            cpus: CpusConfigRef { boot_vcpus: 2 },
+            memory: MemoryConfigRef {
+                size: 512 * 1024 * 1024,
+            },
+            payload: PayloadConfigRef {
+                kernel: "/path/to/kernel",
+                cmdline: "console=ttyS0",
+                initramfs: "/path/to/initramfs",
+            },
+            disks: vec![DiskConfigRef { path: disk_path }],
+            net,
+            console: ConsoleConfigRef {
+                mode: "Pty",
+                file: None,
+            },
+            serial: ConsoleConfigRef {
+                mode: "Tty",
+                file: None,
+            },
+        }
+    }
+
+    #[test]
+    fn finalize_for_runtime_overrides_disk_serial_console_and_enables_net() {
+        let config = make_vm_config("/original/disk.raw", None);
+
+        let finalized = config.finalize_for_runtime(
+            "/runtime/overlay.qcow2",
+            "/var/log/serial.log",
+            Some("tap0"),
+        );
+
+        assert_eq!(finalized.disks.len(), 1);
+        assert_eq!(finalized.disks[0].path, "/runtime/overlay.qcow2");
+
+        let net = finalized
+            .net
+            .expect("net should be Some when network_enabled=true");
+        assert_eq!(net.len(), 1);
+        assert_eq!(net[0].tap, "tap0");
+
+        assert_eq!(finalized.console.mode, "Off");
+        assert!(finalized.console.file.is_none());
+
+        assert_eq!(finalized.serial.mode, "File");
+        assert_eq!(finalized.serial.file, Some("/var/log/serial.log"));
+    }
+
+    #[test]
+    fn try_from_capnp_builds_create_vm_spec() {
+        use capnp::message::Builder;
+
+        let mut builder = Builder::new_default();
+        {
+            let vm_spec =
+                builder.init_root::<commands::common_capnp::vm_spec::Builder<
+                    '_,
+                    commands::ch_capnp::vm_config::Owned,
+                >>();
+            let mut spec = vm_spec.init_spec();
+
+            let mut cpus = spec.reborrow().init_cpus();
+            cpus.set_boot_vcpus(4);
+
+            let mut memory = spec.reborrow().init_memory();
+            memory.set_size(1024 * 1024 * 1024);
+
+            let mut payload = spec.reborrow().init_payload();
+            payload.set_kernel("/boot/vmlinux");
+            payload.set_cmdline("console=hvc0 root=/dev/vda1");
+            payload.set_initramfs("/boot/initramfs.img");
+
+            let mut disks = spec.reborrow().init_disks(1);
+            disks.reborrow().get(0).set_path("/images/rootfs.raw");
+
+            let mut console = spec.reborrow().init_console();
+            console.set_mode("Off");
+            console.set_file("");
+
+            let mut serial = spec.reborrow().init_serial();
+            serial.set_mode("Tty");
+            serial.set_file("");
+        }
+
+        let reader = builder
+            .get_root_as_reader::<commands::common_capnp::vm_spec::Reader<'_, commands::ch_capnp::vm_config::Owned>>()
+            .expect("failed to get reader");
+
+        let spec = CreateVmSpecRef::try_from(reader).expect("try_from should succeed");
+
+        assert_eq!(spec.kernel(), "/boot/vmlinux");
+        assert_eq!(spec.initramfs(), "/boot/initramfs.img");
+        assert_eq!(spec.root_disk(), "/images/rootfs.raw");
+
+        let vm = spec.vm_config();
+        assert_eq!(vm.cpus.boot_vcpus, 4);
+        assert_eq!(vm.memory.size, 1024 * 1024 * 1024);
+        assert_eq!(vm.payload.cmdline, "console=hvc0 root=/dev/vda1");
+        assert!(vm.net.is_none());
     }
 }

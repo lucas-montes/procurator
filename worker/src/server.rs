@@ -90,16 +90,22 @@ impl<F: Factory> commands::worker_capnp::worker::Server<F::BackendConfig> for Se
         request: commands::worker_capnp::worker::DeleteVmParams<F::BackendConfig>,
         _: commands::worker_capnp::worker::DeleteVmResults<F::BackendConfig>,
     ) -> capnp::capability::Promise<(), capnp::Error> {
-        let factory = self.factory.clone();
+        let tx = self.tx.clone();
+        let state = self.state.clone();
 
         capnp::capability::Promise::from_future(async move {
-            let vm_id = request.get()?.get_id()?.to_str()?;
-            if let Err(err) = factory.delete_vm(vm_id).await {
+            let vm_id = request.get()?.get_id()?.to_string()?;
+            if !state.exists(&vm_id).await {
                 return Err(capnp::Error::failed(format!(
-                    "Failed to delete VM: {:?}",
-                    err
+                    "VM with id {vm_id} doesn't exists"
                 )));
-            };
+            }
+            // TODO: or we could save it in the sqlite database instead of sending a message
+            if tx.send(Command::Delete(vm_id)).await.is_err() {
+                return Err(capnp::Error::failed(
+                    "Failed to send delete command to node".into(),
+                ));
+            }
             Ok(())
         })
     }

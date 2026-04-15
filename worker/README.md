@@ -1,32 +1,17 @@
 # Worker — VM Management Daemon
 
-## What
+It has 3 main parts.
 
-Manages cloud-hypervisor VM processes on a single host. Implements the `Worker` Cap'n Proto RPC interface (read status, list VMs, create VM, delete VM). One worker daemon runs per physical host in the cluster.
+## Server
+A rpc server listening for commands to apply, it can create, delete, list and so on.
 
-## Why
+## Registry
+The strucutre holding the state with the vms running. Split into two faces, the write and the read face.
+The separation is to avoid locking. However it has an sqlite db so the reader face could have some 'quick' write capabilities?
 
-This is the execution layer — the component that actually runs VMs. The control plane decides *what* should run; the worker makes it happen by spawning cloud-hypervisor processes, managing their lifecycle, and reporting observed state back.
+## Supervisor
+Holds the writting part of registry. It receives commands from a channel comming from the server part. Once a command comes in it executes it
 
-## Architecture
-
-```
-Control Plane / CLI
-       │
-  Cap'n Proto RPC (TCP)
-       │
-    Server (stateless RPC adapter)
-       │  mpsc
-    CommandSender → Node (message dispatch)
-                      │  oneshot replies
-                    VmManager<B: VmmBackend>
-                      │
-                    cloud-hypervisor processes
-                      │  REST API over unix socket
-                    VMs
-```
-
-- **Server** — Translates RPC calls to messages, sends them via `CommandSender`, awaits oneshot replies.
-- **VmManager** — Single owner of all VM state. No locks — pure actor model. Generic over `VmmBackend` for testability.
-- **VmmBackend trait** — `prepare()`, `spawn()`, `build_config()`. Production: `CloudHypervisorBackend`. Tests: `MockBackend`.
-- **VM IDs** — UUIDv7 (time-ordered, sortable).
+## Factory
+A structure that is dependand of the backend used, currently it's cloud hypervisor.
+It creates the vms (in this case it spawns a process and creates a client to communicate with it)

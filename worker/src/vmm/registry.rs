@@ -66,6 +66,10 @@ impl<F: Factory> Registry<F, Reader> {
         let guard = self.ephemeral.read().await;
         f(guard.get(id))
     }
+
+    pub async fn exists(&self, id: &str) -> bool {
+        self.ephemeral.read().await.contains_key(id)
+    }
 }
 
 impl<F: Factory> Registry<F, Writer> {

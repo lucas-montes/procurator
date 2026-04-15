@@ -28,7 +28,6 @@ pub trait Factory: Clone + 'static + From<Self::Config> {
     where
         Self: Sized;
 
-    fn delete_vm(&self, id: &str) -> impl Future<Output = Result<(), Error>>;
 }
 
 /// This is the interface used to communicate with the the VM itself, either a process in case of cloud hypervisor or whatever else is needed
