@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -13,7 +13,13 @@ async fn main() {
         .with(
             tracing_subscriber::fmt::layer()
                 .log_internal_errors(true)
-                .with_target(false),
+                .with_level(true)
+                .with_thread_ids(false)
+                .with_thread_names(false)
+                .with_target(true)
+                .with_file(true)
+                .with_line_number(true)
+                .with_span_events(FmtSpan::CLOSE),
         )
         .init();
 
