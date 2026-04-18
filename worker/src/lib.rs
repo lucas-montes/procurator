@@ -35,7 +35,7 @@ where
 
     let factory = F::from(config.vmm);
 
-    let server = Server::new(reader_registry, factory, tx);
+    let server = Server::new(reader_registry, factory, tx, config.listen_addr);
     let supervisor = Supervisor::new(writer_registry, rx);
 
     let local_set = task::LocalSet::new();

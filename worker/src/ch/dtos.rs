@@ -2,6 +2,10 @@ use std::ops::Not;
 
 use serde::Serialize;
 
+
+//TODO: we should use more types to know if we are receiving it from the server or using it for the client
+// meaning that it contains the latest and updated config
+
 // ── CH API-facing DTOs ────────────────────────────────────────────────────────
 // These types serialise to the JSON body sent to the cloud-hypervisor REST API.
 // All string fields borrow from the capnp message to avoid extra allocations.

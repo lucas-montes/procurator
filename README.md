@@ -104,8 +104,6 @@ cargo run -p worker             # Run worker (127.0.0.1:8080)
 cargo run -p cli --bin pcr-worker-test -- --help
 ```
 
-Manual worker + Python example test flow: see [`docs/testing.md`](docs/testing.md).
-
 ## Testing the Worker
 
 For quick manual testing, use the flake apps in two terminals:
@@ -113,6 +111,9 @@ For quick manual testing, use the flake apps in two terminals:
 ```nushell
 # terminal 1: start worker
 nix run ./nix#worker
+
+# terminal 2: generate artifacts
+nix build ./nix/examples/python-workload#artifacts
 
 # terminal 2: call worker RPCs
 nix run ./nix#worker-test -- read
