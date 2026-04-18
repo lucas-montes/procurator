@@ -4,7 +4,7 @@ use tokio::process::Child;
 use tracing::{debug, error, warn};
 
 use crate::{
-    ch::tap::Tap,
+    ch::tap::{Persisted, Tap},
     vmm::{Handle as VmHandle, HandleError},
 };
 
@@ -15,17 +15,16 @@ pub struct Handle {
     child: Child,
     /// Per-VM working directory (contains writable disk copy, serial log, etc.)
     vm_dir: PathBuf,
-    //TODO: not sure if we want to keep it here or we want to make it persistent and just pass the name around
-    _tap: Tap,
+    tap: Tap<Persisted>,
 }
 
 impl Handle {
-    pub fn new(client: Client, child: Child, vm_dir: PathBuf, tap: Tap) -> Self {
+    pub fn new(client: Client, child: Child, vm_dir: PathBuf, tap: Tap<Persisted>) -> Self {
         Self {
             client,
             child,
             vm_dir,
-            _tap: tap,
+            tap,
         }
     }
 
@@ -57,14 +56,10 @@ impl Handle {
             }
         }
 
-        // Delete the TAP device via netlink (best-effort).
-        // The worker already has CAP_NET_ADMIN so this works without root.
-        // if let Some(ref tap) = self.tap_name {
-        //     match delete_tap_device(tap).await {
-        //         Ok(()) => info!(tap = %tap, "TAP device deleted"),
-        //         Err(e) => warn!(tap = %tap, error = %e, "Failed to delete TAP device"),
-        //     }
-        // }
+        self.tap
+            .delete()
+            .await
+            .map_err(|e| HandleError::Cleanup(format!("Failed to delete TAP interface: {e}")))?;
 
         let socket_path = self
             .client

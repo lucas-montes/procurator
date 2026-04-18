@@ -2,7 +2,7 @@ use futures::stream::TryStreamExt;
 use rtnetlink::{LinkMessageBuilder, LinkUnspec};
 use std::{
     fs::{File, OpenOptions},
-    os::fd::{AsRawFd},
+    os::fd::AsRawFd,
     str::FromStr,
 };
 
@@ -72,16 +72,84 @@ impl std::fmt::Display for TapName {
     }
 }
 
-pub struct Tap {
+pub struct Initialized(File);
+pub struct Persisted;
+
+pub struct Tap<State = Initialized> {
     iface_name: TapName,
-    _file: File,
+    state: State,
 }
 
-impl Tap {
+impl Tap<Persisted> {
+    pub async fn delete(self) -> Result<(), Error> {
+        let (connection, handle, _) =
+            rtnetlink::new_connection().map_err(|e| Error::NetlinkError(e.to_string()))?;
+        tokio::spawn(connection);
+
+        let index = handle
+            .link()
+            .get()
+            .match_name(self.iface_name.to_string())
+            .execute()
+            .try_next()
+            .await
+            .map_err(|e| Error::NetlinkError(e.to_string()))?
+            .ok_or_else(|| Error::BridgeNotFound(self.iface_name.to_string()))?
+            .header
+            .index;
+
+        handle
+            .link()
+            .del(index)
+            .execute()
+            .await
+            .map_err(|e| Error::NetlinkError(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// <https://github.com/rust-netlink/rtnetlink/blob/main/examples/set_bridge_port.rs>
+    pub async fn attach_to_bridge(self, bridge_name: String) -> Result<Self, Error> {
+        // Establish netlink connection and find the bridge index.
+        let (connection, handle, _) =
+            rtnetlink::new_connection().map_err(|e| Error::NetlinkError(e.to_string()))?;
+        tokio::spawn(connection);
+
+        let bridge_index = handle
+            .link()
+            .get()
+            .match_name(bridge_name.clone())
+            .execute()
+            .try_next()
+            .await
+            .map_err(|e| Error::NetlinkError(e.to_string()))?
+            .ok_or(Error::BridgeNotFound(bridge_name))
+            .map(|l| l.header.index)?;
+
+        handle
+            .link()
+            .set(
+                LinkMessageBuilder::<LinkUnspec>::default()
+                    .name(self.iface_name.to_string())
+                    .controller(bridge_index)
+                    .up()
+                    .build(),
+            )
+            .execute()
+            .await
+            .map_err(|e| Error::NetlinkError(e.to_string()))?;
+
+        Ok(self)
+    }
+}
+
+impl<State> Tap<State> {
     pub fn name(&self) -> String {
         self.iface_name.to_string()
     }
+}
 
+impl Tap<Initialized> {
     /// Method that creaates a new TAP interface. We can optionally set a name for the interface, otherwise one will be created by the kernel.
     pub fn new(iface_name: Option<&str>) -> Result<Self, Error> {
         let iface_name = iface_name
@@ -117,53 +185,25 @@ impl Tap {
         // Update the iface_name with the name assigned by the kernel if it was not specified.
         let iface_name = TapName(req.ifr_name);
 
-        Ok(Self { iface_name, _file: file })
+        Ok(Self {
+            iface_name,
+            state: Initialized(file),
+        })
     }
 
-    /// Make the TAP interface persistent. This means that the TAP interface will not be destroyed when the file descriptor is closed. This is needed to be able to use the TAP interface for networking, since CH will re-open it by name when it starts.
-    ///NOTE: if we keep the structure alive we don't need to make it persistent and the clean up of the TAP device can be done with rust's Drop trait
-    fn persist(self) -> Result<Self, Error> {
+    // Make the TAP interface persistent. This means that the TAP interface will not be destroyed when the file descriptor is closed.
+    // This is needed to be able to use the TAP interface for networking, since CH will re-open it by name when it starts.
+    pub fn persist(self) -> Result<Tap<Persisted>, Error> {
         // TUNSETPERSIST — keep the TAP alive after we close the fd.
         // CH will re-open it by name when it starts.
-        let ret = unsafe { libc::ioctl(self._file.as_raw_fd(), libc::TUNSETPERSIST, 1_i32) };
+        let ret = unsafe { libc::ioctl(self.state.0.as_raw_fd(), libc::TUNSETPERSIST, 1_i32) };
         if ret < 0 {
             return Err(Error::TapPersistenceFailed(std::io::Error::last_os_error()));
         }
-        Ok(self)
-    }
-
-    /// <https://github.com/rust-netlink/rtnetlink/blob/main/examples/set_bridge_port.rs>
-    pub async fn attach_to_bridge(self, bridge_name: String) -> Result<Self, Error> {
-        // Establish netlink connection and find the bridge index.
-        let (connection, handle, _) =
-            rtnetlink::new_connection().map_err(|e| Error::NetlinkError(e.to_string()))?;
-        tokio::spawn(connection);
-
-        let bridge_index = handle
-            .link()
-            .get()
-            .match_name(bridge_name.clone())
-            .execute()
-            .try_next()
-            .await
-            .map_err(|e| Error::NetlinkError(e.to_string()))?
-            .ok_or(Error::BridgeNotFound(bridge_name))
-            .map(|l| l.header.index)?;
-
-        handle
-            .link()
-            .set(
-                LinkMessageBuilder::<LinkUnspec>::default()
-                    .name(self.iface_name.to_string())
-                    .controller(bridge_index)
-                    .up()
-                    .build(),
-            )
-            .execute()
-            .await
-            .map_err(|e| Error::NetlinkError(e.to_string()))?;
-
-        Ok(self)
+        Ok(Tap {
+            iface_name: self.iface_name,
+            state: Persisted,
+        })
     }
 }
 

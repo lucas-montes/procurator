@@ -6,7 +6,7 @@ use tokio::process::Command;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-use crate::ch::tap::Tap;
+use crate::ch::tap::{Persisted, Tap};
 use crate::vmm::{CreateCommand, Error as VmError, Factory as VmFactory};
 
 use super::{
@@ -158,21 +158,22 @@ impl VmFactory for Factory {
         // let iface_name = tap_name_from_id(vm_id);
         let tap = Tap::new(None)
             .map_err(Error::from)
-            .map_err(|err| {
-                error!(vm_id = %vm_id, ?err, "Failed creating TAP interface");
-                VmError::from(err)
-            })?
+            .inspect_err(|err| error!(vm_id = %vm_id, ?err, "Failed creating TAP interface"))?
+            .persist()
+            .map_err(Error::from)
+            .inspect_err(
+                |err| error!(vm_id = %vm_id, ?err, "Failed to make the TAP interface persistent"),
+            )?
             .attach_to_bridge(self.bridge_name.clone())
             .await
             .map_err(Error::from)
-            .map_err(|err| {
+            .inspect_err(|err| {
                 error!(
                     vm_id = %vm_id,
                     bridge_name = %self.bridge_name,
                     ?err,
                     "Failed attaching TAP interface to bridge"
-                );
-                VmError::from(err)
+                )
             })?;
 
         let tap_name = tap.name();
@@ -431,7 +432,7 @@ async fn spawn_and_create(
     vm_id: &str,
     vm_dir: PathBuf,
     socket_path: PathBuf,
-    tap: Tap,
+    tap: Tap<Persisted>,
     ch_binary: &Path,
     socket_timeout: Duration,
     config: &VmConfigRef<'_>,
