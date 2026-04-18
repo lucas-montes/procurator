@@ -36,9 +36,8 @@ where
     let supervisor = Supervisor::new(writer_registry, rx);
 
     let local_set = task::LocalSet::new();
-    let server_task = local_set.run_until(task::spawn_local(server.serve(config.listen_addr)));
-
-    //TODO: check if we need this to be async
+    let server_task = local_set
+        .run_until(async move { task::spawn_local(server.serve(config.listen_addr)).await });
     let supervisor_task = task::spawn(supervisor.run(config.health_tick_millis));
 
     let (supervisor_result, server_result) = join!(supervisor_task, server_task);

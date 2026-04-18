@@ -51,6 +51,10 @@
           inherit pkgs workspaceRoot naersk;
         };
 
+        appSet = import ./flake/apps.nix {
+          inherit pkgs flake-utils;
+          packages = packageSet;
+        };
       in
       {
         nixosModules.procurator = import ./modules;
@@ -62,6 +66,8 @@
         packages = packageSet // {
           default = packageSet.worker;
         };
+
+        apps = appSet.apps;
 
         devShells.default = import ./flake/shell.nix {
           inherit pkgs rust-bin-custom;
