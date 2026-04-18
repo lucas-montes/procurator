@@ -67,8 +67,7 @@ async fn request<R: DeserializeOwned>(
     }
 
     if bytes.is_empty() {
-        return serde_json::from_str::<R>("{}")
-            .map_err(|e| Error::Communication(e.to_string()));
+        return serde_json::from_str::<R>("{}").map_err(|e| Error::Communication(e.to_string()));
     }
 
     serde_json::from_slice::<R>(&bytes).map_err(|e| Error::Communication(e.to_string()))

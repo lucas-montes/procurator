@@ -13,7 +13,7 @@ pub struct Server<T> {
     _phantom: std::marker::PhantomData<T>,
 }
 
-impl<T: capnp::traits::Owned+ 'static> Server<T> {
+impl<T: capnp::traits::Owned + 'static> Server<T> {
     pub fn new(messenger: impl Into<NodeMessenger>) -> Self {
         Server {
             messenger: messenger.into(),

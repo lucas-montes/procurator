@@ -134,40 +134,38 @@ impl Tap {
 
     /// <https://github.com/rust-netlink/rtnetlink/blob/main/examples/set_bridge_port.rs>
     pub async fn attach_to_bridge(self, bridge_name: String) -> Result<Self, Error> {
-    // Establish netlink connection and find the bridge index.
-    let (connection, handle, _) =
-        rtnetlink::new_connection().map_err(|e| Error::NetlinkError(e.to_string()))?;
-    tokio::spawn(connection);
+        // Establish netlink connection and find the bridge index.
+        let (connection, handle, _) =
+            rtnetlink::new_connection().map_err(|e| Error::NetlinkError(e.to_string()))?;
+        tokio::spawn(connection);
 
-    let bridge_index = handle
-        .link()
-        .get()
-        .match_name(bridge_name.clone())
-        .execute()
-        .try_next()
-        .await
-        .map_err(|e| Error::NetlinkError(e.to_string()))?
-        .ok_or(Error::BridgeNotFound(bridge_name))
-        .map(|l| l.header.index)?;
+        let bridge_index = handle
+            .link()
+            .get()
+            .match_name(bridge_name.clone())
+            .execute()
+            .try_next()
+            .await
+            .map_err(|e| Error::NetlinkError(e.to_string()))?
+            .ok_or(Error::BridgeNotFound(bridge_name))
+            .map(|l| l.header.index)?;
 
-    handle
-        .link()
-        .set(
-            LinkMessageBuilder::<LinkUnspec>::default()
-                .name(self.iface_name.to_string())
-                .controller(bridge_index)
-                .up()
-                .build(),
-        )
-        .execute()
-        .await
-        .map_err(|e| Error::NetlinkError(e.to_string()))?;
+        handle
+            .link()
+            .set(
+                LinkMessageBuilder::<LinkUnspec>::default()
+                    .name(self.iface_name.to_string())
+                    .controller(bridge_index)
+                    .up()
+                    .build(),
+            )
+            .execute()
+            .await
+            .map_err(|e| Error::NetlinkError(e.to_string()))?;
 
-    Ok(self)
+        Ok(self)
+    }
 }
-}
-
-
 
 #[cfg(test)]
 mod tests {

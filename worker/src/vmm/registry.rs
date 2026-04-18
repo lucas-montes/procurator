@@ -60,12 +60,10 @@ impl<F: Factory, Side> Registry<F, Side> {
         //TODO: this might block until the writer is released, so a lot of quick writes could be bad
         self.ephemeral.read_owned().await
     }
-
 }
 
 //TODO: this implementation is shit
 impl<F: Factory> Registry<F, Reader> {
-
     pub async fn exists(&self, id: &str) -> bool {
         self.ephemeral.read().await.contains_key(id)
     }
