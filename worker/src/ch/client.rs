@@ -47,35 +47,53 @@ impl Client {
         debug!(config_json = %body, "vm.create request");
 
         let uri = self.build_uri("/api/v1/vm.create");
-        let _ = request::<EmptyBody>(uri, body, hyper::Method::PUT, &self.client).await?;
+        let resp =
+            request::<serde_json::Value>(uri, body, hyper::Method::PUT, &self.client).await?;
 
-        info!("vm.create succeeded");
+        info!(?resp, "vm.create succeeded");
         Ok(())
     }
 
     pub async fn boot(&self) -> Result<(), Error> {
         debug!("vm.boot request");
         let uri = self.build_uri("/api/v1/vm.boot");
-        let _ = request::<EmptyBody>(uri, hyper::Body::empty(), hyper::Method::PUT, &self.client)
-            .await?;
+        let resp = request::<serde_json::Value>(
+            uri,
+            hyper::Body::empty(),
+            hyper::Method::PUT,
+            &self.client,
+        )
+        .await?;
 
-        info!("vm.boot succeeded");
+        info!(?resp, "vm.boot succeeded");
         Ok(())
     }
 
     pub async fn shutdown(&self) -> Result<(), Error> {
         let uri = self.build_uri("/api/v1/vm.shutdown");
-        let _ = request::<EmptyBody>(uri, hyper::Body::empty(), hyper::Method::PUT, &self.client)
-            .await?;
+        let resp = request::<serde_json::Value>(
+            uri,
+            hyper::Body::empty(),
+            hyper::Method::PUT,
+            &self.client,
+        )
+        .await?;
 
+        info!(?resp, "vm.shutdown succeeded");
         Ok(())
     }
 
     pub async fn delete(&self) -> Result<(), Error> {
         let uri = self.build_uri("/api/v1/vm.delete");
-        let _ = request::<EmptyBody>(uri, hyper::Body::empty(), hyper::Method::PUT, &self.client)
-            .await?;
+        let resp = request::<serde_json::Value>(
+            uri,
+            hyper::Body::empty(),
+            hyper::Method::PUT,
+            &self.client,
+        )
+        .await?;
 
+        info!(?resp, "vm.delete succeeded");
         Ok(())
     }
 }
@@ -116,6 +134,3 @@ async fn request<R: DeserializeOwned>(
 
     serde_json::from_slice::<R>(&bytes).map_err(|e| Error::Communication(e.to_string()))
 }
-
-#[derive(Debug, Deserialize, Default)]
-struct EmptyBody;
