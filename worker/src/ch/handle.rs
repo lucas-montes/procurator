@@ -7,7 +7,7 @@ use tracing::{debug, warn};
 
 use crate::{
     ch::tap::Tap,
-    vmm::{Error as VmError, Handle as VmHandle},
+    vmm::{Error as VmError, Handle as VmHandle, HandleError},
 };
 
 use super::client::Client;
@@ -36,12 +36,6 @@ impl Handle {
             .kill()
             .await
             .map_err(|e| VmError::ProcessFailed(format!("Failed to kill CH process: {e}")))
-    }
-
-    pub fn try_wait(&mut self) -> Result<Option<std::process::ExitStatus>, VmError> {
-        self.child
-            .try_wait()
-            .map_err(|e| VmError::ProcessFailed(format!("Failed to check CH process: {e}")))
     }
 
     pub async fn cleanup(&mut self) -> Result<(), VmError> {
@@ -86,34 +80,27 @@ impl Handle {
     }
 }
 
-impl VmHandle for Handle {}
-
-/// Delete a TAP device by name via netlink.
-///
-/// Requires `CAP_NET_ADMIN` — the worker process holds this via
-/// systemd `AmbientCapabilities`.
-pub(crate) async fn delete_tap_device(tap_name: &str) -> Result<(), VmError> {
-    let (connection, handle, _) = rtnetlink::new_connection()
-        .map_err(|e| VmError::Internal(format!("netlink connection failed: {e}")))?;
-    tokio::spawn(connection);
-
-    let mut links = handle
-        .link()
-        .get()
-        .match_name(tap_name.to_string())
-        .execute();
-    let msg = links
-        .try_next()
-        .await
-        .map_err(|e| VmError::Internal(format!("netlink get {tap_name} failed: {e}")))?;
-
-    if let Some(link) = msg {
-        handle
-            .link()
-            .del(link.header.index)
-            .execute()
+impl VmHandle for Handle {
+    async fn start(&self) -> Result<(), HandleError> {
+        self.client
+            .boot()
             .await
-            .map_err(|e| VmError::Internal(format!("netlink del {tap_name} failed: {e}")))?;
+            .map_err(|e| HandleError::Start(format!("Failed to boot VM: {e}")))
     }
-    Ok(())
+
+    /// As we take ownership of the handle itself everything inside of it should be dropped, meaning that the TAP interface should be deleted, no need to remove the tap manually
+    /// at least for now. If we ever use `persist` we'll need to cleanup the tap interface to be able to reuse it.
+    async fn delete(mut self) -> Result<(), HandleError> {
+        self.kill()
+            .await
+            .map_err(|e| HandleError::Delete(format!("Failed to kill VM: {e}")))?;
+        self.cleanup()
+            .await
+            .map_err(|e| HandleError::Cleanup(format!("Failed to cleanup VM: {e}")))
+    }
+
+    async fn health(&self) -> Result<(), HandleError> {
+        //TODO: create the funcion in the client to get stats and info
+        Ok(())
+    }
 }

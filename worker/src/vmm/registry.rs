@@ -55,17 +55,16 @@ impl<F: Factory, Side> Clone for Registry<F, Side> {
         }
     }
 }
-
-//TODO: this implementation is shit
-impl<F: Factory> Registry<F, Reader> {
-    async fn get(self) -> OwnedRwLockReadGuard<HashMap<String, <F as Factory>::VmHandle>> {
+impl<F: Factory, Side> Registry<F, Side> {
+    pub async fn get(self) -> OwnedRwLockReadGuard<HashMap<String, <F as Factory>::VmHandle>> {
+        //TODO: this might block until the writer is released, so a lot of quick writes could be bad
         self.ephemeral.read_owned().await
     }
 
-    async fn with_handle<R>(&self, id: &str, f: impl FnOnce(Option<&F::VmHandle>) -> R) -> R {
-        let guard = self.ephemeral.read().await;
-        f(guard.get(id))
-    }
+}
+
+//TODO: this implementation is shit
+impl<F: Factory> Registry<F, Reader> {
 
     pub async fn exists(&self, id: &str) -> bool {
         self.ephemeral.read().await.contains_key(id)
@@ -73,11 +72,11 @@ impl<F: Factory> Registry<F, Reader> {
 }
 
 impl<F: Factory> Registry<F, Writer> {
-    fn insert(&mut self, id: String, handle: F::VmHandle) {
-        // self.ephemeral.write().unwrap().insert(id, handle);
+    pub async fn insert(&mut self, id: String, handle: F::VmHandle) {
+        self.ephemeral.write().await.insert(id, handle);
     }
 
-    fn delete(&mut self, id: &str) {
-        // self.ephemeral.write().unwrap().remove(id);
+    pub async fn remove(&mut self, id: &str) -> std::option::Option<<F as Factory>::VmHandle> {
+        self.ephemeral.write().await.remove(id)
     }
 }

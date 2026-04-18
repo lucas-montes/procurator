@@ -1,3 +1,5 @@
+use crate::vmm::Handle;
+use futures::{StreamExt, stream::FuturesUnordered};
 use std::num::NonZeroU64;
 use std::time::Duration;
 use tokio::{select, sync::mpsc::Receiver, time::interval};
@@ -44,31 +46,69 @@ impl<F: Factory> Supervisor<F> {
 
         loop {
             select! {
-                _ = ticker.tick() => self.check_health(),
-                Some(v) = self.rx.recv() => self.handle_command(v),
+                _ = ticker.tick() => self.check_health().await,
+                Some(v) = self.rx.recv() => self.handle_command(v).await,
             }
         }
     }
 
-    fn handle_command(&mut self, cmd: Command<F>) {
+    async fn handle_command(&mut self, cmd: Command<F>) {
         match cmd {
-            Command::Create(cmd) => self.handle_create(cmd),
-            Command::Delete(id) => self.handle_delete(id),
+            Command::Create(cmd) => self.handle_create(cmd).await,
+            Command::Delete(id) => self.handle_delete(id).await,
         }
     }
 
-    fn handle_create(&mut self, cmd: CreateCommand<F>) {
-        let _ = &self.state;
-        // TODO: persist + insert in registry
+    async fn handle_create(&mut self, cmd: CreateCommand<F>) {
+        // Destructure the incoming command. Prefix variable names with `_` to
+        // avoid unused-variable warnings until the implementation is added.
+        let CreateCommand { id, handle } = cmd;
+
+        if let Err(err) = handle.start().await {
+            //TODO: let's do something more clever here and find how to keep track of what is needed to recreate the vm if we need to
+            // maybe save the config in sqlite
+            tracing::error!(id = %id, error = %err, "Failed to start VM");
+            return;
+        };
+
+        //TODO: this takes a lock and releases it very quickly.
+        // The vm should already be running at this point so we could have a buffer, keep them in the buffer and then save them all at once
+        // Maybe this could be done with the channel instead of recv, we use recv_many
+        self.state.insert(id, handle).await;
     }
 
-    fn handle_delete(&mut self, id: String) {
-        let _ = &self.state;
-        // TODO: remove from registry + cleanup state
+    //TODO: maybe we want a stop function that can resume
+
+    async fn handle_delete(&mut self, id: String) {
+        if let Some(handle) = self.state.remove(&id).await {
+            if let Err(err) = handle.delete().await {
+                tracing::error!(id = %id, error = %err, "Failed to delete VM");
+            }
+            tracing::info!(id = %id, "VM deleted successfully");
+        } else {
+            tracing::warn!(id = %id, "Received delete command for non-existent VM");
+        }
     }
 
-    fn check_health(&mut self) {
-        let _ = &self.state;
-        // TODO: periodic process health checks
+    async fn check_health(&mut self) {
+        // Grab a read guard to the registry. The guard must live while
+        // we poll the health futures because those futures borrow the handles.
+        let guard = self.state.clone().get().await;
+
+        let mut futs: FuturesUnordered<_> = FuturesUnordered::new();
+
+        for (id, handle) in guard.iter() {
+            futs.push(async move { (id, handle.health().await) });
+        }
+
+        // Drive all health checks concurrently and log results as they complete.
+        while let Some((id, res)) = futs.next().await {
+            match res {
+                Ok(()) => tracing::debug!(id = %id, "health OK"),
+                //TODO: if there is an error we shouold do something. Maybe send to himself some message to delete or restart the vm?
+                Err(e) => tracing::warn!(id = %id, error = %e, "health check failed"),
+            }
+        }
+        // `guard` is dropped here
     }
 }

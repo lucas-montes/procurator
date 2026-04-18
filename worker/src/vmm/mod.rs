@@ -3,7 +3,7 @@ mod interfaces;
 mod registry;
 mod supervisor;
 
-pub use interfaces::{Factory, Handle};
+pub use interfaces::{Factory, Handle, HandleError};
 pub use registry::{Reader, Registry};
 pub use supervisor::{Command, CreateCommand, Supervisor};
 

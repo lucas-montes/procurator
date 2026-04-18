@@ -1,5 +1,8 @@
 use std::fmt;
 
+//TODO: separate more the errors between the vm creation, preparation and running
+
+
 /// Errors returned by Node/VmManager through the oneshot reply.
 /// Converted to `capnp::Error` at the RPC boundary in Server.
 #[derive(Debug)]
