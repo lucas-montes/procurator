@@ -100,11 +100,28 @@ cargo build                     # Build all workspace members
 cargo build -p worker           # Build worker only
 cargo test -p worker            # Run worker tests (22 tests)
 cargo test --workspace          # Run all tests
-cargo run -p worker             # Run worker (127.0.0.1:6000)
-cargo run --bin pcr-test        # Manual worker RPC testing
+cargo run -p worker             # Run worker (127.0.0.1:8080)
+cargo run -p cli --bin pcr-worker-test -- --help
 ```
 
 Manual worker + Python example test flow: see [`docs/testing.md`](docs/testing.md).
+
+## Testing the Worker
+
+For quick manual testing, use the flake apps in two terminals:
+
+```nushell
+# terminal 1: start worker
+nix run ./nix#worker
+
+# terminal 2: call worker RPCs
+nix run ./nix#worker-test -- read
+nix run ./nix#worker-test -- list
+nix run ./nix#worker-test -- create
+nix run ./nix#worker-test -- delete --id <vm-id>
+```
+
+`worker-test` defaults to `--addr 0.0.0.0:8080` and accepts extra inline flags for `create` (kernel, initramfs, disk, cmdline, cpu, memory, console, serial).
 
 ## Project Status
 

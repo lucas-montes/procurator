@@ -1,13 +1,11 @@
 use std::path::PathBuf;
 
-use futures::stream::TryStreamExt;
-
 use tokio::process::Child;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 use crate::{
     ch::tap::Tap,
-    vmm::{Error as VmError, Handle as VmHandle, HandleError},
+    vmm::{Handle as VmHandle, HandleError},
 };
 
 use super::client::Client;
@@ -18,7 +16,7 @@ pub struct Handle {
     /// Per-VM working directory (contains writable disk copy, serial log, etc.)
     vm_dir: PathBuf,
     //TODO: not sure if we want to keep it here or we want to make it persistent and just pass the name around
-    tap: Tap,
+    _tap: Tap,
 }
 
 impl Handle {
@@ -27,19 +25,19 @@ impl Handle {
             client,
             child,
             vm_dir,
-            tap,
+            _tap: tap,
         }
     }
 
-    pub async fn kill(&mut self) -> Result<(), VmError> {
+    async fn kill(&mut self) -> Result<(), HandleError> {
         self.child
             .kill()
             .await
-            .map_err(|e| VmError::ProcessFailed(format!("Failed to kill CH process: {e}")))
+            .map_err(|e| HandleError::Cleanup(format!("Failed to kill CH process: {e}")))
     }
 
-    pub async fn cleanup(&mut self) -> Result<(), VmError> {
-        // Log CH output for post-mortem debugging before cleaning up.
+    async fn cleanup(self) -> Result<(), HandleError> {
+        // TODO: not sure this makes any sense Log CH output for post-mortem debugging before cleaning up.
         let ch_log = self.vm_dir.join("cloud-hypervisor.log");
         if ch_log.exists() {
             match tokio::fs::read_to_string(&ch_log).await {
@@ -68,13 +66,21 @@ impl Handle {
         //     }
         // }
 
-        // TODO: the client holds the socketPath
-        // if self.socket_path.exists() {
-        // let _ = tokio::fs::remove_file(&self.socket_path).await;
-        // }
+        let socket_path = self
+            .client
+            .kill()
+            .await
+            .map_err(|e| HandleError::Cleanup(e.to_string()))?;
+        if socket_path.exists() {
+            if let Err(err) = tokio::fs::remove_file(&socket_path).await {
+                error!(path = %socket_path.display(), error = %err, "Failed to remove CH socket file");
+            };
+        }
         // Remove the entire per-VM working directory (writable disk, serial log, etc.)
         if self.vm_dir.exists() {
-            let _ = tokio::fs::remove_dir_all(&self.vm_dir).await;
+            if let Err(err) = tokio::fs::remove_file(&self.vm_dir).await {
+                error!(path = %self.vm_dir.display(), error = %err, "Failed to remove CH self.vm_dir");
+            };
         }
         Ok(())
     }

@@ -12,6 +12,7 @@ use tokio::join;
 use tokio::task;
 
 use config::Config;
+use tracing::debug;
 use vmm::{Factory, Registry, Supervisor};
 
 pub async fn ch_main(path: impl AsRef<Path> + std::fmt::Debug) {
@@ -23,6 +24,8 @@ where
     F: Factory,
 {
     let config: Config<F> = Config::from_file(path);
+    debug!(?config, "Loaded worker configuration");
+
     let db = database::Database::new("sqlite::memory:").await;
 
     let registry: Registry<F, _> = Registry::new(db);

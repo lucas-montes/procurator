@@ -2,7 +2,7 @@ use futures::stream::TryStreamExt;
 use rtnetlink::{LinkMessageBuilder, LinkUnspec};
 use std::{
     fs::{File, OpenOptions},
-    os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
+    os::fd::{AsRawFd},
     str::FromStr,
 };
 
@@ -74,7 +74,7 @@ impl std::fmt::Display for TapName {
 
 pub struct Tap {
     iface_name: TapName,
-    file: File,
+    _file: File,
 }
 
 impl Tap {
@@ -117,15 +117,15 @@ impl Tap {
         // Update the iface_name with the name assigned by the kernel if it was not specified.
         let iface_name = TapName(req.ifr_name);
 
-        Ok(Self { iface_name, file })
+        Ok(Self { iface_name, _file: file })
     }
 
     /// Make the TAP interface persistent. This means that the TAP interface will not be destroyed when the file descriptor is closed. This is needed to be able to use the TAP interface for networking, since CH will re-open it by name when it starts.
     ///NOTE: if we keep the structure alive we don't need to make it persistent and the clean up of the TAP device can be done with rust's Drop trait
-    pub fn persist(self) -> Result<Self, Error> {
+    fn persist(self) -> Result<Self, Error> {
         // TUNSETPERSIST — keep the TAP alive after we close the fd.
         // CH will re-open it by name when it starts.
-        let ret = unsafe { libc::ioctl(self.file.as_raw_fd(), libc::TUNSETPERSIST, 1_i32) };
+        let ret = unsafe { libc::ioctl(self._file.as_raw_fd(), libc::TUNSETPERSIST, 1_i32) };
         if ret < 0 {
             return Err(Error::TapPersistenceFailed(std::io::Error::last_os_error()));
         }

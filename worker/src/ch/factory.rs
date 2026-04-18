@@ -3,11 +3,11 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use tokio::process::Command;
-use tracing::{debug, info};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::ch::tap::Tap;
-use crate::vmm::{CreateCommand, Error as VmError, Factory as VmFactory, Handle as VmHandle};
+use crate::vmm::{CreateCommand, Error as VmError, Factory as VmFactory};
 
 use super::{
     client::Client,
@@ -93,20 +93,91 @@ impl VmFactory for Factory {
         spec: Self::CreateVmSpec<'_>,
     ) -> Result<CreateCommand<Self>, VmError> {
         let vm_id = Self::create_id();
-        let vm_dir = create_vm_dir(&self.socket_dir, &vm_id).await?;
-        let artifacts = prepare_artifacts::<LocalArtifactResolver>(&vm_dir.vm_dir, &spec).await?;
 
+        debug!(
+            vm_id = %vm_id,
+            kernel = %spec.kernel(),
+            initramfs = %spec.initramfs(),
+            root_disk = %spec.root_disk(),
+            socket_dir = %self.socket_dir.display(),
+            ch_binary = %self.ch_binary.display(),
+            bridge_name = %self.bridge_name,
+            artifact_sources = self.artifact_sources.len(),
+            "starting VM creation"
+        );
+
+        verify_artifacts_exist::<LocalArtifactResolver>(&spec)
+            .await
+            .inspect_err(|err| {
+                error!(
+                    vm_id = %vm_id,
+                    kernel = %spec.kernel(),
+                    initramfs = %spec.initramfs(),
+                    root_disk = %spec.root_disk(),
+                    ?err,
+                    "VM creation preflight artifact validation failed"
+                );
+            })?;
+
+        debug!(vm_id = %vm_id, "artifact preflight validation succeeded");
+
+        let vm_dir = create_vm_dir(&self.socket_dir, &vm_id)
+            .await
+            .inspect_err(|err| {
+                error!(
+                    vm_id = %vm_id,
+                    socket_dir = %self.socket_dir.display(),
+                    ?err,
+                    "Failed creating runtime VM directory"
+                );
+            })?;
+        debug!(vm_id = %vm_id, vm_dir = %vm_dir.vm_dir.display(), "VM directory created");
+
+        let artifacts = prepare_artifacts::<LocalArtifactResolver>(&vm_dir.vm_dir, &spec)
+            .await
+            .inspect_err(|err| {
+                error!(
+                    vm_id = %vm_id,
+                    vm_dir = %vm_dir.vm_dir.display(),
+                    kernel = %spec.kernel(),
+                    initramfs = %spec.initramfs(),
+                    root_disk = %spec.root_disk(),
+                    ?err,
+                    "Failed preparing VM artifacts"
+                );
+            })?;
+        debug!(
+            vm_id = %vm_id,
+            kernel = %spec.kernel(),
+            initramfs = %spec.initramfs(),
+            serial_log = %artifacts.serial_log.display(),
+            writable_disk = %artifacts.writable_disk.display(),
+            "artifacts prepared"
+        );
         // TODO: we can either set a tap name or let the kernel do it
         // let iface_name = tap_name_from_id(vm_id);
         let tap = Tap::new(None)
-            .map_err(Error::from)?
+            .map_err(Error::from)
+            .map_err(|err| {
+                error!(vm_id = %vm_id, ?err, "Failed creating TAP interface");
+                VmError::from(err)
+            })?
             .attach_to_bridge(self.bridge_name.clone())
             .await
-            .map_err(Error::from)?;
+            .map_err(Error::from)
+            .map_err(|err| {
+                error!(
+                    vm_id = %vm_id,
+                    bridge_name = %self.bridge_name,
+                    ?err,
+                    "Failed attaching TAP interface to bridge"
+                );
+                VmError::from(err)
+            })?;
 
         let tap_name = tap.name();
 
-        debug!(tap_name, "tap create and attached to bridge");
+        debug!(vm_id = %vm_id, tap_name, "tap create and attached to bridge");
 
         // Takes the capnp-derived config and patches it with runtime paths
         // (writable disk, serial log, TAP name).
@@ -118,6 +189,10 @@ impl VmFactory for Factory {
                 .ok_or_else(|| Error::InvalidPathUtf8 {
                     field: "writable disk".to_string(),
                     path: artifacts.writable_disk.display().to_string(),
+                })
+                .map_err(|err| {
+                    error!(vm_id = %vm_id, ?err, "Writable disk path is not UTF-8");
+                    VmError::from(err)
                 })?;
 
         let serial_log = artifacts
@@ -126,14 +201,18 @@ impl VmFactory for Factory {
             .ok_or_else(|| Error::InvalidPathUtf8 {
                 field: "serial_log".to_string(),
                 path: artifacts.serial_log.display().to_string(),
+            })
+            .map_err(|err| {
+                error!(vm_id = %vm_id, ?err, "Serial log path is not UTF-8");
+                VmError::from(err)
             })?;
 
         let config =
             spec.vm_config()
                 .finalize_for_runtime(writable_disk_path, serial_log, Some(&tap_name));
 
-        debug!(vm_id = %vm_id, "creating VM from spec");
-        spawn_and_create(
+        debug!(vm_id = %vm_id, "spawning cloud-hypervisor and calling vm.create");
+        let handle = spawn_and_create(
             &vm_id,
             vm_dir.vm_dir,
             vm_dir.socket_path,
@@ -143,7 +222,12 @@ impl VmFactory for Factory {
             &config,
         )
         .await
-        .map(|h| CreateCommand::new(h, vm_id))
+        .inspect_err(|err| {
+            error!(vm_id = %vm_id, ?err, "spawn_and_create failed");
+        })?;
+
+        info!(vm_id = %vm_id, "VM create command prepared successfully");
+        Ok(CreateCommand::new(handle, vm_id))
     }
 }
 
@@ -217,6 +301,11 @@ struct LocalArtifactResolver;
 impl ArtifactsResolver for LocalArtifactResolver {
     async fn fetch(source_path: &Path, destination: &Path) -> Result<(), VmError> {
         if !source_path.exists() {
+            warn!(
+                source = %source_path.display(),
+                destination = %destination.display(),
+                "artifact source missing during fetch"
+            );
             return Err(Error::ArtifactsMissing(format!(
                 "artifact not found locally: {}",
                 source_path.display()
@@ -224,9 +313,21 @@ impl ArtifactsResolver for LocalArtifactResolver {
             .into());
         }
 
+        debug!(
+            source = %source_path.display(),
+            destination = %destination.display(),
+            "copying artifact"
+        );
+
         tokio::fs::copy(source_path, destination)
             .await
             .map_err(|e| {
+                error!(
+                    source = %source_path.display(),
+                    destination = %destination.display(),
+                    ?e,
+                    "artifact copy failed"
+                );
                 VmError::Internal(format!(
                     "failed to copy artifact {} → {}: {e}",
                     source_path.display(),
@@ -234,17 +335,25 @@ impl ArtifactsResolver for LocalArtifactResolver {
                 ))
             })?;
 
+        debug!(
+            source = %source_path.display(),
+            destination = %destination.display(),
+            "artifact copy completed"
+        );
+
         Ok(())
     }
 
     async fn verify(path: &Path) -> Result<(), VmError> {
         if !path.exists() {
+            warn!(path = %path.display(), "required artifact path missing");
             return Err(Error::ArtifactsMissing(format!(
                 "artifact not found locally: {}",
                 path.display()
             ))
             .into());
         }
+        debug!(path = %path.display(), "artifact path exists");
         Ok(())
     }
 }
@@ -252,6 +361,27 @@ impl ArtifactsResolver for LocalArtifactResolver {
 struct Artifacts {
     writable_disk: PathBuf,
     serial_log: PathBuf,
+}
+
+async fn verify_artifacts_exist<A: ArtifactsResolver>(
+    spec: &CreateVmSpecRef<'_>,
+) -> Result<(), VmError> {
+    let kernel = Path::new(spec.kernel());
+    let initramfs = Path::new(spec.initramfs());
+    let root_disk = Path::new(spec.root_disk());
+
+    debug!(
+        kernel = %kernel.display(),
+        initramfs = %initramfs.display(),
+        root_disk = %root_disk.display(),
+        "verifying required VM artifacts"
+    );
+
+    A::verify(kernel).await?;
+    A::verify(initramfs).await?;
+    A::verify(root_disk).await?;
+
+    Ok(())
 }
 
 // ── Step 2: Prepare artifacts ─────────────────────────────────────────
@@ -308,6 +438,16 @@ async fn spawn_and_create(
 ) -> Result<Handle, VmError> {
     let log_file = vm_dir.join("cloud-hypervisor.log");
 
+    debug!(
+        vm_id = %vm_id,
+        vm_dir = %vm_dir.display(),
+        socket_path = %socket_path.display(),
+        log_file = %log_file.display(),
+        ch_binary = %ch_binary.display(),
+        socket_timeout_ms = socket_timeout.as_millis(),
+        "spawning cloud-hypervisor"
+    );
+
     let child = Command::new(ch_binary)
         .arg("--api-socket")
         .arg(socket_path.as_os_str())
@@ -319,6 +459,7 @@ async fn spawn_and_create(
         .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(|e| {
+            error!(vm_id = %vm_id, ch_binary = %ch_binary.display(), ?e, "failed to spawn cloud-hypervisor");
             VmError::ProcessFailed(format!("failed to spawn {}: {e}", ch_binary.display()))
         })?;
 
@@ -329,14 +470,26 @@ async fn spawn_and_create(
     );
 
     // Wait for the API socket to appear.
-    wait_for_socket(socket_timeout, &socket_path).await?;
+    wait_for_socket(socket_timeout, &socket_path)
+        .await
+        .inspect_err(|err| {
+            error!(
+                vm_id = %vm_id,
+                socket_path = %socket_path.display(),
+                ?err,
+                "API socket readiness check failed"
+            );
+        })?;
 
     let client = Client::new(socket_path);
     // Send vm.create — configures the VM but does not boot it.
     client
         .create(config)
         .await
-        .map_err(|e| VmError::ProcessFailed(format!("vm.create API call failed: {e}")))?;
+        .map_err(|e| {
+            error!(vm_id = %vm_id, ?e, "vm.create API call failed");
+            VmError::ProcessFailed(format!("vm.create API call failed: {e}"))
+        })?;
 
     info!(vm_id = %vm_id, "vm.create succeeded — VM is ready to boot");
 
@@ -347,19 +500,43 @@ async fn spawn_and_create(
 async fn wait_for_socket(socket_timeout: Duration, socket_path: &Path) -> Result<(), VmError> {
     let start = Instant::now();
     let poll_interval = Duration::from_millis(50);
+    let mut attempts: u64 = 0;
 
     loop {
+        attempts += 1;
         if socket_path.exists() {
-            debug!(socket = %socket_path.display(), "API socket appeared");
+            debug!(
+                socket = %socket_path.display(),
+                attempts,
+                elapsed_ms = start.elapsed().as_millis(),
+                "API socket appeared"
+            );
             return Ok(());
         }
         if start.elapsed() > socket_timeout {
+            error!(
+                socket = %socket_path.display(),
+                attempts,
+                elapsed_ms = start.elapsed().as_millis(),
+                timeout_ms = socket_timeout.as_millis(),
+                "API socket readiness timed out"
+            );
             return Err(VmError::ProcessFailed(format!(
                 "API socket {} did not appear within {:?}",
                 socket_path.display(),
                 socket_timeout,
             )));
         }
+
+        if attempts % 20 == 0 {
+            debug!(
+                socket = %socket_path.display(),
+                attempts,
+                elapsed_ms = start.elapsed().as_millis(),
+                "waiting for API socket"
+            );
+        }
+
         tokio::time::sleep(poll_interval).await;
     }
 }

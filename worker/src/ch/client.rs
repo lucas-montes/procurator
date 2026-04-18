@@ -34,6 +34,50 @@ impl Client {
     fn build_uri(&self, endpoint: &str) -> hyper::Uri {
         UnixUri::new(&self.socket_path, endpoint).into()
     }
+
+    /// Kill the client and VM returning the socket path for cleanup.
+    pub async fn kill(self) -> Result<PathBuf, Error> {
+        self.delete().await?;
+        Ok(self.socket_path)
+    }
+
+    /// Create a new VM with the given configuration.
+    pub async fn create(&self, config: &VmConfigRef<'_>) -> Result<(), Error> {
+        let body = serde_json::to_string(&config)?;
+        debug!(config_json = %body, "vm.create request");
+
+        let uri = self.build_uri("/api/v1/vm.create");
+        let _ = request::<EmptyBody>(uri, body, hyper::Method::PUT, &self.client).await?;
+
+        info!("vm.create succeeded");
+        Ok(())
+    }
+
+    pub async fn boot(&self) -> Result<(), Error> {
+        debug!("vm.boot request");
+        let uri = self.build_uri("/api/v1/vm.boot");
+        let _ = request::<EmptyBody>(uri, hyper::Body::empty(), hyper::Method::PUT, &self.client)
+            .await?;
+
+        info!("vm.boot succeeded");
+        Ok(())
+    }
+
+    pub async fn shutdown(&self) -> Result<(), Error> {
+        let uri = self.build_uri("/api/v1/vm.shutdown");
+        let _ = request::<EmptyBody>(uri, hyper::Body::empty(), hyper::Method::PUT, &self.client)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn delete(&self) -> Result<(), Error> {
+        let uri = self.build_uri("/api/v1/vm.delete");
+        let _ = request::<EmptyBody>(uri, hyper::Body::empty(), hyper::Method::PUT, &self.client)
+            .await?;
+
+        Ok(())
+    }
 }
 
 async fn request<R: DeserializeOwned>(
@@ -75,42 +119,3 @@ async fn request<R: DeserializeOwned>(
 
 #[derive(Debug, Deserialize, Default)]
 struct EmptyBody;
-
-impl Client {
-    pub async fn create(&self, config: &VmConfigRef<'_>) -> Result<(), Error> {
-        let body = serde_json::to_string(&config)?;
-        debug!(config_json = %body, "vm.create request");
-
-        let uri = self.build_uri("/api/v1/vm.create");
-        let _ = request::<EmptyBody>(uri, body, hyper::Method::PUT, &self.client).await?;
-
-        info!("vm.create succeeded");
-        Ok(())
-    }
-
-    pub async fn boot(&self) -> Result<(), Error> {
-        debug!("vm.boot request");
-        let uri = self.build_uri("/api/v1/vm.boot");
-        let _ = request::<EmptyBody>(uri, hyper::Body::empty(), hyper::Method::PUT, &self.client)
-            .await?;
-
-        info!("vm.boot succeeded");
-        Ok(())
-    }
-
-    pub async fn shutdown(&self) -> Result<(), Error> {
-        let uri = self.build_uri("/api/v1/vm.shutdown");
-        let _ = request::<EmptyBody>(uri, hyper::Body::empty(), hyper::Method::PUT, &self.client)
-            .await?;
-
-        Ok(())
-    }
-
-    pub async fn delete(&self) -> Result<(), Error> {
-        let uri = self.build_uri("/api/v1/vm.delete");
-        let _ = request::<EmptyBody>(uri, hyper::Body::empty(), hyper::Method::PUT, &self.client)
-            .await?;
-
-        Ok(())
-    }
-}
