@@ -26,6 +26,7 @@ pub struct VmConfigRef<'a> {
 #[derive(Debug, Clone, Serialize)]
 pub struct CpusConfigRef {
     boot_vcpus: u32,
+    max_vcpus: u32,
 }
 
 /// Maps to `MemoryConfig` in ch.capnp. `size` is required by the CH API.
@@ -188,6 +189,7 @@ impl<'a> TryFrom<commands::common_capnp::vm_spec::Reader<'a, commands::ch_capnp:
             vm_config: VmConfigRef {
                 cpus: CpusConfigRef {
                     boot_vcpus: cpus.get_boot_vcpus(),
+                    max_vcpus: cpus.get_max_vcpus(),
                 },
                 memory: MemoryConfigRef {
                     size: memory.get_size(),
@@ -224,7 +226,10 @@ mod tests {
         net: Option<Vec<NetConfigRef<'a>>>,
     ) -> VmConfigRef<'a> {
         VmConfigRef {
-            cpus: CpusConfigRef { boot_vcpus: 2 },
+            cpus: CpusConfigRef {
+                boot_vcpus: 2,
+                max_vcpus: 2,
+            },
             memory: MemoryConfigRef {
                 size: 512 * 1024 * 1024,
             },
@@ -258,6 +263,8 @@ mod tests {
 
         assert_eq!(finalized.disks.len(), 1);
         assert_eq!(finalized.disks[0].path, "/runtime/overlay.qcow2");
+        assert_eq!(finalized.cpus.boot_vcpus, 2);
+        assert_eq!(finalized.cpus.max_vcpus, 2);
 
         let net = finalized
             .net
@@ -287,6 +294,7 @@ mod tests {
 
             let mut cpus = spec.reborrow().init_cpus();
             cpus.set_boot_vcpus(4);
+            cpus.set_max_vcpus(4);
 
             let mut memory = spec.reborrow().init_memory();
             memory.set_size(1024 * 1024 * 1024);
@@ -320,6 +328,7 @@ mod tests {
 
         let vm = spec.vm_config();
         assert_eq!(vm.cpus.boot_vcpus, 4);
+        assert_eq!(vm.cpus.max_vcpus, 4);
         assert_eq!(vm.memory.size, 1024 * 1024 * 1024);
         assert_eq!(vm.payload.cmdline, "console=hvc0 root=/dev/vda1");
         assert!(vm.net.is_none());

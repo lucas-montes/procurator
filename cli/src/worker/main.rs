@@ -233,6 +233,7 @@ async fn create(
     {
         let mut cpus = spec.reborrow().init_cpus();
         cpus.set_boot_vcpus(args.cpu);
+        cpus.set_max_vcpus(args.cpu);
     }
 
     {

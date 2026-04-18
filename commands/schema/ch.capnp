@@ -15,9 +15,10 @@ struct VmConfig {
 	serial @6 :ConsoleConfig;
 }
 
-# Only boot_vcpus is sent; CH defaults max to boot when omitted.
+# Both fields are required by the Cloud Hypervisor API.
 struct CpusConfig {
 	bootVcpus @0 :UInt32;
+	maxVcpus @1 :UInt32;
 }
 
 # size in bytes; required by CH.

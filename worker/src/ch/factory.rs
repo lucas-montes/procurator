@@ -578,6 +578,7 @@ mod tests {
         {
             let mut cpus = vm_cfg.reborrow().init_cpus();
             cpus.set_boot_vcpus(1);
+            cpus.set_max_vcpus(1);
         }
 
         {
