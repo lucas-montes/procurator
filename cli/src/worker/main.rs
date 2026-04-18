@@ -10,10 +10,10 @@ use tokio::task::LocalSet;
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
 const DEFAULT_ADDR: &str = "0.0.0.0:8080";
-const DEFAULT_KERNEL: &str = "/tmp/vmlinux";
+const DEFAULT_KERNEL: &str = "result/vmlinux";
 const DEFAULT_CMDLINE: &str = "console=ttyS0 root=/dev/vda rw init=/sbin/init";
-const DEFAULT_INITRAMFS: &str = "/tmp/initramfs";
-const DEFAULT_DISK: &str = "/tmp/rootfs.img";
+const DEFAULT_INITRAMFS: &str = "result/initrd";
+const DEFAULT_DISK: &str = "result/rootfs.img";
 const DEFAULT_CONSOLE_MODE: &str = "Off";
 const DEFAULT_SERIAL_MODE: &str = "Tty";
 const DEFAULT_CPU: u32 = 1;

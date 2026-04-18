@@ -56,7 +56,7 @@
         }
       ];
       sshKeys = ["ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC4duRrJKDgzq3FXyHyfYVqqqLjTJlZAPmbCQOV236u1VBJyZMGpD+u+PJ4HSxIA/CFKOVIRcCahIGiW1L+7c33K7rmBuGGuE+hzzlkG7uR/Se0kcPMiLTtCf9mTVFeIruXWcI8CptICofjKLYaNw15BewsqQiuHHmiGffk4f5/4w8eWmSns+VE3H4r/4BYUsdJI4Kk+EpVG1Dz9Gf8YcbQCB0YxPycL3Cg4KApaMDkYDHlDNzOsB943IKKPDqzGIxXBLzqqndFlz3OgMbz7bbiiZckWnR6XDctED1UP9EhoEYb1CrwhMc2ldIcnvD0kVy1EytwXZ29MdBQiC8hDmgnNsVXEO9L2rfwybDVhN9owG9oHGb8X/LwUsrYxOqaMe1saR7v4BH5PzY4SW1kWWbh3wRsr/CjoWBZBPPE7Ln9QeN+VutbrkgpYWDsDtaxFHl2TvjdYwtmA21i1QH70dJDRtH4KWmwUUwYinDGfWWjHtGOR6r3MkDs1aX5QMlR/9M= lucas@laptop"];
-      allowedDomains = [ "github.com" "pypi.org" "google.com"];
+      allowedDomains = ["github.com" "pypi.org" "google.com"];
     };
 
     vmConfig = vm.vmConfig;
@@ -122,9 +122,26 @@
       echo "=== Cloud Hypervisor VM stopped ==="
     '';
 
+    # A minimal derivation that copies the built kernel, initrd and raw image
+    # into the output so `nix build /path/to/this/dir#packages.x86_64-linux.artifacts`
+    # produces a `./result/` containing the artifacts. This makes it easy to
+    # point the `pcr-worker-test` CLI at concrete paths.
+    artifacts = pkgs.runCommand "pcr-worker-artifacts" {} ''
+      mkdir -p "$out"
+
+      # Kernel
+      cp -a ${vmConfig.config.boot.kernelPackages.kernel}/${vmConfig.config.system.boot.loader.kernelFile} "$out/vmlinux"
+
+      # Initrd
+      cp -a ${vmConfig.config.system.build.initialRamdisk}/initrd "$out/initrd"
+
+      # Raw disk image (nixos.img)
+      cp -a ${vmConfig.config.system.build.rawImage}/nixos.img "$out/rootfs.img"
+
+    '';
   in {
     packages.${system} = {
-      inherit runVm;
+      inherit runVm artifacts;
     };
 
     apps.${system} = {

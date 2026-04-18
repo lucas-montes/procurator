@@ -24,7 +24,8 @@ let
           health_tick_millis = 1000;
           vmm = {
             binary_path = "${pkgs.cloud-hypervisor}/bin/cloud-hypervisor";
-            socket_dir = "/run/procurator-worker/vms";
+            runtime_dir = "worker/tests/data";
+            state_dir = "worker/tests/data";
             socket_timeout_secs = 10;
             bridge_name = "br0";
           };
@@ -32,7 +33,8 @@ let
       );
     in
     pkgs.writeShellScriptBin "procurator-worker" "
-      ${worker}/bin/worker ${configFile}
+      echo 'We need the worker to be sudo so it can manage TAP devices'
+      sudo ${worker}/bin/worker ${configFile}
     ";
 
   worker-test-wrapper = pkgs.writeShellScriptBin "procurator-worker-test" ''

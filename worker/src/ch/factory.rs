@@ -22,7 +22,7 @@ use super::{
 /// to make the vm do stuff?
 #[derive(Debug, Clone)]
 pub struct Factory {
-    socket_dir: PathBuf,
+    runtime_dir: PathBuf,
     ch_binary: PathBuf,
     socket_timeout: Duration,
     bridge_name: String,
@@ -32,7 +32,7 @@ pub struct Factory {
 impl From<Config> for Factory {
     fn from(config: Config) -> Self {
         Self {
-            socket_dir: config.socket_dir,
+            runtime_dir: config.runtime_dir,
             ch_binary: config.binary_path,
             socket_timeout: Duration::from_secs(config.socket_timeout_secs),
             bridge_name: config.bridge_name,
@@ -99,7 +99,7 @@ impl VmFactory for Factory {
             kernel = %spec.kernel(),
             initramfs = %spec.initramfs(),
             root_disk = %spec.root_disk(),
-            socket_dir = %self.socket_dir.display(),
+            runtime_dir = %self.runtime_dir.display(),
             ch_binary = %self.ch_binary.display(),
             bridge_name = %self.bridge_name,
             artifact_sources = self.artifact_sources.len(),
@@ -121,12 +121,12 @@ impl VmFactory for Factory {
 
         debug!(vm_id = %vm_id, "artifact preflight validation succeeded");
 
-        let vm_dir = create_vm_dir(&self.socket_dir, &vm_id)
+        let vm_dir = create_vm_dir(&self.runtime_dir, &vm_id)
             .await
             .inspect_err(|err| {
                 error!(
                     vm_id = %vm_id,
-                    socket_dir = %self.socket_dir.display(),
+                    runtime_dir = %self.runtime_dir.display(),
                     ?err,
                     "Failed creating runtime VM directory"
                 );
@@ -182,18 +182,17 @@ impl VmFactory for Factory {
         // Takes the capnp-derived config and patches it with runtime paths
         // (writable disk, serial log, TAP name).
 
-        let writable_disk_path =
-            artifacts
-                .writable_disk
-                .to_str()
-                .ok_or_else(|| Error::InvalidPathUtf8 {
-                    field: "writable disk".to_string(),
-                    path: artifacts.writable_disk.display().to_string(),
-                })
-                .map_err(|err| {
-                    error!(vm_id = %vm_id, ?err, "Writable disk path is not UTF-8");
-                    VmError::from(err)
-                })?;
+        let writable_disk_path = artifacts
+            .writable_disk
+            .to_str()
+            .ok_or_else(|| Error::InvalidPathUtf8 {
+                field: "writable disk".to_string(),
+                path: artifacts.writable_disk.display().to_string(),
+            })
+            .map_err(|err| {
+                error!(vm_id = %vm_id, ?err, "Writable disk path is not UTF-8");
+                VmError::from(err)
+            })?;
 
         let serial_log = artifacts
             .serial_log
@@ -234,7 +233,8 @@ impl VmFactory for Factory {
 #[derive(Debug, Deserialize)]
 pub struct Config {
     binary_path: PathBuf,
-    socket_dir: PathBuf,
+    runtime_dir: PathBuf,
+    // state_dir: PathBuf,
     socket_timeout_secs: u64,
     bridge_name: String,
     #[serde(default)]
@@ -248,18 +248,18 @@ struct VmDir {
 
 // ── Step 1: Create VM directory ───────────────────────────────────────
 
-/// Creates the per-VM working directory under `<socket_dir>/<vm_id>/`
+/// Creates the per-VM working directory under `<runtime_dir>/<vm_id>/`
 /// and returns `(vm_dir, socket_path)`.
 ///
 /// The directory layout:
 /// ```text
-/// <socket_dir>/<vm_id>/
+/// <runtime_dir>/<vm_id>/
 /// ├── ch-api.sock   (created later by CH)
 /// ├── root.img      (writable copy, created in step 2)
 /// └── serial.log    (created later by CH)
 /// ```
-async fn create_vm_dir(socket_dir: &Path, vm_id: &str) -> Result<VmDir, VmError> {
-    let vm_dir = socket_dir.join(vm_id);
+async fn create_vm_dir(runtime_dir: &Path, vm_id: &str) -> Result<VmDir, VmError> {
+    let vm_dir = runtime_dir.join(vm_id);
     debug!(vm_id = %vm_id, vm_dir = %vm_dir.display(), "creating VM directory");
     tokio::fs::create_dir_all(&vm_dir).await.map_err(|e| {
         VmError::Internal(format!("failed to create VM dir {}: {e}", vm_dir.display()))
@@ -483,13 +483,10 @@ async fn spawn_and_create(
 
     let client = Client::new(socket_path);
     // Send vm.create — configures the VM but does not boot it.
-    client
-        .create(config)
-        .await
-        .map_err(|e| {
-            error!(vm_id = %vm_id, ?e, "vm.create API call failed");
-            VmError::ProcessFailed(format!("vm.create API call failed: {e}"))
-        })?;
+    client.create(config).await.map_err(|e| {
+        error!(vm_id = %vm_id, ?e, "vm.create API call failed");
+        VmError::ProcessFailed(format!("vm.create API call failed: {e}"))
+    })?;
 
     info!(vm_id = %vm_id, "vm.create succeeded — VM is ready to boot");
 
@@ -558,10 +555,10 @@ mod tests {
 
     static TRACING_INIT: Once = Once::new();
 
-    fn test_config(socket_dir: PathBuf) -> Config {
+    fn test_config(runtime_dir: PathBuf) -> Config {
         Config {
             binary_path: PathBuf::from("/bin/true"),
-            socket_dir,
+            runtime_dir,
             socket_timeout_secs: 2,
             bridge_name: String::from("br0"),
             artifact_sources: Vec::new(),
@@ -650,10 +647,10 @@ mod tests {
     #[tokio::test]
     async fn create_vm_dir_creates_directory_and_socket_path() {
         init_tracing();
-        let socket_dir = PathBuf::from("tests/data/tmp/sockets");
+        let runtime_dir = PathBuf::from("tests/data/tmp/sockets");
 
         let vm_id = "test-vm-001";
-        let result = create_vm_dir(&socket_dir, vm_id).await.unwrap();
+        let result = create_vm_dir(&runtime_dir, vm_id).await.unwrap();
 
         assert_eq!(
             result.vm_dir.to_str(),

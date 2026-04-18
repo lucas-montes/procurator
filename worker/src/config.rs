@@ -8,13 +8,6 @@ use serde::Deserialize;
 
 use crate::vmm::Factory;
 
-#[derive(Debug, Deserialize)]
-pub struct CloudHypervisorSection {
-    binary_path: PathBuf,
-    socket_dir: PathBuf,
-    socket_timeout_secs: u64,
-    bridge_name: String,
-}
 
 #[derive(Debug, Deserialize)]
 pub struct Config<F: Factory> {

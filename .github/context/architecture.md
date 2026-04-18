@@ -103,7 +103,7 @@ Production implementations: `CloudHypervisor` (Vmm), `ChProcess` (VmmProcess), `
 - `CloudHypervisorBackend` implements `VmmBackend` — factory that spawns CH processes
 - `CloudHypervisor` implements `Vmm` — stateless HTTP client to a single CH unix socket
 - `ChProcess` implements `VmmProcess` — wraps `tokio::process::Child`
-- `CloudHypervisorConfig` holds socket_dir, ch_binary, socket_timeout
+- `CloudHypervisorConfig` holds runtime_dir, ch_binary, socket_timeout
 - `build_config()` uses explicit paths from VmSpec: `spec.kernel_path()`, `spec.disk_image_path()`, `spec.initrd_path()`, `spec.cmdline()`
 - One instance per VM (created by VmManager via the backend when spawning)
 - Does NOT track multiple VMs — that's VmManager's job

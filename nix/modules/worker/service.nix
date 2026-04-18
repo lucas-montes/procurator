@@ -8,6 +8,17 @@ with lib; let
   cfg = config.services.procurator.worker;
   clusterCfg = config.cluster.vms or {};
 
+  # Derive short names for systemd RuntimeDirectory/StateDirectory from
+  # the configured absolute paths so we can keep systemd-managed names in
+  # sync with the module options. We prefer the top-level directory name
+  # under /run and /var/lib respectively.
+  runtimeDirName =
+    let parts = builtins.splitString "/" cfg.vmRuntimeDir; in
+    # parts = ["" "run" "procurator-worker" "vms" ...]
+    builtins.elemAt parts 2;
+
+  stateDirName = builtins.baseNameOf cfg.vmStateDir;
+
   # Derive master address from cluster config if using cluster-based setup
   derivedMasterAddr =
     if cfg.master != null
@@ -19,7 +30,8 @@ with lib; let
     master_addr = derivedMasterAddr;
     cloud_hypervisor = {
       binary_path = cfg.cloudHypervisorBinaryPath;
-      socket_dir = cfg.vmRuntimeDir;
+      runtime_dir = cfg.vmRuntimeDir;
+      state_dir = cfg.vmStateDir;
       socket_timeout_secs = cfg.cloudHypervisorSocketTimeoutSeconds;
       bridge_name = cfg.bridgeName;
     };
@@ -76,9 +88,18 @@ in {
 
     vmRuntimeDir = mkOption {
       type = types.str;
-      default = "/run/procurator-worker/vms";
-      example = "/run/procurator-worker/vms";
-      description = "Directory for per-VM runtime artifacts (sockets, writable disks, logs).";
+      # Keep the runtime directory as the systemd RuntimeDirectory root.
+      # Per-VM subdirs are created by the worker underneath this path.
+      default = "/run/procurator-worker";
+      example = "/run/procurator-worker";
+      description = "Base directory for per-VM ephemeral runtime artifacts (sockets, writable disks, logs).";
+    };
+
+    vmStateDir = mkOption {
+      type = types.str;
+      default = "/var/lib/procurator-worker";
+      example = "/var/lib/procurator-worker";
+      description = "Directory for persistent state (images cache, logs that survive reboots).";
     };
 
     cloudHypervisorBinaryPath = mkOption {
@@ -152,6 +173,17 @@ in {
         Restart = "on-failure";
         RestartSec = "10s";
 
+        # Ensure runtime and state directories exist and are owned by the
+        # configured service user. This is a safety-net for systems without
+        # tmpfiles.d/systemd RuntimeDirectory in use (e.g. during manual
+        # testing). ExecStartPre runs before the main process is started.
+        ExecStartPre = [
+          "${pkgs.coreutils}/bin/mkdir -p ${cfg.vmRuntimeDir}"
+          "${pkgs.coreutils}/bin/mkdir -p ${cfg.vmStateDir}"
+          "${pkgs.coreutils}/bin/chown -R ${cfg.user}:${cfg.group} ${cfg.vmRuntimeDir}"
+          "${pkgs.coreutils}/bin/chown -R ${cfg.user}:${cfg.group} ${cfg.vmStateDir}"
+        ];
+
         # ── Capabilities ──────────────────────────────────────────────
         # CAP_NET_ADMIN — create/delete TAP devices, attach to bridges,
         #                 set link up/down via netlink.
@@ -186,12 +218,44 @@ in {
         ProtectHome = true;
 
         # ── Writable paths ────────────────────────────────────────────
-        # /tmp/procurator/vms — per-VM dirs: writable disk copies, serial
-        #                       logs, API sockets, CH log files.
-        # /run/procurator-worker — RuntimeDirectory for ephemeral state.
-        ReadWritePaths = [ cfg.vmRuntimeDir ];
-        StateDirectory = "procurator-worker";
-        RuntimeDirectory = "procurator-worker";
+        # `cfg.vmRuntimeDir` is the absolute path where the worker places
+        # per-VM runtime artifacts (cloud-hypervisor sockets, writable disk
+        # copies, logs). Systemd has several helpers and hardening options
+        # that interact with these settings — below is an explanation:
+        #
+        # - `RuntimeDirectory = "procurator-worker"`
+        #     Instructs systemd to create `/run/procurator-worker` before the
+        #     service starts and remove it after the service stops. It is
+        #     intended for ephemeral runtime state (sockets, pidfiles).
+        #     The created directory is owned by the unit `User`/`Group` and
+        #     therefore writable by the service.
+        #
+        # - `StateDirectory = "procurator-worker"`
+        #     Instructs systemd to create `/var/lib/procurator-worker` for
+        #     state that should persist across reboots. Like RuntimeDirectory,
+        #     ownership is set to the unit `User`/`Group`.
+        #
+        # - `ReadWritePaths`
+        #     When `ProtectSystem`, `ProtectHome`, or similar hardening are in
+        #     effect, the unit is denied write access except for paths listed
+        #     in `ReadWritePaths`. You must include every absolute path the
+        #     service (and its children) needs to write. If `vmRuntimeDir` is
+        #     a nested path such as `/run/procurator-worker/vms`, include both
+        #     the parent runtime directory and the nested path here so writes
+        #     are permitted.
+        #
+        # Recommendation: keep `vmRuntimeDir = "/run/procurator-worker"` so
+        # RuntimeDirectory/StateDirectory align with the configured runtime
+        # paths. If you prefer a subdirectory (e.g. `/run/procurator-worker/vms`)
+        # ensure `ReadWritePaths` includes `/run/procurator-worker` and the
+        # subpath in addition to `/var/lib/procurator-worker`.
+        # Ensure systemd's named directories match the paths the service
+        # actually uses: derive the short names above and set them here so
+        # they cannot accidentally diverge from the options the service
+        # consumes (cfg.vmRuntimeDir / cfg.vmStateDir).
+        ReadWritePaths = [ cfg.vmRuntimeDir cfg.vmStateDir ];
+        StateDirectory = stateDirName;
+        RuntimeDirectory = runtimeDirName;
       };
     };
   };
