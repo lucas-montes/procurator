@@ -8,86 +8,88 @@
     naersk.url = "github:nix-community/naersk";
   };
 
-  outputs = {
-    nixpkgs,
-    rust-overlay,
-    flake-utils,
-    naersk ? null,
-    ...
-  }:
-    flake-utils.lib.eachDefaultSystem (system: let
-      overlays = [(import rust-overlay)];
-      pkgs = import nixpkgs {
-        inherit system overlays;
-      };
+  outputs =
+    {
+      nixpkgs,
+      rust-overlay,
+      flake-utils,
+      naersk ? null,
+      ...
+    }:
+    flake-utils.lib.eachDefaultSystem (
+      system:
+      let
+        overlays = [ (import rust-overlay) ];
+        pkgs = import nixpkgs {
+          inherit system overlays;
+        };
 
-      workspaceRoot = pkgs.lib.cleanSourceWith {
-        src = ../.;
-        filter = path: _type: let
-          root = toString ../.;
-          pathStr = toString path;
-          relPath = pkgs.lib.removePrefix "${root}/" pathStr;
-        in
-          !(
-            pkgs.lib.hasPrefix ".git/" relPath
-            || pkgs.lib.hasPrefix "target/" relPath
-            || pkgs.lib.hasPrefix ".direnv/" relPath
-            || pkgs.lib.hasPrefix "result/" relPath
-            || relPath == "result"
-            || pkgs.lib.hasPrefix "tmp/" relPath
-          );
-      };
+        workspaceRoot = pkgs.lib.cleanSourceWith {
+          src = ../.;
+          filter =
+            path: _type:
+            let
+              root = toString ../.;
+              pathStr = toString path;
+              relPath = pkgs.lib.removePrefix "${root}/" pathStr;
+            in
+            !(
+              pkgs.lib.hasPrefix ".git/" relPath
+              || pkgs.lib.hasPrefix "target/" relPath
+              || pkgs.lib.hasPrefix ".direnv/" relPath
+              || pkgs.lib.hasPrefix "result/" relPath
+              || relPath == "result"
+              || pkgs.lib.hasPrefix "tmp/" relPath
+            );
+        };
 
-      rust-bin-custom = pkgs.rust-bin.stable.latest.default.override {
-        extensions = ["rust-src"];
-      };
+        rust-bin-custom = pkgs.rust-bin.stable.latest.default.override {
+          extensions = [ "rust-src" ];
+        };
 
-      packageSet = import ./flake/packages.nix {
-        inherit pkgs workspaceRoot naersk;
-      };
+        packageSet = import ./flake/packages.nix {
+          inherit pkgs workspaceRoot naersk;
+        };
 
-      appSet = import ./flake/apps.nix {
-        inherit pkgs flake-utils;
-        packages = packageSet;
-      };
-    in {
-      nixosModules.procurator = import ./modules;
+      in
+      {
+        nixosModules.procurator = import ./modules;
 
-      libs = import ./lib {
-        inherit pkgs nixpkgs system;
-      };
+        libs = import ./lib {
+          inherit pkgs nixpkgs system;
+        };
 
-      packages =
-        packageSet
-        // {
+        packages = packageSet // {
           default = packageSet.worker;
         };
 
-      apps = appSet.apps;
-
-      devShells.default = import ./flake/shell.nix {
-        inherit pkgs rust-bin-custom;
-        pcr-test-wrapper = appSet.wrappers.pcr-test-wrapper;
-      };
-
-      checks = {
-        rust-lints = pkgs.stdenv.mkDerivation {
-          name = "procurator-rust-lints";
-          src = workspaceRoot;
-
-          nativeBuildInputs = [pkgs.rustPackages.cargo pkgs.rustPackages.rustfmt pkgs.rustPackages.clippy];
-
-          buildPhase = ''
-            cd "$src"
-            cargo fmt --all -- --check
-            cargo clippy --all-targets --all-features -- -D warnings
-          '';
-
-          installPhase = ''
-            mkdir -p "$out"
-            touch "$out"/.ok
-          '';
+        devShells.default = import ./flake/shell.nix {
+          inherit pkgs rust-bin-custom;
         };
-      };
-    });
+
+        checks = {
+          rust-lints = pkgs.stdenv.mkDerivation {
+            name = "procurator-rust-lints";
+            src = workspaceRoot;
+
+            nativeBuildInputs = [
+              pkgs.rustPackages.cargo
+              pkgs.rustPackages.rustfmt
+              pkgs.rustPackages.clippy
+            ];
+
+            buildPhase = ''
+              cd "$src"
+              cargo fmt --all -- --check
+              cargo clippy --all-targets --all-features -- -D warnings
+            '';
+
+            installPhase = ''
+              mkdir -p "$out"
+              touch "$out"/.ok
+            '';
+          };
+        };
+      }
+    );
 }

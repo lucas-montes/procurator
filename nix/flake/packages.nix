@@ -10,7 +10,7 @@ let
     cargoPath = "${workspaceRoot}/${cargoDir}/Cargo.toml";
     cargoToml = builtins.fromTOML (builtins.readFile cargoPath);
     pname = cargoToml.package.name;
-    version = cargoToml.package.version;
+    inherit (cargoToml.package) version;
   in
     if naerskLib != null then
       naerskLib.buildPackage {
