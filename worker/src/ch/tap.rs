@@ -1,3 +1,5 @@
+use futures::stream::TryStreamExt;
+use rtnetlink::{LinkMessageBuilder, LinkUnspec};
 use std::{
     fs::{File, OpenOptions},
     os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
@@ -5,13 +7,32 @@ use std::{
 };
 
 #[derive(Debug)]
-enum Error {
+pub enum Error {
     TunFileUnavailable(std::io::Error),
     IfaceNameInvalid(String),
     TapCreationFailed(std::io::Error),
     TapPersistenceFailed(std::io::Error),
-    LinkCreationFailed(std::io::Error),
+    /// Errors coming from rtnetlink or other netlink operations. Stored as a string
+    /// to avoid depending on rtnetlink's error types in the error API.
+    NetlinkError(String),
+    /// Bridge/interface not found when resolving by name.
+    BridgeNotFound(String),
 }
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::TunFileUnavailable(e) => write!(f, "tun device open failed: {}", e),
+            Error::IfaceNameInvalid(s) => write!(f, "invalid interface name: {}", s),
+            Error::TapCreationFailed(e) => write!(f, "tap creation failed: {}", e),
+            Error::TapPersistenceFailed(e) => write!(f, "tap persistence failed: {}", e),
+            Error::NetlinkError(s) => write!(f, "netlink error: {}", s),
+            Error::BridgeNotFound(s) => write!(f, "bridge not found: {}", s),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 
 #[derive(Debug)]
 struct TapName([libc::c_char; libc::IF_NAMESIZE]);
@@ -51,52 +72,16 @@ impl std::fmt::Display for TapName {
     }
 }
 
-/// The netlink protocol is a socket based IPC mechanism used for communication between userspace processes and the kernel or between userspace processes themselves. The netlink protocol is based on BSD sockets and uses the AF_NETLINK address family. Every netlink protocol uses its own protocol number (e.g. NETLINK_ROUTE, NETLINK_NETFILTER, etc). Its addressing schema is based on a 32 bit port number, formerly referred to as PID, which uniquely identifies each peer.
-/// <https://www.infradead.org/~tgr/libnl/doc/core.html>
-/// <https://man7.org/linux/man-pages/man7/netlink.7.html>
-/// <https://docs.kernel.org/userspace-api/netlink/intro.html>
-struct RtNetlink {
-    fd: OwnedFd,
-    seq: u32,
-}
-
-impl RtNetlink {
-    fn new() -> Result<Self, Error> {
-        let fd = unsafe { libc::socket(libc::AF_NETLINK, libc::SOCK_RAW, libc::NETLINK_ROUTE) };
-        if fd < 0 {
-            return Err(Error::LinkCreationFailed(std::io::Error::last_os_error()));
-        }
-
-        Ok(Self {
-            fd: unsafe { OwnedFd::from_raw_fd(fd) },
-            seq: 1,
-        })
-    }
-
-    /// Attach the TAP interface to a bridge. This is needed to be able to use the TAP interface for networking.
-    /// <https://man7.org/linux/man-pages/man7/rtnetlink.7.html>
-    fn attach_tap_interface_to_bridge(
-        &self,
-        iface_name: &TapName,
-        bridge_name: &str,
-    ) -> Result<(), Error> {
-        libc::RTM_NEWLINK;
-
-        Ok(())
-    }
-}
-
-pub struct Attached(RtNetlink);
-
-pub struct Uninitilized;
-
-struct Tap<State = Uninitilized> {
+pub struct Tap {
     iface_name: TapName,
     file: File,
-    state: State,
 }
 
 impl Tap {
+    pub fn name(&self) -> String {
+        self.iface_name.to_string()
+    }
+
     /// Method that creaates a new TAP interface. We can optionally set a name for the interface, otherwise one will be created by the kernel.
     pub fn new(iface_name: Option<&str>) -> Result<Self, Error> {
         let iface_name = iface_name
@@ -123,7 +108,7 @@ impl Tap {
             },
         };
 
-        let call = unsafe { libc::ioctl(file.as_raw_fd(), libc::TUNSETIFF, &raw mut req) };
+        let call = unsafe { libc::ioctl(file.as_raw_fd(), libc::TUNSETIFF, &mut req) };
 
         if call < 0 {
             return Err(Error::TapCreationFailed(std::io::Error::last_os_error()));
@@ -132,14 +117,11 @@ impl Tap {
         // Update the iface_name with the name assigned by the kernel if it was not specified.
         let iface_name = TapName(req.ifr_name);
 
-        Ok(Self {
-            iface_name,
-            file,
-            state: Uninitilized,
-        })
+        Ok(Self { iface_name, file })
     }
 
     /// Make the TAP interface persistent. This means that the TAP interface will not be destroyed when the file descriptor is closed. This is needed to be able to use the TAP interface for networking, since CH will re-open it by name when it starts.
+    ///NOTE: if we keep the structure alive we don't need to make it persistent and the clean up of the TAP device can be done with rust's Drop trait
     pub fn persist(self) -> Result<Self, Error> {
         // TUNSETPERSIST — keep the TAP alive after we close the fd.
         // CH will re-open it by name when it starts.
@@ -150,17 +132,42 @@ impl Tap {
         Ok(self)
     }
 
-    /// Attach a bridge to the current opened TAP interface. This is needed to be able to use the TAP interface for networking.
-    pub fn attach_bridge(self, bridge_name: &str) -> Result<Tap<Attached>, Error> {
-        let link = RtNetlink::new()?;
+    /// <https://github.com/rust-netlink/rtnetlink/blob/main/examples/set_bridge_port.rs>
+    pub async fn attach_to_bridge(self, bridge_name: String) -> Result<Self, Error> {
+    // Establish netlink connection and find the bridge index.
+    let (connection, handle, _) =
+        rtnetlink::new_connection().map_err(|e| Error::NetlinkError(e.to_string()))?;
+    tokio::spawn(connection);
 
-        Ok(Tap {
-            iface_name: self.iface_name,
-            file: self.file,
-            state: Attached(link),
-        })
-    }
+    let bridge_index = handle
+        .link()
+        .get()
+        .match_name(bridge_name.clone())
+        .execute()
+        .try_next()
+        .await
+        .map_err(|e| Error::NetlinkError(e.to_string()))?
+        .ok_or(Error::BridgeNotFound(bridge_name))
+        .map(|l| l.header.index)?;
+
+    handle
+        .link()
+        .set(
+            LinkMessageBuilder::<LinkUnspec>::default()
+                .name(self.iface_name.to_string())
+                .controller(bridge_index)
+                .up()
+                .build(),
+        )
+        .execute()
+        .await
+        .map_err(|e| Error::NetlinkError(e.to_string()))?;
+
+    Ok(self)
 }
+}
+
+
 
 #[cfg(test)]
 mod tests {

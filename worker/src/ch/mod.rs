@@ -2,6 +2,7 @@ mod client;
 mod dtos;
 mod errors;
 mod factory;
-mod process;
+mod handle;
+mod tap;
 
 pub use factory::Factory;

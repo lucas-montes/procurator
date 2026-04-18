@@ -116,8 +116,8 @@ pub struct CreateVmSpecRef<'a> {
 }
 
 impl<'a> CreateVmSpecRef<'a> {
-    pub fn vm_config(&self) -> &VmConfigRef<'a> {
-        &self.vm_config
+    pub fn vm_config(self) -> VmConfigRef<'a> {
+        self.vm_config
     }
 
     pub fn kernel(&self) -> &str {

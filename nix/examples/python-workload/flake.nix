@@ -43,7 +43,7 @@
           src = networkTest;
           dst = "/root/netest.sh";
         }
-        # Fix the issue where I need to specify the file when copying a file to a dir.
+        # TODO: Fix the issue where I need to specify the file when copying a file to a dir.
         #  In this case, pointing the docs to the home dir it unpacks the dire in home
         # {
         #   src = ../../../docs;

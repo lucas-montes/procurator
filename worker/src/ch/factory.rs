@@ -1,27 +1,19 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use serde::{Deserialize, de};
+use serde::Deserialize;
 use tokio::process::Command;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 use uuid::Uuid;
 
+use crate::ch::tap::Tap;
 use crate::vmm::{CreateCommand, Error as VmError, Factory as VmFactory, Handle as VmHandle};
 
 use super::{
     client::Client,
     dtos::{CreateVmSpecRef, VmConfigRef},
-    process::{Process, create_tap_device, delete_tap_device},
+    handle::Handle,
 };
-
-pub struct Handle {
-    id: String,
-    client: Client,
-    process: Process,
-    socket_path: PathBuf,
-}
-
-impl VmHandle for Handle {}
 
 /// The structure responsible to spin up vm managed with cloud hypervisor. We need the socket and the binary to be able to call and communicate
 /// with the child processes. We also need to have a bridge name to be able to attach the TAP interfaces to it. I don't really mind cloning it,
@@ -49,10 +41,15 @@ impl From<Config> for Factory {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 enum Error {
     ArtifactsMissing(String),
-    InvalidPathUtf8 { field: String, path: String },
+    InvalidPathUtf8 {
+        field: String,
+        path: String,
+    },
+    /// Errors originating from TAP management code.
+    Tap(crate::ch::tap::Error),
 }
 
 impl std::fmt::Display for Error {
@@ -62,6 +59,7 @@ impl std::fmt::Display for Error {
             Error::InvalidPathUtf8 { field, path } => {
                 write!(f, "{field} contains non-UTF8 path: {path}")
             }
+            Error::Tap(e) => write!(f, "tap error: {}", e),
         }
     }
 }
@@ -71,6 +69,12 @@ impl std::error::Error for Error {}
 impl From<Error> for VmError {
     fn from(value: Error) -> Self {
         VmError::Internal(value.to_string())
+    }
+}
+
+impl From<crate::ch::tap::Error> for Error {
+    fn from(e: crate::ch::tap::Error) -> Self {
+        Error::Tap(e)
     }
 }
 
@@ -86,11 +90,60 @@ impl VmFactory for Factory {
 
     async fn create_vm(
         &self,
-        source: Self::CreateVmSpec<'_>,
+        spec: Self::CreateVmSpec<'_>,
     ) -> Result<CreateCommand<Self>, VmError> {
         let vm_id = Self::create_id();
+        let vm_dir = create_vm_dir(&self.socket_dir, &vm_id).await?;
+        let artifacts = prepare_artifacts::<LocalArtifactResolver>(&vm_dir.vm_dir, &spec).await?;
+
+        // TODO: we can either set a tap name or let the kernel do it
+        // let iface_name = tap_name_from_id(vm_id);
+        let tap = Tap::new(None)
+            .map_err(Error::from)?
+            .attach_to_bridge(self.bridge_name.clone())
+            .await
+            .map_err(Error::from)?;
+
+        let tap_name = tap.name();
+
+        debug!(tap_name, "tap create and attached to bridge");
+
+        // Takes the capnp-derived config and patches it with runtime paths
+        // (writable disk, serial log, TAP name).
+
+        let writable_disk_path =
+            artifacts
+                .writable_disk
+                .to_str()
+                .ok_or_else(|| Error::InvalidPathUtf8 {
+                    field: "writable disk".to_string(),
+                    path: artifacts.writable_disk.display().to_string(),
+                })?;
+
+        let serial_log = artifacts
+            .serial_log
+            .to_str()
+            .ok_or_else(|| Error::InvalidPathUtf8 {
+                field: "serial_log".to_string(),
+                path: artifacts.serial_log.display().to_string(),
+            })?;
+
+        let config =
+            spec.vm_config()
+                .finalize_for_runtime(writable_disk_path, serial_log, Some(&tap_name));
+
         debug!(vm_id = %vm_id, "creating VM from spec");
-        todo!()
+        spawn_and_create(
+            &vm_id,
+            vm_dir.vm_dir,
+            vm_dir.socket_path,
+            tap,
+            &self.ch_binary,
+            self.socket_timeout,
+            &config,
+        )
+        .await
+        .map(|h| CreateCommand::new(h, vm_id))
     }
 }
 
@@ -121,7 +174,7 @@ struct VmDir {
 /// ├── root.img      (writable copy, created in step 2)
 /// └── serial.log    (created later by CH)
 /// ```
-async fn create_vm_dir(socket_dir: PathBuf, vm_id: &str) -> Result<VmDir, VmError> {
+async fn create_vm_dir(socket_dir: &Path, vm_id: &str) -> Result<VmDir, VmError> {
     let vm_dir = socket_dir.join(vm_id);
     debug!(vm_id = %vm_id, vm_dir = %vm_dir.display(), "creating VM directory");
     tokio::fs::create_dir_all(&vm_dir).await.map_err(|e| {
@@ -237,34 +290,6 @@ async fn prepare_artifacts<A: ArtifactsResolver>(
     })
 }
 
-// ── Step 3: Create TAP + attach to bridge ─────────────────────────────
-
-/// Creates a persistent TAP device and attaches it to the configured bridge.
-///
-/// Returns the TAP device name. Hard-errors if the bridge does not exist.
-async fn setup_networking(bridge_name: &str, vm_id: &str) -> Result<String, VmError> {
-    let tap = tap_name_from_id(vm_id);
-
-    create_tap_device(&tap).await?;
-    // attach_tap_to_bridge(&tap, bridge_name).await?;
-
-    info!(bridge_name, tap = %tap, "networking configured");
-    Ok(tap)
-}
-
-// ── Step 4: Finalize VM config ────────────────────────────────────────
-
-/// Takes the capnp-derived config and patches it with runtime paths
-/// (writable disk, serial log, TAP name).
-fn finalize_config<'a>(
-    config: VmConfigRef<'a>,
-    writable_disk: &'a str,
-    serial_log: &'a str,
-    tap_name: &'a str,
-) -> VmConfigRef<'a> {
-    config.finalize_for_runtime(writable_disk, serial_log, Some(tap_name))
-}
-
 // ── Step 5: Spawn CH process ──────────────────────────────────────────
 
 /// Spawns the `cloud-hypervisor` binary, waits for the API socket to
@@ -274,13 +299,13 @@ fn finalize_config<'a>(
 /// so boot can happen asynchronously for faster user response.
 async fn spawn_and_create(
     vm_id: &str,
-    vm_dir: &Path,
-    socket_path: &Path,
-    tap_name: &str,
+    vm_dir: PathBuf,
+    socket_path: PathBuf,
+    tap: Tap,
     ch_binary: &Path,
     socket_timeout: Duration,
     config: &VmConfigRef<'_>,
-) -> Result<(Process, Client), VmError> {
+) -> Result<Handle, VmError> {
     let log_file = vm_dir.join("cloud-hypervisor.log");
 
     let child = Command::new(ch_binary)
@@ -304,16 +329,9 @@ async fn spawn_and_create(
     );
 
     // Wait for the API socket to appear.
-    wait_for_socket(socket_timeout, socket_path).await?;
+    wait_for_socket(socket_timeout, &socket_path).await?;
 
     let client = Client::new(socket_path);
-    let process = Process::new(
-        child,
-        socket_path.to_path_buf(),
-        vm_dir.to_path_buf(),
-        Some(tap_name.to_string()),
-    );
-
     // Send vm.create — configures the VM but does not boot it.
     client
         .create(config)
@@ -321,7 +339,8 @@ async fn spawn_and_create(
         .map_err(|e| VmError::ProcessFailed(format!("vm.create API call failed: {e}")))?;
 
     info!(vm_id = %vm_id, "vm.create succeeded — VM is ready to boot");
-    Ok((process, client))
+
+    Ok(Handle::new(client, child, vm_dir, tap))
 }
 
 /// Polls for the API socket file to appear on disk, with a timeout.
@@ -354,9 +373,13 @@ mod tests {
     use crate::vmm::Factory as VmFactory;
 
     use super::{
-        Config, Factory, LocalArtifactResolver, create_vm_dir, finalize_config, prepare_artifacts,
-        tap_name_from_id,
+        Config, Factory, LocalArtifactResolver, create_vm_dir, prepare_artifacts, tap_name_from_id,
     };
+
+    use std::sync::Once;
+    use tracing_subscriber::{EnvFilter, fmt};
+
+    static TRACING_INIT: Once = Once::new();
 
     fn test_config(socket_dir: PathBuf) -> Config {
         Config {
@@ -424,10 +447,19 @@ mod tests {
         CreateVmSpecRef::try_from(reader).expect("CreateVmSpecRef conversion should succeed")
     }
 
-    use std::sync::Once;
-    use tracing_subscriber::{EnvFilter, fmt};
+    /// Creates a temp dir with fake kernel, initramfs and root disk files.
+    /// Returns `(temp_dir_guard, kernel_path, initramfs_path, root_disk_path)`.
+    fn create_fake_artifacts(tmp: &Path) -> (PathBuf, PathBuf, PathBuf) {
+        let kernel = tmp.join("kernel");
+        let initramfs = tmp.join("initramfs");
+        let root_disk = tmp.join("root.img");
 
-    static TRACING_INIT: Once = Once::new();
+        std::fs::write(&kernel, b"fake-kernel").unwrap();
+        std::fs::write(&initramfs, b"fake-initramfs").unwrap();
+        std::fs::write(&root_disk, b"fake-root-disk").unwrap();
+
+        (kernel, initramfs, root_disk)
+    }
 
     fn init_tracing() {
         TRACING_INIT.call_once(|| {
@@ -444,7 +476,7 @@ mod tests {
         let socket_dir = PathBuf::from("tests/data/tmp/sockets");
 
         let vm_id = "test-vm-001";
-        let result = create_vm_dir(socket_dir, vm_id).await.unwrap();
+        let result = create_vm_dir(&socket_dir, vm_id).await.unwrap();
 
         assert_eq!(
             result.vm_dir.to_str(),
@@ -459,22 +491,6 @@ mod tests {
         tokio::fs::remove_dir_all(&result.vm_dir)
             .await
             .expect("cleanup should succeed");
-    }
-
-    // ── Step 2: Artifact preparation ──────────────────────────────────────
-
-    /// Creates a temp dir with fake kernel, initramfs and root disk files.
-    /// Returns `(temp_dir_guard, kernel_path, initramfs_path, root_disk_path)`.
-    fn create_fake_artifacts(tmp: &Path) -> (PathBuf, PathBuf, PathBuf) {
-        let kernel = tmp.join("kernel");
-        let initramfs = tmp.join("initramfs");
-        let root_disk = tmp.join("root.img");
-
-        std::fs::write(&kernel, b"fake-kernel").unwrap();
-        std::fs::write(&initramfs, b"fake-initramfs").unwrap();
-        std::fs::write(&root_disk, b"fake-root-disk").unwrap();
-
-        (kernel, initramfs, root_disk)
     }
 
     #[tokio::test]
@@ -528,8 +544,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // ── TAP naming ────────────────────────────────────────────────────────
-
     #[test]
     fn tap_name_strips_hyphens_and_takes_first_8() {
         // v7 UUID example: 019712ab-3c4d-7e5f-8a9b-0c1d2e3f4a5b
@@ -537,38 +551,6 @@ mod tests {
         assert_eq!(name, "tap-019712ab");
         // IFNAMSIZ = 16 (15 chars + null), our name is "tap-" (4) + 8 = 12
         assert!(name.len() <= 15, "TAP name too long: {name}");
-    }
-
-
-    #[test]
-    fn finalize_config_patches_disk_serial_and_net() {
-        init_tracing();
-        let tmp = PathBuf::from("tests/data");
-        let (kernel, initramfs, root_disk) = create_fake_artifacts(&tmp);
-
-        let message = build_vm_spec_message(
-            root_disk.to_str().unwrap(),
-            kernel.to_str().unwrap(),
-            initramfs.to_str().unwrap(),
-        );
-        let spec = vm_spec_from_message(&message);
-
-        let config = finalize_config(
-            spec.vm_config().clone(),
-            "/vm/root.img",
-            "/vm/serial.log",
-            "tap-aabbccdd",
-        );
-
-        // Serialize to JSON and verify the fields were patched.
-        let json: serde_json::Value =
-            serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
-
-        assert_eq!(json["disks"][0]["path"], "/vm/root.img");
-        assert_eq!(json["serial"]["mode"], "File");
-        assert_eq!(json["serial"]["file"], "/vm/serial.log");
-        assert_eq!(json["console"]["mode"], "Off");
-        assert_eq!(json["net"][0]["tap"], "tap-aabbccdd");
     }
 
     #[tokio::test]
