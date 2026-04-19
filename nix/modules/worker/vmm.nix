@@ -78,13 +78,13 @@ in {
       # NAT: masquerade VM traffic through the configured external interface.
       nat = {
         enable = true;
-        internalInterfaces = [bridgeName];
+        internalInterfaces = [cfg.bridgeName];
         externalInterface = cfg.externalInterface;
       };
 
       # Trust br0 in the firewall — VMs need to reach the host for DHCP (udp/67)
       # and DNS (udp/53, tcp/53). This is safe because only our VMs are on this bridge.
-      firewall.trustedInterfaces = [bridgeName];
+      firewall.trustedInterfaces = [cfg.bridgeName];
     };
 
     # Kernel forwarding required for NAT.
@@ -94,7 +94,7 @@ in {
     services.dnsmasq = {
       enable = true;
       settings = {
-        interface = bridgeName;
+        interface = cfg.bridgeName;
         # bind-dynamic: attaches when br0 is ready, avoids silent bind failures
         # that occur with bind-interfaces if br0 gets its IP after dnsmasq starts.
         bind-dynamic = true;
