@@ -5,7 +5,6 @@ mod server;
 mod vmm;
 
 use std::path::Path;
-use std::path::PathBuf;
 use tokio::sync::mpsc;
 
 use server::Server;
@@ -21,8 +20,11 @@ pub async fn ch_main(path: impl AsRef<Path> + std::fmt::Debug) {
     let config: config::Config<ch::Factory> = config::Config::from_file(&path);
     debug!(?config, "Loaded worker configuration");
 
-    let db_url = PathBuf::from("sqlite://").join(config.vmm.state_db_path());
-    let db: database::Database = database::Database::new(db_url.to_str().expect("the path to the database should be correct")).await;
+    let db_path = config.vmm.state_db_path();
+
+    let db_url = format!("sqlite:{}", db_path.display());
+    tracing::debug!(db_url, "Constructed database URL");
+    let db: database::Database = database::Database::new(&db_url).await;
 
     let factory = ch::Factory::new(config.vmm, db.clone());
 

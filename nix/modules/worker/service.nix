@@ -7,6 +7,8 @@
 with lib; let
   cfg = config.services.procurator.worker;
   clusterCfg = config.cluster.vms or {};
+  workerLib = import ../../lib/worker.nix { inherit pkgs; };
+  inherit (workerLib) defaults mkWorkerConfig;
 
   # Derive short names for systemd RuntimeDirectory/StateDirectory from
   # the configured absolute paths so we can keep systemd-managed names in
@@ -25,19 +27,21 @@ with lib; let
     then clusterCfg.${cfg.master}.deployment.addr
     else cfg.masterAddr;
 
-  configFile = pkgs.writeText "procurator-worker-config.json" (builtins.toJSON {
-    listen_addr = cfg.listenAddr;
-    master_addr = derivedMasterAddr;
-    vmm = {
-      binary_path = cfg.cloudHypervisorBinaryPath;
-      runtime_dir = cfg.vmRuntimeDir;
-      state_dir = cfg.vmStateDir;
-      bridge_name = cfg.bridgeName;
-      ip_pool_start = cfg.ipPoolStart;
-      ip_pool_end = cfg.ipPoolEnd;
-      ip_netmask = cfg.ipNetmask;
-    };
-  });
+  configFile = pkgs.writeText "procurator-worker-config.json" (builtins.toJSON
+    (mkWorkerConfig {
+      listenAddr       = cfg.listenAddr;
+      masterAddr       = derivedMasterAddr;
+      healthTickMillis = cfg.healthTickMillis;
+      vmm = {
+        binaryPath  = cfg.cloudHypervisorBinaryPath;
+        runtimeDir  = cfg.vmRuntimeDir;
+        stateDir    = cfg.vmStateDir;
+        bridgeName  = cfg.bridgeName;
+        ipPoolStart = cfg.ipPoolStart;
+        ipPoolEnd   = cfg.ipPoolEnd;
+        ipNetmask   = cfg.ipNetmask;
+      };
+    }));
 in {
   options.services.procurator.worker = {
     enable = mkEnableOption "Procurator worker service";
@@ -51,8 +55,16 @@ in {
 
     listenAddr = mkOption {
       type = types.str;
+      default = defaults.listenAddr;
       example = "0.0.0.0:8080";
       description = "Address and port for the worker to bind to.";
+    };
+
+    healthTickMillis = mkOption {
+      type = types.ints.positive;
+      default = defaults.healthTickMillis;
+      example = 5000;
+      description = "Interval in milliseconds between worker health ticks.";
     };
 
     master = mkOption {
@@ -92,14 +104,14 @@ in {
       type = types.str;
       # Keep the runtime directory as the systemd RuntimeDirectory root.
       # Per-VM subdirs are created by the worker underneath this path.
-      default = "/run/procurator-worker";
+      default = defaults.vmm.runtimeDir;
       example = "/run/procurator-worker";
       description = "Base directory for per-VM ephemeral runtime artifacts (sockets, writable disks, logs).";
     };
 
     vmStateDir = mkOption {
       type = types.str;
-      default = "/var/lib/procurator-worker";
+      default = defaults.vmm.stateDir;
       example = "/var/lib/procurator-worker";
       description = "Directory for persistent state (images cache, logs that survive reboots).";
     };
@@ -113,26 +125,29 @@ in {
 
     bridgeName = mkOption {
       type = types.str;
-      default = "br0";
+      default = defaults.vmm.bridgeName;
       example = "br0";
       description = "Bridge name used for VM TAP attachment.";
     };
 
     ipPoolStart = mkOption {
       type = types.str;
-      default = "10.0.0.2";
+      default = defaults.vmm.ipPoolStart;
+      example = "10.0.0.2";
       description = "First IP the worker will assign to a VM. Must be inside the bridge subnet.";
     };
 
     ipPoolEnd = mkOption {
       type = types.str;
-      default = "10.255.255.254";
+      default = defaults.vmm.ipPoolEnd;
+      example = "10.255.255.254";
       description = "Last IP in the pool. 10.0.0.2-10.255.255.254 gives ~16 million addresses.";
     };
 
     ipNetmask = mkOption {
       type = types.str;
-      default = "255.0.0.0";
+      default = defaults.vmm.ipNetmask;
+      example = "255.0.0.0";
       description = "Subnet mask corresponding to the bridge prefix. Must match vmm.bridgePrefixLength.";
     };
   };

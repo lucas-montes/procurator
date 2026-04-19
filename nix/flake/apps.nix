@@ -2,11 +2,13 @@
   pkgs,
   flake-utils,
   packages,
+  workerLib,
 }:
 let
   inherit (packages) worker cli;
+  inherit (workerLib) mkWorkerConfig defaults;
 
-  wokerAddr = "0.0.0.0:8080";
+  workerAddr = defaults.listenAddr;
 
   mkAppWithDescription =
     drv: description:
@@ -18,29 +20,24 @@ let
   worker-wrapper =
     let
       configFile = pkgs.writeText "procurator-worker-config.json" (
-        builtins.toJSON {
-          listen_addr = wokerAddr;
-          master_addr = "0.0.0.0:8081";
-          health_tick_millis = 1000;
+        builtins.toJSON (mkWorkerConfig {
+          # Override only what differs from defaults for local dev.
           vmm = {
-            binary_path = "${pkgs.cloud-hypervisor}/bin/cloud-hypervisor";
-            runtime_dir = "worker/tests/data";
-            state_dir = "worker/tests/data";
-            bridge_name = "br0";
-            ip_pool_start = "10.0.0.2";
-            ip_pool_end = "10.255.255.254";
-            ip_netmask = "255.0.0.0";
+            runtimeDir = "worker/tests/data";
+            stateDir   = "worker/tests/data";
           };
-        }
+        })
       );
     in
-    pkgs.writeShellScriptBin "procurator-worker" "
+    pkgs.writeShellScriptBin "procurator-worker" ''
+      # mkdir -p /tmp/procurator/worker/runtime
+      # mkdir -p /tmp/procurator/worker/state
       echo 'We need the worker to be sudo so it can manage TAP devices'
       sudo ${worker}/bin/worker ${configFile}
-    ";
+    '';
 
   worker-test-wrapper = pkgs.writeShellScriptBin "procurator-worker-test" ''
-    ${cli}/bin/pcr-worker-test --addr ${wokerAddr} "$@"
+    ${cli}/bin/pcr-worker-test --addr ${workerAddr} "$@"
   '';
 in
 {

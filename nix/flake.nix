@@ -51,8 +51,10 @@
           inherit pkgs workspaceRoot naersk;
         };
 
+        workerLib = import ./lib/worker.nix { inherit pkgs; };
+
         appSet = import ./flake/apps.nix {
-          inherit pkgs flake-utils;
+          inherit pkgs flake-utils workerLib;
           packages = packageSet;
         };
       in
