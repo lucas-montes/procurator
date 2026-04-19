@@ -421,7 +421,8 @@ async fn spawn_cloud_hypervisor(
         "spawning cloud-hypervisor"
     );
 
-    let child = Command::new(ch_binary)
+    let mut child = Command::new(ch_binary)
+        .arg("--api-socket")
         .arg(vm_dir_setings.socket_path.as_os_str())
         .arg("--log-file")
         .arg(log_file.as_os_str())
@@ -440,11 +441,42 @@ async fn spawn_cloud_hypervisor(
         VmError::ProcessFailed(format!("cloud-hypervisor process finished immediately after spawning"))
         })?;
 
+    // Wait for CH to create its API socket before returning. Without this, the
+    // first vm.create call races the CH startup and fails with ENOENT.
+    //
+    // Bounded retry: poll every 20ms for up to 2s. If CH hasn't created the
+    // socket by then, something is wrong — kill the child and fail.
+    let socket_path = &vm_dir_setings.socket_path;
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while !socket_path.exists() {
+        if std::time::Instant::now() >= deadline {
+            error!(
+                %vm_id,
+                socket = %socket_path.display(),
+                "cloud-hypervisor did not create API socket within timeout"
+            );
+            let _ = child.kill().await;
+            return Err(VmError::ProcessFailed(format!(
+                "cloud-hypervisor did not create API socket at {} within 2s",
+                socket_path.display()
+            )));
+        }
+
+        // Detect premature exit — if the child is gone, no point waiting.
+        if let Ok(Some(status)) = child.try_wait() {
+            error!(%vm_id, ?status, "cloud-hypervisor exited before creating API socket");
+            return Err(VmError::ProcessFailed(format!(
+                "cloud-hypervisor exited with {status:?} before creating API socket"
+            )));
+        }
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
     debug!(%vm_id, pid, "cloud-hypervisor process spawned");
 
     Ok(child)
 }
-
 
 //TODO: need to add cleanup for the files and dir created
 #[cfg(test)]
