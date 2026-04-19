@@ -28,11 +28,10 @@ with lib; let
   configFile = pkgs.writeText "procurator-worker-config.json" (builtins.toJSON {
     listen_addr = cfg.listenAddr;
     master_addr = derivedMasterAddr;
-    cloud_hypervisor = {
+    vmm = {
       binary_path = cfg.cloudHypervisorBinaryPath;
       runtime_dir = cfg.vmRuntimeDir;
       state_dir = cfg.vmStateDir;
-      socket_timeout_secs = cfg.cloudHypervisorSocketTimeoutSeconds;
       bridge_name = cfg.bridgeName;
       ip_pool_start = cfg.ipPoolStart;
       ip_pool_end = cfg.ipPoolEnd;
@@ -110,13 +109,6 @@ in {
       default = "${pkgs.cloud-hypervisor}/bin/cloud-hypervisor";
       defaultText = literalExpression "\"${pkgs.cloud-hypervisor}/bin/cloud-hypervisor\"";
       description = "Absolute path to the cloud-hypervisor binary used by the worker.";
-    };
-
-    cloudHypervisorSocketTimeoutSeconds = mkOption {
-      type = types.ints.positive;
-      default = 10;
-      example = 5;
-      description = "Max seconds to wait for cloud-hypervisor API socket creation.";
     };
 
     bridgeName = mkOption {

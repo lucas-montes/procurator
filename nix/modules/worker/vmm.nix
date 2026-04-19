@@ -16,6 +16,12 @@ in {
       description = "Uplink interface used for NAT (change to your host uplink).";
     };
 
+    bridgeName = mkOption {
+      type = types.str;
+      default = "br0";
+      description = "Name of the bridge.";
+    };
+
     bridgeAddress = mkOption {
       type = types.str;
       default = "10.0.0.1";
@@ -72,13 +78,13 @@ in {
       # NAT: masquerade VM traffic through the configured external interface.
       nat = {
         enable = true;
-        internalInterfaces = ["br0"];
+        internalInterfaces = [bridgeName];
         externalInterface = cfg.externalInterface;
       };
 
       # Trust br0 in the firewall — VMs need to reach the host for DHCP (udp/67)
       # and DNS (udp/53, tcp/53). This is safe because only our VMs are on this bridge.
-      firewall.trustedInterfaces = ["br0"];
+      firewall.trustedInterfaces = [bridgeName];
     };
 
     # Kernel forwarding required for NAT.
@@ -88,7 +94,7 @@ in {
     services.dnsmasq = {
       enable = true;
       settings = {
-        interface = "br0";
+        interface = bridgeName;
         # bind-dynamic: attaches when br0 is ready, avoids silent bind failures
         # that occur with bind-interfaces if br0 gets its IP after dnsmasq starts.
         bind-dynamic = true;
