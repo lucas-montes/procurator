@@ -1,16 +1,23 @@
-use std::net::Ipv4Addr;
+use std::{net::Ipv4Addr, str::FromStr};
 
-use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
+use sqlx::{
+    SqlitePool,
+    sqlite::{SqliteConnectOptions, SqliteJournalMode},
+};
 
 #[derive(Clone, Debug)]
 pub struct Database(SqlitePool);
 
 impl Database {
-    pub async fn new(path: &str) -> Self {
-        let pool = SqlitePoolOptions::new()
-            .connect(path)
+    pub async fn new(filename: &str) -> Self {
+        let connection = SqliteConnectOptions::from_str(filename)
+            .expect("bad path to sqlite")
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal);
+
+        let pool = SqlitePool::connect_with(connection)
             .await
-            .expect("failed to open worker database");
+            .expect("we should conenct to the db");
 
         sqlx::migrate!("./migrations")
             .run(&pool)
@@ -20,7 +27,7 @@ impl Database {
         Self(pool)
     }
 
-//TODO: all this IP logic shouldn't be here
+    //TODO: all this IP logic shouldn't be here
 
     /// Mark an existing free slot as used, or insert a new slot for a fresh IP.
     pub async fn reserve_ip(
@@ -65,9 +72,10 @@ impl Database {
 
     /// Return the highest ever-allocated IP, or `None` if the table is empty.
     pub async fn last_reserved_ip(&self) -> Result<Option<Ipv4Addr>, sqlx::Error> {
-        let row: Option<String> = sqlx::query_scalar("SELECT ip FROM ip_leases ORDER BY ip_value DESC LIMIT 1")
-            .fetch_optional(&self.0)
-            .await?;
+        let row: Option<String> =
+            sqlx::query_scalar("SELECT ip FROM ip_leases ORDER BY ip_value DESC LIMIT 1")
+                .fetch_optional(&self.0)
+                .await?;
         Ok(row.map(|ip| ip.parse().expect("we should only be saving valid ips")))
     }
 }

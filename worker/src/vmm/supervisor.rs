@@ -100,6 +100,11 @@ impl<F: Factory> Supervisor<F> {
 
         tracing::info!(number_vm = guard.len(), "Running health checks for all VMs");
 
+        if guard.is_empty() {
+            tracing::debug!("No VMs to check health for");
+            return;
+        }
+
         for (id, handle) in guard.iter() {
             futs.push(async move { (id, handle.health().await) });
         }

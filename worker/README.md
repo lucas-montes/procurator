@@ -15,3 +15,7 @@ Holds the writting part of registry. It receives commands from a channel comming
 ## Factory
 A structure that is dependand of the backend used, currently it's cloud hypervisor.
 It creates the vms (in this case it spawns a process and creates a client to communicate with it)
+
+
+## TODO
+[ ] Need a better way to keep state and failures to clean up the directories
