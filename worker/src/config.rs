@@ -1,7 +1,7 @@
 use std::{
     net::SocketAddr,
     num::NonZeroU64,
-    path::{Path, PathBuf},
+    path::{Path, },
 };
 
 use serde::Deserialize;
@@ -12,7 +12,6 @@ use crate::vmm::Factory;
 #[derive(Debug, Deserialize)]
 pub struct Config<F: Factory> {
     pub listen_addr: SocketAddr,
-    master_addr: SocketAddr,
     pub health_tick_millis: NonZeroU64,
     pub vmm: F::Config,
 }

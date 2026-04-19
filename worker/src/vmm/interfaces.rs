@@ -2,9 +2,10 @@ use serde::de::DeserializeOwned;
 
 use super::{Error, supervisor::CreateCommand};
 
+
 /// This is the interface that should create process and talk to the hypervisor or whatever backend we are using to manage vms/vmms
 /// The questions is, do all backends need a client and a process like cloud hypervisor?
-pub trait Factory: Clone + 'static + From<Self::Config> + std::fmt::Debug {
+pub trait Factory: Clone + 'static + std::fmt::Debug {
     //NOTE: we need the Clone + 'static either way
     type VmHandle: Handle + Send + 'static + Sync;
     type Config: DeserializeOwned + std::fmt::Debug;
@@ -32,7 +33,6 @@ pub trait Factory: Clone + 'static + From<Self::Config> + std::fmt::Debug {
 #[derive(Debug)]
 pub enum HandleError {
     Start(String),
-    Delete(String),
     Cleanup(String),
 }
 
@@ -40,7 +40,6 @@ impl std::fmt::Display for HandleError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             HandleError::Start(msg) => write!(f, "start failed: {}", msg),
-            HandleError::Delete(msg) => write!(f, "delete failed: {}", msg),
             HandleError::Cleanup(msg) => write!(f, "cleanup failed: {}", msg),
         }
     }
@@ -56,6 +55,7 @@ pub trait Handle
 where
     Self: Sized,
 {
+
     fn start(&self) -> impl Future<Output = Result<(), HandleError>> + Send;
 
     fn delete(self) -> impl Future<Output = Result<(), HandleError>> + Send;

@@ -18,20 +18,20 @@ in {
 
     bridgeAddress = mkOption {
       type = types.str;
-      default = "192.168.100.1";
-      description = "IPv4 address for the VM bridge (gateway).";
+      default = "10.0.0.1";
+      description = "IPv4 address for the VM bridge (gateway). Must be the .1 of the worker IP pool subnet.";
     };
 
     bridgePrefixLength = mkOption {
       type = types.int;
-      default = 24;
-      description = "Prefix length for the bridge address (usually 24).";
+      default = 8;
+      description = "Prefix length for the bridge address. 8 = /8, giving ~16 million usable addresses.";
     };
 
     dhcpRange = mkOption {
       type = types.str;
-      default = "192.168.100.10,192.168.100.100,12h";
-      description = "DHCP range for VMs attached to the bridge.";
+      default = "10.0.0.2,10.255.255.254,12h";
+      description = "DHCP range for VMs attached to the bridge. Should match ipPoolStart/ipPoolEnd in service.nix.";
     };
 
     dnsServers = mkOption {

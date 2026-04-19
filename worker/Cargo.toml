@@ -17,7 +17,6 @@ sqlx.workspace = true
 
 # low-level netlink library used for attaching TAPs to bridges without spawning `ip`
 rtnetlink = "0.20"
-
 # raw libc bindings for TAP ioctl (TUNSETIFF, TUNSETPERSIST)
 libc = "0.2"
 

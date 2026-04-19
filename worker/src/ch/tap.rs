@@ -48,6 +48,11 @@ impl FromStr for TapName {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.len() > libc::IF_NAMESIZE - 1 {
+            tracing::error!(
+                iface_name = %s,
+                max_length = libc::IF_NAMESIZE - 1,
+                "Interface name is too long",
+            );
             return Err(Error::IfaceNameInvalid(s.to_string()));
         }
 
@@ -72,7 +77,12 @@ impl std::fmt::Display for TapName {
     }
 }
 
+/// Once we initialize the TAP interface we keep the fd in the structure to be able to make other operations with it.
 pub struct Initialized(File);
+
+/// Once we call `persist` the TAP interface will be kept alive by the kernel even after we drop the fd.
+/// We need to persist it so cloud-hypervisor can re-open it and use it for the VM networking.
+/// Otherwise, keeping the fd open would raise an error once cloud-hypervisor would try to use it.
 pub struct Persisted;
 
 pub struct Tap<State = Initialized> {
@@ -161,6 +171,9 @@ impl Tap<Initialized> {
             .read(true)
             .write(true)
             .open("/dev/net/tun")
+            .inspect_err(|err|
+            tracing::error!(%err, "Unale to open the /dev/net/tun file, which is needed to create TAP interfaces")
+            )
             .map_err(Error::TunFileUnavailable)?;
 
         // <https://docs.kernel.org/networking/tuntap.html>
@@ -179,7 +192,13 @@ impl Tap<Initialized> {
         let call = unsafe { libc::ioctl(file.as_raw_fd(), libc::TUNSETIFF, &mut req) };
 
         if call < 0 {
-            return Err(Error::TapCreationFailed(std::io::Error::last_os_error()));
+            let error = std::io::Error::last_os_error();
+            tracing::error!(
+                %error,
+                %iface_name,
+                "Failed to create TAP interface with ioctl",
+            );
+            return Err(Error::TapCreationFailed(error));
         }
 
         // Update the iface_name with the name assigned by the kernel if it was not specified.
@@ -198,7 +217,13 @@ impl Tap<Initialized> {
         // CH will re-open it by name when it starts.
         let ret = unsafe { libc::ioctl(self.state.0.as_raw_fd(), libc::TUNSETPERSIST, 1_i32) };
         if ret < 0 {
-            return Err(Error::TapPersistenceFailed(std::io::Error::last_os_error()));
+            let error = std::io::Error::last_os_error();
+            tracing::error!(
+                %error,
+                iface_name = %self.iface_name,
+                "Failed to make TAP interface persistent",
+            );
+            return Err(Error::TapPersistenceFailed(error));
         }
         Ok(Tap {
             iface_name: self.iface_name,
@@ -207,6 +232,8 @@ impl Tap<Initialized> {
     }
 }
 
+
+// NOTE: these tests can only be run with SUDO and linux probably
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;

@@ -53,6 +53,7 @@ struct VmStatus {
   status @4 :Text;                  # "pending", "running", "stopping", "failed", "drifted"
   drifted @5 :Bool;                 # desiredHash != observedHash?
   metrics @6 :VmMetrics;
+  ip @7 :Text;
 }
 
 struct Generation {

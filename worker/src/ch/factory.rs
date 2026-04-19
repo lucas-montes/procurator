@@ -1,11 +1,13 @@
+use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::Deserialize;
-use tokio::process::Command;
-use tracing::{debug, error, info, warn};
+use tokio::process::{Child, Command};
+use tracing::{debug, error, info};
 use uuid::Uuid;
 
+use crate::ch::dtos::NetConfigRef;
 use crate::ch::tap::{Persisted, Tap};
 use crate::vmm::{CreateCommand, Error as VmError, Factory as VmFactory};
 
@@ -13,6 +15,7 @@ use super::{
     client::Client,
     dtos::{CreateVmSpecRef, VmConfigRef},
     handle::Handle,
+    ip_allocator::IpAllocator,
 };
 
 /// The structure responsible to spin up vm managed with cloud hypervisor. We need the socket and the binary to be able to call and communicate
@@ -23,19 +26,30 @@ use super::{
 #[derive(Debug, Clone)]
 pub struct Factory {
     runtime_dir: PathBuf,
+    state_dir: PathBuf,
     ch_binary: PathBuf,
-    socket_timeout: Duration,
     bridge_name: String,
+    ip_allocator: IpAllocator,
     artifact_sources: Vec<String>,
 }
 
-impl From<Config> for Factory {
-    fn from(config: Config) -> Self {
+impl Factory {
+    pub fn new(config: Config, db: crate::database::Database) -> Self {
+        //TODO: I don't like this, but as we don't have an interface and I don't really know what the interafce should look like, let it be
+        // I'll make it more generic once the ArtifactsResolver thing is also generic and implemented here
+        let ip_allocator = IpAllocator::new(
+            db,
+            config.ip_pool_start,
+            config.ip_pool_end,
+            config.ip_netmask,
+        );
+
         Self {
             runtime_dir: config.runtime_dir,
+            state_dir: config.state_dir,
             ch_binary: config.binary_path,
-            socket_timeout: Duration::from_secs(config.socket_timeout_secs),
             bridge_name: config.bridge_name,
+            ip_allocator,
             artifact_sources: config.artifact_sources,
         }
     }
@@ -94,58 +108,24 @@ impl VmFactory for Factory {
     ) -> Result<CreateCommand<Self>, VmError> {
         let vm_id = Self::create_id();
 
-        debug!(
+        info!(
             vm_id = %vm_id,
             kernel = %spec.kernel(),
             initramfs = %spec.initramfs(),
             root_disk = %spec.root_disk(),
             runtime_dir = %self.runtime_dir.display(),
+            state_dir = %self.state_dir.display(),
             ch_binary = %self.ch_binary.display(),
             bridge_name = %self.bridge_name,
             artifact_sources = self.artifact_sources.len(),
             "starting VM creation"
         );
 
-        verify_artifacts_exist::<LocalArtifactResolver>(&spec)
-            .await
-            .inspect_err(|err| {
-                error!(
-                    vm_id = %vm_id,
-                    kernel = %spec.kernel(),
-                    initramfs = %spec.initramfs(),
-                    root_disk = %spec.root_disk(),
-                    ?err,
-                    "VM creation preflight artifact validation failed"
-                );
-            })?;
-
-        debug!(vm_id = %vm_id, "artifact preflight validation succeeded");
-
-        let vm_dir = create_vm_dir(&self.runtime_dir, &vm_id)
-            .await
-            .inspect_err(|err| {
-                error!(
-                    vm_id = %vm_id,
-                    runtime_dir = %self.runtime_dir.display(),
-                    ?err,
-                    "Failed creating runtime VM directory"
-                );
-            })?;
+        let vm_dir = create_vm_dir(&self.runtime_dir, &vm_id).await?;
         debug!(vm_id = %vm_id, vm_dir = %vm_dir.vm_dir.display(), "VM directory created");
 
-        let artifacts = prepare_artifacts::<LocalArtifactResolver>(&vm_dir.vm_dir, &spec)
-            .await
-            .inspect_err(|err| {
-                error!(
-                    vm_id = %vm_id,
-                    vm_dir = %vm_dir.vm_dir.display(),
-                    kernel = %spec.kernel(),
-                    initramfs = %spec.initramfs(),
-                    root_disk = %spec.root_disk(),
-                    ?err,
-                    "Failed preparing VM artifacts"
-                );
-            })?;
+        let artifacts = prepare_artifacts::<LocalArtifactResolver>(&vm_dir.vm_dir, &spec).await?;
+
         debug!(
             vm_id = %vm_id,
             kernel = %spec.kernel(),
@@ -154,79 +134,67 @@ impl VmFactory for Factory {
             writable_disk = %artifacts.writable_disk.display(),
             "artifacts prepared"
         );
-        // TODO: we can either set a tap name or let the kernel do it
-        // let iface_name = tap_name_from_id(vm_id);
+
+        // Let the kernel assign automatically the TAP name for now and let's see what happens
+        // let tap_name = tap_name_from_id(&vm_id);
+        // let tap = Tap::new(Some(&tap_name))
         let tap = Tap::new(None)
-            .map_err(Error::from)
-            .inspect_err(|err| error!(vm_id = %vm_id, ?err, "Failed creating TAP interface"))?
+            .map_err(Error::from)?
             .persist()
-            .map_err(Error::from)
-            .inspect_err(
-                |err| error!(vm_id = %vm_id, ?err, "Failed to make the TAP interface persistent"),
-            )?
+            .map_err(Error::from)?
             .attach_to_bridge(self.bridge_name.clone())
             .await
-            .map_err(Error::from)
-            .inspect_err(|err| {
-                error!(
-                    vm_id = %vm_id,
-                    bridge_name = %self.bridge_name,
-                    ?err,
-                    "Failed attaching TAP interface to bridge"
-                )
-            })?;
+            .map_err(Error::from)?;
 
         let tap_name = tap.name();
 
-        debug!(vm_id = %vm_id, tap_name, "tap create and attached to bridge");
+        debug!(%vm_id, %tap_name, "tap create and attached to bridge");
 
-        // Takes the capnp-derived config and patches it with runtime paths
-        // (writable disk, serial log, TAP name).
+        // we pass vm_id only to debug if something goes wrong
+        let child = spawn_cloud_hypervisor(&vm_id, &vm_dir, &self.ch_binary).await?;
 
-        let writable_disk_path = artifacts
-            .writable_disk
-            .to_str()
-            .ok_or_else(|| Error::InvalidPathUtf8 {
-                field: "writable disk".to_string(),
-                path: artifacts.writable_disk.display().to_string(),
-            })
-            .map_err(|err| {
-                error!(vm_id = %vm_id, ?err, "Writable disk path is not UTF-8");
-                VmError::from(err)
-            })?;
+        let lease = self
+            .ip_allocator
+            .reserve(&vm_id)
+            .await
+            .map_err(|err| VmError::Internal(err.to_string()))?;
 
-        let serial_log = artifacts
-            .serial_log
-            .to_str()
-            .ok_or_else(|| Error::InvalidPathUtf8 {
-                field: "serial_log".to_string(),
-                path: artifacts.serial_log.display().to_string(),
-            })
-            .map_err(|err| {
-                error!(vm_id = %vm_id, ?err, "Serial log path is not UTF-8");
-                VmError::from(err)
-            })?;
+        debug!(
+            vm_id = %vm_id,
+            ip = %lease.ip(),
+            mask = %lease.mask(),
+            mac = %lease.mac(),
+            "static IP lease reserved"
+        );
 
-        let config =
-            spec.vm_config()
-                .finalize_for_runtime(writable_disk_path, serial_log, Some(&tap_name));
+        let vm_config = spec.vm_config().finalize_for_runtime(
+            artifacts.writable_disk(),
+            artifacts.serial_log(),
+            Some(NetConfigRef::new(
+                &tap_name,
+                lease.ip(),
+                lease.mask(),
+                lease.mac(),
+            )),
+        );
 
-        debug!(vm_id = %vm_id, "spawning cloud-hypervisor and calling vm.create");
-        let handle = spawn_and_create(
-            &vm_id,
-            vm_dir.vm_dir,
-            vm_dir.socket_path,
-            tap,
-            &self.ch_binary,
-            self.socket_timeout,
-            &config,
-        )
-        .await
-        .inspect_err(|err| {
-            error!(vm_id = %vm_id, ?err, "spawn_and_create failed");
+        let client = Client::new(vm_dir.socket_path);
+
+        client.create(&vm_config).await.map_err(|e| {
+            error!(vm_id = %vm_id, ?e, "vm.create API call failed");
+            VmError::ProcessFailed(format!("vm.create API call failed: {e}"))
         })?;
 
-        info!(vm_id = %vm_id, "VM create command prepared successfully");
+        info!(vm_id = %vm_id, "vm.create succeeded — VM is ready to boot");
+
+        let handle = Handle::new(
+            client,
+            child,
+            vm_dir.vm_dir,
+            tap,
+            vm_id.clone(),
+            self.ip_allocator.clone(),
+        );
         Ok(CreateCommand::new(handle, vm_id))
     }
 }
@@ -235,19 +203,25 @@ impl VmFactory for Factory {
 pub struct Config {
     binary_path: PathBuf,
     runtime_dir: PathBuf,
-    // state_dir: PathBuf,
-    socket_timeout_secs: u64,
+    state_dir: PathBuf,
     bridge_name: String,
+    ip_pool_start: Ipv4Addr,
+    ip_pool_end: Ipv4Addr,
+    ip_netmask: Ipv4Addr,
     #[serde(default)]
-    artifact_sources: Vec<String>,
+    artifact_sources: Vec<String>, //TODO: this hsould probably come from the ArtifactsResolver or something
+}
+
+impl Config {
+    pub fn state_db_path(&self) -> std::path::PathBuf {
+        self.state_dir.join("worker.sqlite")
+    }
 }
 
 struct VmDir {
     vm_dir: PathBuf,
     socket_path: PathBuf,
 }
-
-// ── Step 1: Create VM directory ───────────────────────────────────────
 
 /// Creates the per-VM working directory under `<runtime_dir>/<vm_id>/`
 /// and returns `(vm_dir, socket_path)`.
@@ -262,9 +236,18 @@ struct VmDir {
 async fn create_vm_dir(runtime_dir: &Path, vm_id: &str) -> Result<VmDir, VmError> {
     let vm_dir = runtime_dir.join(vm_id);
     debug!(vm_id = %vm_id, vm_dir = %vm_dir.display(), "creating VM directory");
-    tokio::fs::create_dir_all(&vm_dir).await.map_err(|e| {
-        VmError::Internal(format!("failed to create VM dir {}: {e}", vm_dir.display()))
-    })?;
+    if let Err(err) = tokio::fs::create_dir_all(&vm_dir).await {
+        error!(
+            vm_id = %vm_id,
+            runtime_dir = %runtime_dir.display(),
+            ?err,
+            "Failed creating runtime VM directory"
+        );
+        return Err(VmError::Internal(format!(
+            "failed to create VM dir {}",
+            vm_dir.display()
+        )));
+    }
 
     let socket_path = vm_dir.join("ch-api.sock");
     debug!(vm_dir = %vm_dir.display(), socket = %socket_path.display(), "VM directory created");
@@ -302,7 +285,7 @@ struct LocalArtifactResolver;
 impl ArtifactsResolver for LocalArtifactResolver {
     async fn fetch(source_path: &Path, destination: &Path) -> Result<(), VmError> {
         if !source_path.exists() {
-            warn!(
+            error!(
                 source = %source_path.display(),
                 destination = %destination.display(),
                 "artifact source missing during fetch"
@@ -347,7 +330,7 @@ impl ArtifactsResolver for LocalArtifactResolver {
 
     async fn verify(path: &Path) -> Result<(), VmError> {
         if !path.exists() {
-            warn!(path = %path.display(), "required artifact path missing");
+            error!(path = %path.display(), "required artifact path missing");
             return Err(Error::ArtifactsMissing(format!(
                 "artifact not found locally: {}",
                 path.display()
@@ -359,33 +342,33 @@ impl ArtifactsResolver for LocalArtifactResolver {
     }
 }
 
+// TODO: rename this to somehting more precise, artifacts is very vague and used for also the kernel + initrd+ disk for the vm
 struct Artifacts {
     writable_disk: PathBuf,
     serial_log: PathBuf,
 }
 
-async fn verify_artifacts_exist<A: ArtifactsResolver>(
-    spec: &CreateVmSpecRef<'_>,
-) -> Result<(), VmError> {
-    let kernel = Path::new(spec.kernel());
-    let initramfs = Path::new(spec.initramfs());
-    let root_disk = Path::new(spec.root_disk());
+impl Artifacts {
+    fn writable_disk(&self) -> &str {
+        self.writable_disk
+            .to_str()
+            .ok_or_else(|| Error::InvalidPathUtf8 {
+                field: "writable disk".to_string(),
+                path: self.writable_disk.display().to_string(),
+            })
+            .expect("let's deal with that shit later")
+    }
 
-    debug!(
-        kernel = %kernel.display(),
-        initramfs = %initramfs.display(),
-        root_disk = %root_disk.display(),
-        "verifying required VM artifacts"
-    );
-
-    A::verify(kernel).await?;
-    A::verify(initramfs).await?;
-    A::verify(root_disk).await?;
-
-    Ok(())
+    fn serial_log(&self) -> &str {
+        self.serial_log
+            .to_str()
+            .ok_or_else(|| Error::InvalidPathUtf8 {
+                field: "serial_log".to_string(),
+                path: self.serial_log.display().to_string(),
+            })
+            .expect("let's deal with that shit later")
+    }
 }
-
-// ── Step 2: Prepare artifacts ─────────────────────────────────────────
 
 /// Verifies that kernel and initramfs exist locally (read-only access)
 /// and copies the root disk into the VM directory (writable).
@@ -421,37 +404,25 @@ async fn prepare_artifacts<A: ArtifactsResolver>(
     })
 }
 
-// ── Step 5: Spawn CH process ──────────────────────────────────────────
-
-/// Spawns the `cloud-hypervisor` binary, waits for the API socket to
-/// appear, then sends the `vm.create` API call.
-///
-/// Does **not** call `vm.boot` — the caller is responsible for that
-/// so boot can happen asynchronously for faster user response.
-async fn spawn_and_create(
+/// Spawns the `cloud-hypervisor` process with the given socket path and log file.
+async fn spawn_cloud_hypervisor(
     vm_id: &str,
-    vm_dir: PathBuf,
-    socket_path: PathBuf,
-    tap: Tap<Persisted>,
+    vm_dir_setings: &VmDir,
     ch_binary: &Path,
-    socket_timeout: Duration,
-    config: &VmConfigRef<'_>,
-) -> Result<Handle, VmError> {
-    let log_file = vm_dir.join("cloud-hypervisor.log");
+) -> Result<Child, VmError> {
+    //TODO: not sure if this log file is necessary at all or how to use it properly
+    let log_file = vm_dir_setings.vm_dir.join("cloud-hypervisor.log");
 
     debug!(
-        vm_id = %vm_id,
-        vm_dir = %vm_dir.display(),
-        socket_path = %socket_path.display(),
+        vm_dir = %vm_dir_setings.vm_dir.display(),
+        socket_path = %vm_dir_setings.socket_path.display(),
         log_file = %log_file.display(),
         ch_binary = %ch_binary.display(),
-        socket_timeout_ms = socket_timeout.as_millis(),
         "spawning cloud-hypervisor"
     );
 
     let child = Command::new(ch_binary)
-        .arg("--api-socket")
-        .arg(socket_path.as_os_str())
+        .arg(vm_dir_setings.socket_path.as_os_str())
         .arg("--log-file")
         .arg(log_file.as_os_str())
         .arg("-v")
@@ -460,83 +431,18 @@ async fn spawn_and_create(
         .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(|e| {
-            error!(vm_id = %vm_id, ch_binary = %ch_binary.display(), ?e, "failed to spawn cloud-hypervisor");
+            error!(ch_binary = %ch_binary.display(), ?e, "failed to spawn cloud-hypervisor");
             VmError::ProcessFailed(format!("failed to spawn {}: {e}", ch_binary.display()))
         })?;
 
-    info!(
-        vm_id = %vm_id,
-        pid = child.id().unwrap_or(0),
-        "cloud-hypervisor process spawned"
-    );
-
-    // Wait for the API socket to appear.
-    wait_for_socket(socket_timeout, &socket_path)
-        .await
-        .inspect_err(|err| {
-            error!(
-                vm_id = %vm_id,
-                socket_path = %socket_path.display(),
-                ?err,
-                "API socket readiness check failed"
-            );
+    let pid = child.id().ok_or_else(||{
+        error!( "spawned cloud-hypervisor process has no PID, it means that it finished, which shouldn't be the case");
+        VmError::ProcessFailed(format!("cloud-hypervisor process finished immediately after spawning"))
         })?;
 
-    let client = Client::new(socket_path);
-    // Send vm.create — configures the VM but does not boot it.
-    client.create(config).await.map_err(|e| {
-        error!(vm_id = %vm_id, ?e, "vm.create API call failed");
-        VmError::ProcessFailed(format!("vm.create API call failed: {e}"))
-    })?;
+    debug!(%vm_id, pid, "cloud-hypervisor process spawned");
 
-    info!(vm_id = %vm_id, "vm.create succeeded — VM is ready to boot");
-
-    Ok(Handle::new(client, child, vm_dir, tap))
-}
-
-/// Polls for the API socket file to appear on disk, with a timeout.
-async fn wait_for_socket(socket_timeout: Duration, socket_path: &Path) -> Result<(), VmError> {
-    let start = Instant::now();
-    let poll_interval = Duration::from_millis(50);
-    let mut attempts: u64 = 0;
-
-    loop {
-        attempts += 1;
-        if socket_path.exists() {
-            debug!(
-                socket = %socket_path.display(),
-                attempts,
-                elapsed_ms = start.elapsed().as_millis(),
-                "API socket appeared"
-            );
-            return Ok(());
-        }
-        if start.elapsed() > socket_timeout {
-            error!(
-                socket = %socket_path.display(),
-                attempts,
-                elapsed_ms = start.elapsed().as_millis(),
-                timeout_ms = socket_timeout.as_millis(),
-                "API socket readiness timed out"
-            );
-            return Err(VmError::ProcessFailed(format!(
-                "API socket {} did not appear within {:?}",
-                socket_path.display(),
-                socket_timeout,
-            )));
-        }
-
-        if attempts % 20 == 0 {
-            debug!(
-                socket = %socket_path.display(),
-                attempts,
-                elapsed_ms = start.elapsed().as_millis(),
-                "waiting for API socket"
-            );
-        }
-
-        tokio::time::sleep(poll_interval).await;
-    }
+    Ok(child)
 }
 
 #[cfg(test)]
@@ -545,26 +451,13 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use crate::ch::dtos::CreateVmSpecRef;
-    use crate::vmm::Factory as VmFactory;
 
-    use super::{
-        Config, Factory, LocalArtifactResolver, create_vm_dir, prepare_artifacts, tap_name_from_id,
-    };
+    use super::{LocalArtifactResolver, create_vm_dir, prepare_artifacts, tap_name_from_id};
 
     use std::sync::Once;
     use tracing_subscriber::{EnvFilter, fmt};
 
     static TRACING_INIT: Once = Once::new();
-
-    fn test_config(runtime_dir: PathBuf) -> Config {
-        Config {
-            binary_path: PathBuf::from("/bin/true"),
-            runtime_dir,
-            socket_timeout_secs: 2,
-            bridge_name: String::from("br0"),
-            artifact_sources: Vec::new(),
-        }
-    }
 
     fn build_vm_spec_message(
         root_disk: &str,
@@ -727,22 +620,5 @@ mod tests {
         assert_eq!(name, "tap-019712ab");
         // IFNAMSIZ = 16 (15 chars + null), our name is "tap-" (4) + 8 = 12
         assert!(name.len() <= 15, "TAP name too long: {name}");
-    }
-
-    #[tokio::test]
-    async fn test_name() {
-        init_tracing();
-
-        let message =
-            build_vm_spec_message("/path/to/root.img", "/path/to/kernel", "/path/to/initramfs");
-        let spec_ref = vm_spec_from_message(&message);
-        println!("{:?}", spec_ref);
-
-        let config = test_config(PathBuf::from("/tmp/sockets"));
-        let factory = Factory::from(config);
-
-        println!("{:?}", factory);
-
-        factory.create_vm(spec_ref).await.unwrap();
     }
 }

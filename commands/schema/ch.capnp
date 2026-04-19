@@ -44,6 +44,9 @@ struct DiskConfig {
 # Only tap is used; CH fills in defaults for ip/mask/mac.
 struct NetConfig {
 	tap @0 :Text;
+	ip @1 :Text;
+	mask @2 :Text;
+	mac @3 :Text;
 }
 
 # mode is required; file is only meaningful when mode = "File".

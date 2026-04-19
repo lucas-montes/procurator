@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use hyper::Uri;
 use hyperlocal::{UnixClientExt, Uri as UnixUri};
-use serde::Deserialize;
+
 use serde::de::DeserializeOwned;
 use tracing::{debug, info};
 
@@ -66,20 +66,6 @@ impl Client {
         .await?;
 
         info!(?resp, "vm.boot succeeded");
-        Ok(())
-    }
-
-    pub async fn shutdown(&self) -> Result<(), Error> {
-        let uri = self.build_uri("/api/v1/vm.shutdown");
-        let resp = request::<serde_json::Value>(
-            uri,
-            hyper::Body::empty(),
-            hyper::Method::PUT,
-            &self.client,
-        )
-        .await?;
-
-        info!(?resp, "vm.shutdown succeeded");
         Ok(())
     }
 

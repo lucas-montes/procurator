@@ -12,7 +12,6 @@
 //! at configurable intervals, processing builds serially.
 
 use repo_outils::nix;
-use std::sync::Arc;
 use tracing::{error, info};
 
 use crate::builds::{BuildJob, BuildStatus};

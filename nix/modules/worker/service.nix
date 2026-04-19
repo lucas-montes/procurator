@@ -34,6 +34,9 @@ with lib; let
       state_dir = cfg.vmStateDir;
       socket_timeout_secs = cfg.cloudHypervisorSocketTimeoutSeconds;
       bridge_name = cfg.bridgeName;
+      ip_pool_start = cfg.ipPoolStart;
+      ip_pool_end = cfg.ipPoolEnd;
+      ip_netmask = cfg.ipNetmask;
     };
   });
 in {
@@ -121,6 +124,24 @@ in {
       default = "br0";
       example = "br0";
       description = "Bridge name used for VM TAP attachment.";
+    };
+
+    ipPoolStart = mkOption {
+      type = types.str;
+      default = "10.0.0.2";
+      description = "First IP the worker will assign to a VM. Must be inside the bridge subnet.";
+    };
+
+    ipPoolEnd = mkOption {
+      type = types.str;
+      default = "10.255.255.254";
+      description = "Last IP in the pool. 10.0.0.2-10.255.255.254 gives ~16 million addresses.";
+    };
+
+    ipNetmask = mkOption {
+      type = types.str;
+      default = "255.0.0.0";
+      description = "Subnet mask corresponding to the bridge prefix. Must match vmm.bridgePrefixLength.";
     };
   };
 

@@ -49,6 +49,15 @@ pub struct DiskConfigRef<'a> {
 #[derive(Debug, Clone, Serialize)]
 pub struct NetConfigRef<'a> {
     tap: &'a str,
+    ip: &'a str,
+    mask: &'a str,
+    mac: &'a str,
+}
+
+impl<'a> NetConfigRef<'a> {
+    pub fn new(tap: &'a str, ip: &'a str, mask: &'a str, mac: &'a str) -> Self {
+        Self { tap, ip, mask, mac }
+    }
 }
 
 /// Maps to `ConsoleConfig` in ch.capnp.
@@ -66,7 +75,7 @@ impl<'a> VmConfigRef<'a> {
         mut self,
         writable_disk_path: &'a str,
         serial_log_path: &'a str,
-        tap_name: Option<&'a str>,
+        network: Option<NetConfigRef<'a>>,
     ) -> Self {
         if let Some(first_disk) = self.disks.first_mut() {
             first_disk.path = writable_disk_path;
@@ -76,7 +85,7 @@ impl<'a> VmConfigRef<'a> {
             });
         }
 
-        self.net = tap_name.map(|name| vec![NetConfigRef { tap: name }]);
+        self.net = network.map(|net| vec![net]);
 
         self.console = ConsoleConfigRef {
             mode: "Off",
@@ -170,6 +179,9 @@ impl<'a> TryFrom<commands::common_capnp::vm_spec::Reader<'a, commands::ch_capnp:
                 for net_cfg in net_reader {
                     nets.push(NetConfigRef {
                         tap: require_non_empty(net_cfg.get_tap()?.to_str()?, "net.tap")?,
+                        ip: require_non_empty(net_cfg.get_ip()?.to_str()?, "net.ip")?,
+                        mask: require_non_empty(net_cfg.get_mask()?.to_str()?, "net.mask")?,
+                        mac: require_non_empty(net_cfg.get_mac()?.to_str()?, "net.mac")?,
                     });
                 }
                 Some(nets)
@@ -262,7 +274,12 @@ mod tests {
         let finalized = config.finalize_for_runtime(
             "/runtime/overlay.qcow2",
             "/var/log/serial.log",
-            Some("tap0"),
+            Some(NetConfigRef::new(
+                "tap0",
+                "192.168.100.200",
+                "255.255.255.0",
+                "02:00:00:00:00:01",
+            )),
         );
 
         assert_eq!(finalized.disks.len(), 1);

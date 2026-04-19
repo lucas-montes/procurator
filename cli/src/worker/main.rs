@@ -202,10 +202,12 @@ async fn list(
     println!("VM count: {}", vms.len());
 
     for vm in vms.iter() {
+        let ip = read_text(vm.get_ip()?)?;
         println!(
-            "- id={} worker={} status={} desired_hash={} observed_hash={} drifted={}",
+            "- id={} worker={} ip={} status={} desired_hash={} observed_hash={} drifted={}",
             read_text(vm.get_id()?)?,
             read_text(vm.get_worker_id()?)?,
+            ip,
             read_text(vm.get_status()?)?,
             read_text(vm.get_desired_hash()?)?,
             read_text(vm.get_observed_hash()?)?,

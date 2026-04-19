@@ -60,9 +60,9 @@ impl<F: Factory> Supervisor<F> {
     }
 
     async fn handle_create(&mut self, cmd: CreateCommand<F>) {
-        // Destructure the incoming command. Prefix variable names with `_` to
-        // avoid unused-variable warnings until the implementation is added.
         let CreateCommand { id, handle } = cmd;
+
+        // TODO: maybe here we can do something with the handle + the factory?
 
         if let Err(err) = handle.start().await {
             //TODO: let's do something more clever here and find how to keep track of what is needed to recreate the vm if we need to
@@ -70,6 +70,8 @@ impl<F: Factory> Supervisor<F> {
             tracing::error!(id = %id, error = %err, "Failed to start VM");
             return;
         };
+
+        tracing::info!(id = %id, "VM started successfully");
 
         //TODO: this takes a lock and releases it very quickly.
         // The vm should already be running at this point so we could have a buffer, keep them in the buffer and then save them all at once
@@ -82,6 +84,7 @@ impl<F: Factory> Supervisor<F> {
     async fn handle_delete(&mut self, id: String) {
         if let Some(handle) = self.state.remove(&id).await {
             if let Err(err) = handle.delete().await {
+                //TODO: here we could maybe use the factory to do the cleanup and avoid charging the handle with so much state
                 tracing::error!(id = %id, error = %err, "Failed to delete VM");
             }
             tracing::info!(id = %id, "VM deleted successfully");
@@ -91,11 +94,11 @@ impl<F: Factory> Supervisor<F> {
     }
 
     async fn check_health(&mut self) {
-        // Grab a read guard to the registry. The guard must live while
-        // we poll the health futures because those futures borrow the handles.
         let guard = self.state.clone().get().await;
 
         let mut futs: FuturesUnordered<_> = FuturesUnordered::new();
+
+        tracing::info!(number_vm = guard.len(), "Running health checks for all VMs");
 
         for (id, handle) in guard.iter() {
             futs.push(async move { (id, handle.health().await) });
@@ -109,6 +112,5 @@ impl<F: Factory> Supervisor<F> {
                 Err(e) => tracing::warn!(id = %id, error = %e, "health check failed"),
             }
         }
-        // `guard` is dropped here
     }
 }

@@ -1,4 +1,5 @@
 mod client;
+mod ip_allocator;
 mod dtos;
 mod errors;
 mod factory;
