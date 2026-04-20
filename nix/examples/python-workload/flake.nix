@@ -34,6 +34,7 @@
     '';
     vm = pLibs.diskVm {
       extraPackages = [pkgs.curl pkgs.git pkgs.python3 pkgs.busybox pkgs.tmux pkgs.opencode];
+      upstreamDns = "10.0.0.1";
       files = [
         {
           src = ../../../autonix;
@@ -74,9 +75,13 @@
       KERNEL="${vmConfig.config.boot.kernelPackages.kernel}/${vmConfig.config.system.boot.loader.kernelFile}"
       INITRD="${vmConfig.config.system.build.initialRamdisk}/initrd"
       STORE_DISK="${vmConfig.config.system.build.rawImage}/nixos.img"
-      CMDLINE="${kernelCmdline}"
-      TAP="tap0"
+      TAP="tap67"
       BRIDGE="br0"
+      VM_IP="10.0.0.12"
+      VM_GW="10.0.0.1"
+      VM_PFX="8"
+
+      CMDLINE="${kernelCmdline} procurator.ip=$VM_IP procurator.gw=$VM_GW procurator.pfx=$VM_PFX"
 
       # Set up TAP device and attach to bridge if not already done.
       # Requires root (script is typically run with sudo).
@@ -84,7 +89,8 @@
         ip link delete "$TAP" 2>/dev/null || true
       fi
       echo "Creating TAP device $TAP and attaching to $BRIDGE..."
-      ip tuntap add dev "$TAP" mode tap
+      # https://www.networkmanager.dev/docs/api/latest/settings-tun.html
+      ip tuntap add dev "$TAP" mode tap vnet_hdr
       ip link set "$TAP" master "$BRIDGE"
       ip link set "$TAP" up
 
@@ -117,7 +123,7 @@
         --serial tty \
         --cpus boot=2 \
         --memory size=1024M \
-        --net tap="$TAP"
+        --net tap="$TAP",mac=a4:a1:c2:00:00:01
 
       echo "=== Cloud Hypervisor VM stopped ==="
     '';
@@ -138,6 +144,16 @@
       # Raw disk image (nixos.img)
       cp -a ${vmConfig.config.system.build.rawImage}/nixos.img "$out/rootfs.img"
 
+      # Image-specific kernel cmdline: NixOS `boot.kernelParams` + `init=`
+      # pointing at this build's stage-2 entry point. Written once at Nix
+      # build time so the hash is tied to the image. The worker reads this
+      # file, appends runtime-specific tokens (`procurator.ip=`,
+      # `procurator.gw=`) and hands the result to Cloud Hypervisor.
+      #
+      # Keeping this contract here (single source of truth) means
+      # `boot.kernelParams` changes in `nix/lib/diskVm.nix` propagate
+      # automatically — the Rust worker never has to know what they are.
+      printf '%s' '${kernelCmdline}' > "$out/cmdline"
     '';
   in {
     packages.${system} = {

@@ -34,16 +34,10 @@ in {
       description = "Prefix length for the bridge address. 8 = /8, giving ~16 million usable addresses.";
     };
 
-    dhcpRange = mkOption {
-      type = types.str;
-      default = "10.0.0.2,10.255.255.254,12h";
-      description = "DHCP range for VMs attached to the bridge. Should match ipPoolStart/ipPoolEnd in service.nix.";
-    };
-
     dnsServers = mkOption {
       type = types.listOf types.str;
       default = ["1.1.1.1" "8.8.8.8"];
-      description = "Upstream DNS servers for VMs.";
+      description = "Upstream DNS servers the host dnsmasq forwards VM queries to.";
     };
   };
 
@@ -64,6 +58,9 @@ in {
       KERNEL=="vhost-net", GROUP="kvm", MODE="0660"
     '';
 
+    # TODO: add user to the groups
+    # users.users.<worker-user>.extraGroups = [ "kvm" "netdev" ];
+
     networking = {
       # Create the bridge (no physical ports). TAPs are attached at runtime.
       bridges.br0.interfaces = [];
@@ -80,17 +77,32 @@ in {
         enable = true;
         internalInterfaces = [cfg.bridgeName];
         externalInterface = cfg.externalInterface;
+
+        # Route external traffic into the vm. This only works for one vm tho
+        forwardPorts = [
+          {
+            sourcePort = 2222;
+            destination = "10.0.0.12:22";
+            proto = "tcp";
+          }
+        ];
       };
 
-      # Trust br0 in the firewall — VMs need to reach the host for DHCP (udp/67)
-      # and DNS (udp/53, tcp/53). This is safe because only our VMs are on this bridge.
+      # Trust br0 in the firewall — VMs need to reach the host for DNS (udp/53, tcp/53).
+      # DHCP is NOT served on this bridge: guests receive their IP at boot from
+      # procurator.ip=/gw=/pfx= tokens the worker appends to the kernel cmdline
+      # (parsed by the procurator-netcfg systemd unit inside the image).
+      # This is safe because only our VMs are on this bridge.
       firewall.trustedInterfaces = [cfg.bridgeName];
     };
 
     # Kernel forwarding required for NAT.
     boot.kernel.sysctl."net.ipv4.ip_forward" = 1;
 
-    # dnsmasq for DHCP and DNS forwarding on the bridge. No domain filtering here.
+    # dnsmasq on the bridge: DNS forwarder only. No DHCP server.
+    # Guests are given their IP statically by the kernel `ip=` cmdline parameter
+    # that the worker appends at VM-create time. dnsmasq here only answers DNS
+    # queries from the VMs and forwards them upstream.
     services.dnsmasq = {
       enable = true;
       settings = {
@@ -98,13 +110,12 @@ in {
         # bind-dynamic: attaches when br0 is ready, avoids silent bind failures
         # that occur with bind-interfaces if br0 gets its IP after dnsmasq starts.
         bind-dynamic = true;
-        dhcp-range = cfg.dhcpRange;
-        # Without this the lease has no gateway → guest ip route is empty.
-        dhcp-option = "option:router,${cfg.bridgeAddress}";
+        # Explicitly disable DHCP: no dhcp-range, no dhcp-authoritative.
+        # (dnsmasq without dhcp-range does not serve DHCP at all.)
+        port = 53;
         server = cfg.dnsServers;
         # Don't read host resolv.conf — only forward to servers listed above.
         no-resolv = true;
-        log-dhcp = true; # helps debugging; can remove once working
       };
     };
   };

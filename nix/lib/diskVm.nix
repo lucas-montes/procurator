@@ -7,7 +7,7 @@
   files ? [],
   # Upstream DNS resolver for allowed domains.
   # Should point to the host bridge address so the VM goes through the host's dnsmasq.
-  upstreamDns ? "192.168.100.1",
+  upstreamDns,
   # List of domains the VM is allowed to reach. All other DNS queries return 0.0.0.0.
   # Subdomains are included automatically, e.g. "github.com" also covers "api.github.com".
   # Example: [ "github.com" "pypi.org" ]
@@ -69,6 +69,9 @@
             # fsck = "file system check" — it verifies and repairs filesystem inconsistencies at boot. Skipping it (fsck.mode=skip) makes boot faster but risks undetected corruption after an unclean shutdown.
             "fsck.mode=skip"
             "quiet"
+
+            "net.ifnames=0" # add this
+            "biosdevname=0" # and this
           ];
         };
 
@@ -81,18 +84,9 @@
           options = ["noatime"];
         };
 
-        # Networking
         networking = {
           hostName = "cloud-vm";
-          useDHCP = true;
-          # speed up DHCP: don't block boot while dhcpcd waits for leases
-          dhcpcd = {
-            wait = "background";
-            # nohook resolv.conf so dhcpcd doesn't overwrite the 127.0.0.1 nameserver after getting a DHCP lease
-            extraConfig = ''
-              nohook resolv.conf
-            '';
-          };
+          useDHCP = false;
         };
         # DNS filtering inside the VM:
         # - dnsmasq listens only on loopback (127.0.0.1), NOT on the network interface.
@@ -111,7 +105,6 @@
               # The host bridge dnsmasq already handles DHCP for this VM.
               listen-address = "127.0.0.1";
               bind-interfaces = true;
-              no-dhcp-interface = "";
 
               # Forward each allowed domain to the upstream resolver.
               # Subdomains are covered automatically: "github.com" also matches "api.github.com".
@@ -154,6 +147,41 @@
           systemd-udev-settle.enable = false;
           # this is the systemd user session manager for root (uid 0). It enables per-user systemd services, timers, and socket activation under the root user. If you don't run any user-level systemd units for root,
           "user@0".enable = false;
+
+          # Parse procurator.* tokens from /proc/cmdline and apply them to eth0.
+          # Runs before network.target so SSH and dnsmasq come up with a real address.
+          procurator-netcfg = {
+            description = "Apply procurator.ip=/gw=/pfx= from /proc/cmdline";
+            wantedBy = ["network.target" "multi-user.target"];
+            before = ["network.target"];
+            after = ["systemd-udevd.service"];
+            unitConfig.DefaultDependencies = false;
+            serviceConfig = {
+              Type = "oneshot";
+              RemainAfterExit = true;
+            };
+            path = [pkgs.iproute2 pkgs.gawk];
+            script = ''
+              set -eu
+              CMDLINE=$(cat /proc/cmdline)
+              get() { echo "$CMDLINE" | awk -v k="$1" '{for(i=1;i<=NF;i++) if($i ~ "^"k"=") {sub("^"k"=","",$i); print $i; exit}}'; }
+              IP=$(get procurator.ip)
+              GW=$(get procurator.gw)
+              PFX=$(get procurator.pfx)
+              if [ -z "$IP" ] || [ -z "$GW" ] || [ -z "$PFX" ]; then
+                echo "procurator-netcfg: missing procurator.ip/gw/pfx on cmdline" >&2
+                exit 1
+              fi
+              # Wait briefly for eth0 to appear (virtio_net loads via udev in stage 2).
+              for i in 1 2 3 4 5; do
+                ip link show eth0 >/dev/null 2>&1 && break
+                sleep 0.2
+              done
+              ip link set eth0 up
+              ip addr replace "$IP/$PFX" dev eth0
+              ip route replace default via "$GW" dev eth0
+            '';
+          };
         };
         # Extra packages
         environment.systemPackages = extraPackages;
