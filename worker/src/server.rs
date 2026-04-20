@@ -183,6 +183,7 @@ impl<F: Factory> commands::worker_capnp::worker::Server<F::BackendConfig> for Se
                 vm.set_worker_id(&worker_id);
                 vm.set_desired_hash("");
                 vm.set_observed_hash("");
+                vm.set_ip(handle.ip());
 
                 let status = if handle.health().await.is_ok() {
                     "running"

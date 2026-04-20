@@ -56,6 +56,8 @@ where
     Self: Sized,
 {
 
+    fn ip(&self) -> &str;
+
     fn start(&self) -> impl Future<Output = Result<(), HandleError>> + Send;
 
     fn delete(self) -> impl Future<Output = Result<(), HandleError>> + Send;

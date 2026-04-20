@@ -7,8 +7,8 @@ use crate::database::Database;
 /// The network identity assigned to a VM.
 #[derive(Debug, Clone)]
 pub struct IpLease {
-    ip: String,
-    mask: String,
+    ip: Ipv4Addr,
+    mask: Ipv4Addr,
     mac: String,
 }
 
@@ -16,16 +16,16 @@ impl IpLease {
     fn new(ip: Ipv4Addr, mask: Ipv4Addr) -> Self {
         Self {
             mac: mac_from_ip(ip),
-            ip: ip.to_string(),
-            mask: mask.to_string(),
+            ip: ip,
+            mask: mask,
         }
     }
 
-    pub fn ip(&self) -> &str {
+    pub fn ip(&self) -> &Ipv4Addr {
         &self.ip
     }
 
-    pub fn mask(&self) -> &str {
+    pub fn mask(&self) -> &Ipv4Addr {
         &self.mask
     }
 
@@ -111,23 +111,23 @@ mod tests {
         );
 
         let lease1 = allocator.reserve("vm-aaa").await.expect("first reserve");
-        assert_eq!(lease1.ip(), "10.0.0.1");
-        assert_eq!(lease1.mask(), "255.255.0.0");
+        assert_eq!(lease1.ip().to_string(), "10.0.0.1");
+        assert_eq!(lease1.mask().to_string(), "255.255.0.0");
         assert!(lease1.mac().starts_with("02:"));
 
         let lease2 = allocator.reserve("vm-bbb").await.expect("second reserve");
-        assert_eq!(lease2.ip(), "10.0.0.2");
+        assert_eq!(lease2.ip().to_string(), "10.0.0.2");
 
         // Release the first slot — it becomes free for reuse.
         allocator.release("vm-aaa").await.expect("release");
 
         // Next allocation reuses the free slot instead of incrementing.
         let lease3 = allocator.reserve("vm-ccc").await.expect("third reserve");
-        assert_eq!(lease3.ip(), "10.0.0.1");
+        assert_eq!(lease3.ip().to_string(), "10.0.0.1");
 
         // A further allocation increments past the highest ever-used IP.
         let lease4 = allocator.reserve("vm-ddd").await.expect("fourth reserve");
-        assert_eq!(lease4.ip(), "10.0.0.3");
+        assert_eq!(lease4.ip().to_string(), "10.0.0.3");
     }
 
     #[tokio::test]

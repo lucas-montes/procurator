@@ -19,3 +19,4 @@ It creates the vms (in this case it spawns a process and creates a client to com
 
 ## TODO
 [ ] Need a better way to keep state and failures to clean up the directories
+[ ] The values for the rpcs to return stats probably should be abstract as well

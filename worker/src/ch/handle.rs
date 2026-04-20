@@ -4,7 +4,7 @@ use tokio::process::Child;
 use tracing::{debug, error, warn};
 
 use crate::{
-    ch::ip_allocator::{IpAllocator, IpLease},
+    ch::ip_allocator::IpAllocator,
     ch::tap::{Persisted, Tap},
     vmm::{Handle as VmHandle, HandleError},
 };
@@ -31,7 +31,7 @@ pub struct Handle {
     tap: Tap<Persisted>,
     vm_id: String,
     lease_allocator: IpAllocator,
-
+    ip: String
 }
 
 impl Handle {
@@ -42,7 +42,7 @@ impl Handle {
         tap: Tap<Persisted>,
         vm_id: String,
         lease_allocator: IpAllocator,
-
+        ip: String
     ) -> Self {
         Self {
             client,
@@ -51,18 +51,14 @@ impl Handle {
             tap,
             vm_id,
             lease_allocator,
-
+            ip
         }
     }
 
     async fn cleanup(mut self) -> Result<(), HandleError> {
         debug!(vm_id = %self.vm_id, "Cleaning up VM");
 
-        let socket_path = match self
-            .client
-            .kill()
-            .await
-        {
+        let socket_path = match self.client.kill().await {
             Ok(path) => Some(path),
             Err(err) => {
                 error!(vm_id = %self.vm_id, error = %err, "Failed to kill CH process during cleanup");
@@ -101,6 +97,12 @@ impl Handle {
 }
 
 impl VmHandle for Handle {
+
+    //TODO: maybe we could fetch if from the IpAllocator instead of saving it in the handle itself.
+    fn ip(&self) -> &str {
+        &self.ip
+    }
+
     async fn start(&self) -> Result<(), HandleError> {
         self.client
             .boot()

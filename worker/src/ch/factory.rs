@@ -8,15 +8,10 @@ use tracing::{debug, error, info};
 use uuid::Uuid;
 
 use crate::ch::dtos::NetConfigRef;
-use crate::ch::tap::{Persisted, Tap};
+use crate::ch::tap::Tap;
 use crate::vmm::{CreateCommand, Error as VmError, Factory as VmFactory};
 
-use super::{
-    client::Client,
-    dtos::{CreateVmSpecRef, VmConfigRef},
-    handle::Handle,
-    ip_allocator::IpAllocator,
-};
+use super::{client::Client, dtos::CreateVmSpecRef, handle::Handle, ip_allocator::IpAllocator};
 
 /// The structure responsible to spin up vm managed with cloud hypervisor. We need the socket and the binary to be able to call and communicate
 /// with the child processes. We also need to have a bridge name to be able to attach the TAP interfaces to it. I don't really mind cloning it,
@@ -167,13 +162,16 @@ impl VmFactory for Factory {
             "static IP lease reserved"
         );
 
+        let vm_leased_ip = lease.ip().to_string();
+        let vm_leased_mask = lease.mask().to_string();
+
         let vm_config = spec.vm_config().finalize_for_runtime(
             artifacts.writable_disk(),
             artifacts.serial_log(),
             Some(NetConfigRef::new(
                 &tap_name,
-                lease.ip(),
-                lease.mask(),
+                &vm_leased_ip,
+                &vm_leased_mask,
                 lease.mac(),
             )),
         );
@@ -194,6 +192,7 @@ impl VmFactory for Factory {
             tap,
             vm_id.clone(),
             self.ip_allocator.clone(),
+            vm_leased_ip
         );
         Ok(CreateCommand::new(handle, vm_id))
     }
