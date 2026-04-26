@@ -77,15 +77,6 @@ in {
         enable = true;
         internalInterfaces = [cfg.bridgeName];
         externalInterface = cfg.externalInterface;
-
-        # Route external traffic into the vm. This only works for one vm tho
-        forwardPorts = [
-          {
-            sourcePort = 2222;
-            destination = "10.0.0.12:22";
-            proto = "tcp";
-          }
-        ];
       };
 
       # Trust br0 in the firewall — VMs need to reach the host for DNS (udp/53, tcp/53).
@@ -100,7 +91,7 @@ in {
     boot.kernel.sysctl."net.ipv4.ip_forward" = 1;
 
     # dnsmasq on the bridge: DNS forwarder only. No DHCP server.
-    # Guests are given their IP statically by the kernel `ip=` cmdline parameter
+    # Guests are given their IP statically by the cmdline parameter
     # that the worker appends at VM-create time. dnsmasq here only answers DNS
     # queries from the VMs and forwards them upstream.
     services.dnsmasq = {

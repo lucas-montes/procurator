@@ -24,6 +24,9 @@ pub struct Factory {
     state_dir: PathBuf,
     ch_binary: PathBuf,
     bridge_name: String,
+    /// Gateway IP pushed into the guest via the `procurator.gw=` cmdline
+    /// token. Must be the address the host bridge (`bridge_name`) carries.
+    bridge_gateway: Ipv4Addr,
     ip_allocator: IpAllocator,
     artifact_sources: Vec<String>,
 }
@@ -44,6 +47,7 @@ impl Factory {
             state_dir: config.state_dir,
             ch_binary: config.binary_path,
             bridge_name: config.bridge_name,
+            bridge_gateway: config.bridge_gateway,
             ip_allocator,
             artifact_sources: config.artifact_sources,
         }
@@ -163,17 +167,18 @@ impl VmFactory for Factory {
         );
 
         let vm_leased_ip = lease.ip().to_string();
-        let vm_leased_mask = lease.mask().to_string();
 
+        // The capnp payload carries the image-specific base cmdline produced
+        // by the flake's `artifacts` derivation (kernel params + `init=`
+        // with the NixOS toplevel hash). `finalize_for_runtime` layers all
+        // per-VM mutations on top in a single pass.
         let vm_config = spec.vm_config().finalize_for_runtime(
+            lease.ip(),
+            &self.bridge_gateway,
+            lease.mask(),
             artifacts.writable_disk(),
             artifacts.serial_log(),
-            Some(NetConfigRef::new(
-                &tap_name,
-                &vm_leased_ip,
-                &vm_leased_mask,
-                lease.mac(),
-            )),
+            NetConfigRef::new(&tap_name, lease.mac()),
         );
 
         let client = Client::new(vm_dir.socket_path);
@@ -204,6 +209,12 @@ pub struct Config {
     runtime_dir: PathBuf,
     state_dir: PathBuf,
     bridge_name: String,
+    /// Address of the host bridge. Pushed into every guest as the default
+    /// gateway via the `procurator.gw=` cmdline token (parsed in stage 2 by
+    /// the `procurator-netcfg` systemd unit baked into the image). Must match
+    /// the IP actually assigned to `bridge_name` on the host (see
+    /// `nix/modules/worker/vmm.nix`).
+    bridge_gateway: Ipv4Addr,
     ip_pool_start: Ipv4Addr,
     ip_pool_end: Ipv4Addr,
     ip_netmask: Ipv4Addr,
@@ -254,23 +265,6 @@ async fn create_vm_dir(runtime_dir: &Path, vm_id: &str) -> Result<VmDir, VmError
         vm_dir,
         socket_path,
     })
-}
-
-/// Generates a TAP device name from a VM id.
-///
-/// Uses `tap-` prefix + first 8 hex chars of the UUID (no hyphens)
-/// to stay within the `IFNAMSIZ` limit of 15 characters.
-///
-/// Example: `019712ab-1234-...` → `tap-019712ab`
-fn tap_name_from_id(vm_id: &str) -> String {
-    let mut hex = String::with_capacity(12);
-    hex.push_str("tap-");
-    vm_id
-        .chars()
-        .filter(|c| c != &'-')
-        .take(8)
-        .for_each(|c| hex.push(c));
-    hex
 }
 
 trait ArtifactsResolver {
@@ -485,7 +479,7 @@ mod tests {
 
     use crate::ch::dtos::CreateVmSpecRef;
 
-    use super::{LocalArtifactResolver, create_vm_dir, prepare_artifacts, tap_name_from_id};
+    use super::{LocalArtifactResolver, create_vm_dir, prepare_artifacts};
 
     use std::sync::Once;
     use tracing_subscriber::{EnvFilter, fmt};
@@ -516,7 +510,9 @@ mod tests {
         {
             let mut payload = vm_cfg.reborrow().init_payload();
             payload.set_kernel(kernel);
-            payload.set_cmdline("console=ttyS0");
+            payload.set_cmdline(
+                "console=ttyS0 root=/dev/vda rw init=/nix/store/fake-toplevel/init",
+            );
             payload.set_initramfs(initramfs);
         }
 
@@ -646,12 +642,4 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn tap_name_strips_hyphens_and_takes_first_8() {
-        // v7 UUID example: 019712ab-3c4d-7e5f-8a9b-0c1d2e3f4a5b
-        let name = tap_name_from_id("019712ab-3c4d-7e5f-8a9b-0c1d2e3f4a5b");
-        assert_eq!(name, "tap-019712ab");
-        // IFNAMSIZ = 16 (15 chars + null), our name is "tap-" (4) + 8 = 12
-        assert!(name.len() <= 15, "TAP name too long: {name}");
-    }
 }

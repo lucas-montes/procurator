@@ -111,7 +111,14 @@
               server = map (d: "/${d}/${upstreamDns}") allowedDomains;
 
               # Block everything not matched above — returns 0.0.0.0 (connection refused).
-              address = "/#/0.0.0.0";
+              # address = "/#/0.0.0.0";
+
+              # Everything else: NXDOMAIN for both A and AAAA.
+              # `local=/#/` means "this domain is local; no upstream";
+              # combined with no local records it returns NXDOMAIN.
+              # Equivalent shorthand: server = [ "/#/" ] AFTER the allow list,
+              # but `local` is clearer about intent.
+              local = ["/#/"];
             };
           };
           openssh = {

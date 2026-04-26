@@ -11,9 +11,16 @@ use tokio_util::compat::TokioAsyncReadCompatExt;
 
 const DEFAULT_ADDR: &str = "0.0.0.0:8080";
 const DEFAULT_KERNEL: &str = "result/vmlinux";
-const DEFAULT_CMDLINE: &str = "console=ttyS0 root=/dev/vda rw init=/sbin/init";
 const DEFAULT_INITRAMFS: &str = "result/initrd";
 const DEFAULT_DISK: &str = "result/rootfs.img";
+// Image-specific kernel cmdline file emitted by the `artifacts` derivation
+// in the example flake (`nix/examples/python-workload/flake.nix`). Contains
+// the NixOS `boot.kernelParams` joined by spaces plus `init=<toplevel>/init`.
+// The CLI reads the file verbatim and ships its contents over capnp; the
+// worker appends runtime tokens (`procurator.ip=`, `procurator.gw=`) before
+// handing the final string to Cloud Hypervisor. The user never sees or edits
+// this — Nix owns it.
+const DEFAULT_CMDLINE_FILE: &str = "result/cmdline";
 const DEFAULT_CONSOLE_MODE: &str = "Off";
 const DEFAULT_SERIAL_MODE: &str = "Tty";
 const DEFAULT_CPU: u32 = 1;
@@ -23,6 +30,7 @@ const DEFAULT_MEMORY_BYTES: u64 = 1024 * 1024 * 1024;
 enum Error {
     AddressParse(std::net::AddrParseError),
     Rpc(capnp::Error),
+    Cmdline(String),
 }
 
 impl Display for Error {
@@ -30,6 +38,7 @@ impl Display for Error {
         match self {
             Self::AddressParse(err) => write!(f, "invalid address: {err}"),
             Self::Rpc(err) => write!(f, "rpc error: {err}"),
+            Self::Cmdline(msg) => write!(f, "cmdline: {msg}"),
         }
     }
 }
@@ -78,8 +87,13 @@ struct CreateArgs {
     #[arg(long, default_value = DEFAULT_KERNEL)]
     kernel: String,
 
-    #[arg(long, default_value = DEFAULT_CMDLINE)]
-    cmdline: String,
+    /// Path to the image-specific kernel cmdline file emitted by the
+    /// `artifacts` derivation. If omitted, defaults to
+    /// `DEFAULT_CMDLINE_FILE`. The file must exist; its contents are sent
+    /// over capnp as `payload.cmdline`. The worker appends runtime tokens
+    /// (`procurator.ip=`, `procurator.gw=`) before booting the VM.
+    #[arg(long)]
+    cmdline_file: Option<String>,
 
     #[arg(long, default_value = DEFAULT_INITRAMFS)]
     initramfs: String,
@@ -174,6 +188,27 @@ fn read_text(reader: capnp::text::Reader<'_>) -> Result<String, Error> {
         .map_err(Error::from)
 }
 
+/// Read the image-specific base cmdline produced by the flake's `artifacts`
+/// derivation. Fails loudly if the file is missing — booting a NixOS VM
+/// without the `init=<toplevel>/init` token embedded here dies in stage 1
+/// with `/mnt-root//init not found`, and we'd rather surface that at the CLI.
+fn read_cmdline_file(explicit: Option<&str>) -> Result<String, Error> {
+    let path = explicit.unwrap_or(DEFAULT_CMDLINE_FILE);
+    let raw = std::fs::read_to_string(path).map_err(|err| {
+        Error::Cmdline(format!(
+            "could not read cmdline file '{path}': {err}. \
+             Did you run `nix build .#artifacts`?"
+        ))
+    })?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(Error::Cmdline(format!(
+            "cmdline file '{path}' is empty — the flake's artifacts derivation produced nothing"
+        )));
+    }
+    Ok(trimmed.to_owned())
+}
+
 async fn read(
     worker: commands::worker_capnp::worker::Client<commands::ch_capnp::vm_config::Owned>,
 ) -> Result<(), Error> {
@@ -225,10 +260,12 @@ async fn create(
     let mut request = worker.create_vm_request();
     let mut spec = request.get().init_spec().init_spec();
 
+    let cmdline = read_cmdline_file(args.cmdline_file.as_deref())?;
+
     {
         let mut payload = spec.reborrow().init_payload();
         payload.set_kernel(&args.kernel);
-        payload.set_cmdline(&args.cmdline);
+        payload.set_cmdline(&cmdline);
         payload.set_initramfs(&args.initramfs);
     }
 

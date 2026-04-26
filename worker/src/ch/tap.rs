@@ -178,9 +178,20 @@ impl Tap<Initialized> {
 
         // <https://docs.kernel.org/networking/tuntap.html>
         // <https://github.com/pkts-rs/tappers/blob/master/src/linux/tap.rs>
-        // The flags and fd needed to be sent to ioctl to create the tap interface.
-        // I used the links above to understand how it works.
-        let flags = libc::IFF_TAP | libc::IFF_NO_PI | libc::IFF_TUN_EXCL;
+        //
+        // Flags:
+        //   IFF_TAP        — Ethernet (L2) device, not point-to-point IFF_TUN.
+        //   IFF_NO_PI      — no protocol info prefix on each frame.
+        //   IFF_TUN_EXCL   — fail if the device already exists (don't accidentally
+        //                    re-attach to a leftover from a previous run).
+        //   IFF_VNET_HDR   — prepend a `struct virtio_net_hdr` to every frame.
+        //                    Cloud-hypervisor negotiates virtio-net features
+        //                    (TSO/UFO/checksum offloads) assuming this header is
+        //                    present. Without it, packets traversing the bridge
+        //                    are silently dropped on some kernel/CH combinations
+        //                    (cloud-hypervisor#6550). Mirrors the working dev
+        //                    launcher: `ip tuntap add ... mode tap vnet_hdr`.
+        let flags = libc::IFF_TAP | libc::IFF_NO_PI | libc::IFF_TUN_EXCL | libc::IFF_VNET_HDR;
 
         let mut req = libc::ifreq {
             ifr_name: iface_name.0,

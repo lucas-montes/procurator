@@ -33,13 +33,14 @@ with lib; let
       masterAddr       = derivedMasterAddr;
       healthTickMillis = cfg.healthTickMillis;
       vmm = {
-        binaryPath  = cfg.cloudHypervisorBinaryPath;
-        runtimeDir  = cfg.vmRuntimeDir;
-        stateDir    = cfg.vmStateDir;
-        bridgeName  = cfg.bridgeName;
-        ipPoolStart = cfg.ipPoolStart;
-        ipPoolEnd   = cfg.ipPoolEnd;
-        ipNetmask   = cfg.ipNetmask;
+        binaryPath    = cfg.cloudHypervisorBinaryPath;
+        runtimeDir    = cfg.vmRuntimeDir;
+        stateDir      = cfg.vmStateDir;
+        bridgeName    = cfg.bridgeName;
+        bridgeGateway = cfg.bridgeGateway;
+        ipPoolStart   = cfg.ipPoolStart;
+        ipPoolEnd     = cfg.ipPoolEnd;
+        ipNetmask     = cfg.ipNetmask;
       };
     }));
 in {
@@ -128,6 +129,19 @@ in {
       default = defaults.vmm.bridgeName;
       example = "br0";
       description = "Bridge name used for VM TAP attachment.";
+    };
+
+    bridgeGateway = mkOption {
+      type = types.str;
+      default = defaults.vmm.bridgeGateway;
+      example = "10.0.0.1";
+      description = ''
+        IP address of the host bridge. Pushed into every guest as the default
+        gateway via the `procurator.gw=` cmdline token (parsed in stage 2 by
+        the `procurator-netcfg` systemd unit inside the image). Must match
+        the IP actually assigned to `bridgeName` on the host (see
+        services.procurator.vmm.bridgeAddress).
+      '';
     };
 
     ipPoolStart = mkOption {

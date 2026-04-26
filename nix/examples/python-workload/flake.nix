@@ -57,7 +57,7 @@
         }
       ];
       sshKeys = ["ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC4duRrJKDgzq3FXyHyfYVqqqLjTJlZAPmbCQOV236u1VBJyZMGpD+u+PJ4HSxIA/CFKOVIRcCahIGiW1L+7c33K7rmBuGGuE+hzzlkG7uR/Se0kcPMiLTtCf9mTVFeIruXWcI8CptICofjKLYaNw15BewsqQiuHHmiGffk4f5/4w8eWmSns+VE3H4r/4BYUsdJI4Kk+EpVG1Dz9Gf8YcbQCB0YxPycL3Cg4KApaMDkYDHlDNzOsB943IKKPDqzGIxXBLzqqndFlz3OgMbz7bbiiZckWnR6XDctED1UP9EhoEYb1CrwhMc2ldIcnvD0kVy1EytwXZ29MdBQiC8hDmgnNsVXEO9L2rfwybDVhN9owG9oHGb8X/LwUsrYxOqaMe1saR7v4BH5PzY4SW1kWWbh3wRsr/CjoWBZBPPE7Ln9QeN+VutbrkgpYWDsDtaxFHl2TvjdYwtmA21i1QH70dJDRtH4KWmwUUwYinDGfWWjHtGOR6r3MkDs1aX5QMlR/9M= lucas@laptop"];
-      allowedDomains = ["github.com" "pypi.org" "google.com"];
+      allowedDomains = ["github.com" "pypi.org" "google.com" "opencode.ai"];
     };
 
     vmConfig = vm.vmConfig;
@@ -75,9 +75,9 @@
       KERNEL="${vmConfig.config.boot.kernelPackages.kernel}/${vmConfig.config.system.boot.loader.kernelFile}"
       INITRD="${vmConfig.config.system.build.initialRamdisk}/initrd"
       STORE_DISK="${vmConfig.config.system.build.rawImage}/nixos.img"
-      TAP="tap67"
+      TAP="tap69"
       BRIDGE="br0"
-      VM_IP="10.0.0.12"
+      VM_IP="10.0.0.33"
       VM_GW="10.0.0.1"
       VM_PFX="8"
 

@@ -50,6 +50,13 @@ https://github.com/antithesishq/bombadil
 https://github.com/HypothesisWorks/hypothesis/
 https://github.com/schemathesis/schemathesis
 
+
+## To check for network setup with cloud-hypervisor
+[here](https://a-cup-of.coffee/blog/firecracker/#create-a-nat-network-for-our-vms)
+[firecracker own repo](https://github.com/firecracker-microvm/firecracker/discussions/5667)
+[deepdive into virts stuff](https://www.redhat.com/en/blog/deep-dive-virtio-networking-and-vhost-net)
+[firecracker docs have more info about the networking setup](https://github.com/firecracker-microvm/firecracker/blob/main/docs/network-setup.md)
+
 Does not evaluates the file it only serialize the derivation
 ```bash
 nix-instantiate --eval --json cluster.nix > cluster-state.json
@@ -65,6 +72,11 @@ nix build -f default.nix
 ```
 
 ## Notes
+A small aside on the serial log
+Your config writes serial as a file in worker/tests/data/<vm_id>/serial.log. That's fine for tests, but it means once the VM is running you can't get an interactive shell on it. If you want one for debugging, switch the serial mode to Pty or Socket in finalize_for_runtime for now, or just attach socat to a unix socket. Not blocking — only mention it because the next debugging step is much easier with an interactive console.
+
+We could block stuff at the network layer using nftables. But for that we'll need a new systemd script to be ran, parse the ips of the domains we want to block and save them.
+
 You need to add yourself (or some user) to the trusted users in the nix.settings.trusted-users
 
 We don't need the cli to have an apply command, let's use gitops practices to have the repohub, or some other service to run the nix commands to make derivations and all the shenanigans so we can send paths and hashes to the control-plane

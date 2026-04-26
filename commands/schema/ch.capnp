@@ -36,9 +36,17 @@ struct PayloadConfig {
 	initramfs @2 :Text;
 }
 
-# Only path is sent; readonly/direct are managed by the worker at runtime.
+# `path` is the only field the control plane fills in; the worker overwrites
+# it at runtime with the per-VM writable copy under `<runtime_dir>/<vm_id>/`.
+#
+# `imageType` selects the disk format probed by Cloud Hypervisor. Allowed
+# values: "raw" | "qcow" | "fixedVhd" | "vhdx" (CH's `DiskConfig::image_type`).
+# When empty, CH falls back to magic-byte probing — which has been observed
+# to misidentify NixOS raw images as qcow on recent CH releases. The worker
+# therefore defaults this to "raw" if the field arrives empty.
 struct DiskConfig {
 	path @0 :Text;
+	imageType @1 :Text;
 }
 
 # Only tap is used; CH fills in defaults for ip/mask/mac.

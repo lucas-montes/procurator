@@ -30,8 +30,6 @@ let
       );
     in
     pkgs.writeShellScriptBin "procurator-worker" ''
-      # mkdir -p /tmp/procurator/worker/runtime
-      # mkdir -p /tmp/procurator/worker/state
       echo 'We need the worker to be sudo so it can manage TAP devices'
       sudo ${worker}/bin/worker ${configFile}
     '';
