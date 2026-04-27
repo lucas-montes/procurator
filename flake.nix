@@ -25,11 +25,11 @@
         };
 
         workspaceRoot = pkgs.lib.cleanSourceWith {
-          src = ../.;
+          src = ./.;
           filter =
             path: _type:
             let
-              root = toString ../.;
+              root = toString ./.;
               pathStr = toString path;
               relPath = pkgs.lib.removePrefix "${root}/" pathStr;
             in
@@ -47,21 +47,21 @@
           extensions = [ "rust-src" ];
         };
 
-        packageSet = import ./flake/packages.nix {
+        packageSet = import ./nix/flake/packages.nix {
           inherit pkgs workspaceRoot naersk;
         };
 
-        workerLib = import ./lib/worker.nix { inherit pkgs; };
+        workerLib = import ./nix/lib/worker.nix { inherit pkgs; };
 
-        appSet = import ./flake/apps.nix {
+        appSet = import ./nix/flake/apps.nix {
           inherit pkgs flake-utils workerLib;
           packages = packageSet;
         };
       in
       {
-        nixosModules.procurator = import ./modules;
+        nixosModules.procurator = import ./nix/modules;
 
-        libs = import ./lib {
+        libs = import ./nix/lib {
           inherit pkgs nixpkgs system;
         };
 
@@ -71,7 +71,7 @@
 
         apps = appSet.apps;
 
-        devShells.default = import ./flake/shell.nix {
+        devShells.default = import ./nix/flake/shell.nix {
           inherit pkgs rust-bin-custom;
         };
 
