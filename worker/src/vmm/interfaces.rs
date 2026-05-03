@@ -34,6 +34,7 @@ pub trait Factory: Clone + 'static + std::fmt::Debug {
 pub enum HandleError {
     Start(String),
     Cleanup(String),
+    Backup(String),
 }
 
 impl std::fmt::Display for HandleError {
@@ -41,6 +42,7 @@ impl std::fmt::Display for HandleError {
         match self {
             HandleError::Start(msg) => write!(f, "start failed: {}", msg),
             HandleError::Cleanup(msg) => write!(f, "cleanup failed: {}", msg),
+            HandleError::Backup(msg) => write!(f, "backup failed: {}", msg),
         }
     }
 }
@@ -63,4 +65,25 @@ where
     fn delete(self) -> impl Future<Output = Result<(), HandleError>> + Send;
 
     fn health(&self) -> impl Future<Output = Result<(), HandleError>> + Send;
+
+    /// Pause a running VM.
+    fn pause(&self) -> impl Future<Output = Result<(), HandleError>> + Send;
+
+    /// Resume a previously paused VM.
+    fn resume(&self) -> impl Future<Output = Result<(), HandleError>> + Send;
+
+    /// Take a full live snapshot (memory + device state) of the VM into `destination`.
+    /// Implementations are expected to leave the VM running (pause+snapshot+resume).
+    fn snapshot(
+        &self,
+        destination: std::path::PathBuf,
+    ) -> impl Future<Output = Result<(), HandleError>> + Send;
+
+    /// Take a disk-only backup of the VM into `destination`.
+    /// Implementations are expected to briefly pause the VM for consistency, copy the
+    /// writable disk file with `tokio::fs::copy`, then resume.
+    fn backup_disk(
+        &self,
+        destination: std::path::PathBuf,
+    ) -> impl Future<Output = Result<(), HandleError>> + Send;
 }

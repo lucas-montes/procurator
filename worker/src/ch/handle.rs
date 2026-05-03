@@ -27,6 +27,8 @@ pub struct Handle {
     child: Child,
     /// Per-VM working directory (contains writable disk copy, serial log, etc.)
     vm_dir: PathBuf,
+    /// Path to the writable root disk (inside `vm_dir`). Used for disk backups.
+    writable_disk: PathBuf,
     /// The TAP interface used by the VM, we need it to clean up once we delete everything.
     tap: Tap<Persisted>,
     vm_id: String,
@@ -39,6 +41,7 @@ impl Handle {
         client: Client,
         child: Child,
         vm_dir: PathBuf,
+        writable_disk: PathBuf,
         tap: Tap<Persisted>,
         vm_id: String,
         lease_allocator: IpAllocator,
@@ -48,6 +51,7 @@ impl Handle {
             client,
             child,
             vm_dir,
+            writable_disk,
             tap,
             vm_id,
             lease_allocator,
@@ -120,6 +124,82 @@ impl VmHandle for Handle {
 
     async fn health(&self) -> Result<(), HandleError> {
         //TODO: create the funcion in the client to get stats and info
+        Ok(())
+    }
+
+    async fn pause(&self) -> Result<(), HandleError> {
+        debug!(vm_id = %self.vm_id, "pausing VM");
+        self.client
+            .pause()
+            .await
+            .map_err(|e| HandleError::Backup(format!("pause VM: {e}")))
+    }
+
+    async fn resume(&self) -> Result<(), HandleError> {
+        debug!(vm_id = %self.vm_id, "resuming VM");
+        self.client
+            .resume()
+            .await
+            .map_err(|e| HandleError::Backup(format!("resume VM: {e}")))
+    }
+
+    async fn snapshot(&self, destination: PathBuf) -> Result<(), HandleError> {
+        debug!(vm_id = %self.vm_id, dest = %destination.display(), "snapshotting VM");
+
+        tokio::fs::create_dir_all(&destination)
+            .await
+            .map_err(|e| HandleError::Backup(format!("create snapshot dir: {e}")))?;
+
+        // CH expects a file:// URL with a trailing slash pointing at an existing directory.
+        let dest_str = destination
+            .to_str()
+            .ok_or_else(|| HandleError::Backup("snapshot destination is not valid UTF-8".into()))?;
+        let url = format!("file://{}/", dest_str.trim_end_matches('/'));
+
+        self.client
+            .pause()
+            .await
+            .map_err(|e| HandleError::Backup(format!("pause VM: {e}")))?;
+
+        let snap_res = self.client.snapshot(&url).await;
+
+        // Always try to resume, even if the snapshot itself failed.
+        let resume_res = self.client.resume().await;
+
+        snap_res.map_err(|e| HandleError::Backup(format!("snapshot VM: {e}")))?;
+        resume_res.map_err(|e| HandleError::Backup(format!("resume VM after snapshot: {e}")))?;
+        Ok(())
+    }
+
+    async fn backup_disk(&self, destination: PathBuf) -> Result<(), HandleError> {
+        debug!(
+            vm_id = %self.vm_id,
+            src = %self.writable_disk.display(),
+            dest = %destination.display(),
+            "backing up VM disk"
+        );
+
+        if let Some(parent) = destination.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| HandleError::Backup(format!("create backup parent dir: {e}")))?;
+        }
+
+        self.client
+            .pause()
+            .await
+            .map_err(|e| HandleError::Backup(format!("pause VM: {e}")))?;
+
+        // tokio::fs::copy uses std::fs::copy under the hood, which on Linux already tries
+        // copy_file_range (and thus reflink on btrfs/xfs/zfs) before falling back to a
+        // userspace read/write loop.
+        let copy_res = tokio::fs::copy(&self.writable_disk, &destination).await;
+
+        let resume_res = self.client.resume().await;
+
+        copy_res.map_err(|e| HandleError::Backup(format!("copy disk: {e}")))?;
+        resume_res.map_err(|e| HandleError::Backup(format!("resume VM after backup: {e}")))?;
+
         Ok(())
     }
 }

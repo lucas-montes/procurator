@@ -21,6 +21,8 @@ It creates the vms (in this case it spawns a process and creates a client to com
 [ ] Need a better way to keep state and failures to clean up the directories
 [ ] The values for the rpcs to return stats probably should be abstract as well
 [ ] Have an interactive shell with some socket?
+[ ] Test better the overall system
+[ ] Test the snapshot + resume and the backup logic
 
 ## Run it
 

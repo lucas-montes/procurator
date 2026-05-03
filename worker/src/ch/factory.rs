@@ -194,6 +194,7 @@ impl VmFactory for Factory {
             client,
             child,
             vm_dir.vm_dir,
+            artifacts.writable_disk,
             tap,
             vm_id.clone(),
             self.ip_allocator.clone(),

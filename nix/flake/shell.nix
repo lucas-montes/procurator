@@ -1,6 +1,7 @@
 {
   pkgs,
   rust-bin-custom,
+  sce,
 }:
 pkgs.mkShell {
   name = "procurator";
@@ -13,6 +14,7 @@ pkgs.mkShell {
     pkgs.cloud-hypervisor
     # Used to try to genereate the openapi spec
     pkgs.openapi-generator-cli
+    sce
   ];
 
   shellHook = ''

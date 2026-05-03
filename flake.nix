@@ -6,6 +6,7 @@
     rust-overlay.url = "github:oxalica/rust-overlay";
     flake-utils.url = "github:numtide/flake-utils";
     naersk.url = "github:nix-community/naersk";
+    sce.url = "github:crocoder-dev/shared-context-engineering";
   };
 
   outputs =
@@ -13,7 +14,8 @@
       nixpkgs,
       rust-overlay,
       flake-utils,
-      naersk ? null,
+      naersk,
+      sce,
       ...
     }:
     flake-utils.lib.eachDefaultSystem (
@@ -73,6 +75,7 @@
 
         devShells.default = import ./nix/flake/shell.nix {
           inherit pkgs rust-bin-custom;
+          sce = sce.packages.${system}.default;
         };
 
         checks = {

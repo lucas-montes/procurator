@@ -63,10 +63,10 @@ in {
 
     networking = {
       # Create the bridge (no physical ports). TAPs are attached at runtime.
-      bridges.br0.interfaces = [];
+      bridges.${cfg.bridgeName}.interfaces = [];
 
       # Assign the configured address to the bridge.
-      interfaces.br0.ipv4.addresses = [
+      interfaces.${cfg.bridgeName}.ipv4.addresses = [
         {
           address = cfg.bridgeAddress;
           prefixLength = cfg.bridgePrefixLength;

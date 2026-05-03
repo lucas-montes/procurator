@@ -5,6 +5,8 @@ Do I need to clone the whole repo?
 
 
 # PRocurator notes
+check this to create diagrams of the services (js lib)[https://svelteflow.dev/examples/misc/transitions]
+
 look at [this microvm](https://github.com/astro/microvm.nix)
 docs for [micr](https://astro.github.io/microvm.nix/cpu-emulation.html)
 and also the native [way](https://discourse.nixos.org/t/is-there-a-way-to-share-a-nix-store-across-multiple-machines/18186/2)
@@ -71,9 +73,17 @@ To run something that is not in a flake but flakes are enabled use -f
 nix build -f default.nix
 ```
 
+This could help to setup a smaller image with [alpine](https://github.com/popovicu/alpine-linux-self-setup)
+
 ## Notes
+### AI
+
+Even with perfect SSH auth, two VMs on the same br0 can ARP/ICMP-flood each other. Real multi-tenant isolation needs ebtables or per-VM bridges, which is another layer of work. Worth flagging now, not solving today.
+
 A small aside on the serial log
 Your config writes serial as a file in worker/tests/data/<vm_id>/serial.log. That's fine for tests, but it means once the VM is running you can't get an interactive shell on it. If you want one for debugging, switch the serial mode to Pty or Socket in finalize_for_runtime for now, or just attach socat to a unix socket. Not blocking — only mention it because the next debugging step is much easier with an interactive console.
+
+### Regular
 
 We could block stuff at the network layer using nftables. But for that we'll need a new systemd script to be ran, parse the ips of the domains we want to block and save them.
 

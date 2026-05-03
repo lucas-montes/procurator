@@ -204,6 +204,195 @@ impl<F: Factory> commands::worker_capnp::worker::Server<F::BackendConfig> for Se
         })
     }
 
+    fn pause_vm(
+        &mut self,
+        request: commands::worker_capnp::worker::PauseVmParams<F::BackendConfig>,
+        _: commands::worker_capnp::worker::PauseVmResults<F::BackendConfig>,
+    ) -> capnp::capability::Promise<(), capnp::Error> {
+        let state = self.state.clone();
+        capnp::capability::Promise::from_future(async move {
+            let vm_id = request
+                .get()
+                .and_then(|r| r.get_id())
+                .inspect_err(|err| error!(?err, "Invalid pause_vm RPC payload: missing id"))?
+                .to_str()
+                .map_err(|err| {
+                    error!(?err, "Invalid pause_vm id: non-UTF8 text");
+                    capnp::Error::failed(format!("invalid vm id utf8: {err}"))
+                })?;
+
+            debug!(vm_id, "pause_vm request parsed");
+
+            let guard = state.get().await;
+            let handle = guard.get(vm_id).ok_or_else(|| {
+                warn!(vm_id, "pause_vm requested unknown VM id");
+                capnp::Error::failed(format!("VM with id {vm_id} doesn't exist"))
+            })?;
+
+            handle.pause().await.map_err(|err| {
+                error!(vm_id, ?err, "pause_vm failed");
+                capnp::Error::failed(format!("pause failed: {err}"))
+            })?;
+
+            info!(vm_id, "pause_vm RPC handled successfully");
+            Ok(())
+        })
+    }
+
+    fn resume_vm(
+        &mut self,
+        request: commands::worker_capnp::worker::ResumeVmParams<F::BackendConfig>,
+        _: commands::worker_capnp::worker::ResumeVmResults<F::BackendConfig>,
+    ) -> capnp::capability::Promise<(), capnp::Error> {
+        let state = self.state.clone();
+        capnp::capability::Promise::from_future(async move {
+            let vm_id = request
+                .get()
+                .and_then(|r| r.get_id())
+                .inspect_err(|err| error!(?err, "Invalid pause_vm RPC payload: missing id"))?
+                .to_str()
+                .map_err(|err| {
+                    error!(?err, "Invalid pause_vm id: non-UTF8 text");
+                    capnp::Error::failed(format!("invalid vm id utf8: {err}"))
+                })?;
+
+            debug!(vm_id, "resume_vm request parsed; spawning background task");
+
+            let guard = state.get().await;
+            let Some(handle) = guard.get(vm_id) else {
+                warn!(vm_id, "resume_vm requested unknown VM id");
+                return Ok(());
+            };
+            if let Err(err) = handle.resume().await {
+                error!(vm_id, ?err, "background resume_vm failed");
+                Err(capnp::Error::failed(format!(
+                    "background resume failed: {err}"
+                )))
+            } else {
+                info!(vm_id, "background resume_vm succeeded");
+                Ok(())
+            }
+        })
+    }
+
+    fn snapshot_vm(
+        &mut self,
+        request: commands::worker_capnp::worker::SnapshotVmParams<F::BackendConfig>,
+        mut response: commands::worker_capnp::worker::SnapshotVmResults<F::BackendConfig>,
+    ) -> capnp::capability::Promise<(), capnp::Error> {
+        let state = self.state.clone();
+        capnp::capability::Promise::from_future(async move {
+            let params = request.get()?;
+            let vm_id = params
+                .get_id()
+                .inspect_err(|err| error!(?err, "Invalid snapshot_vm RPC payload: missing id"))?
+                .to_str()
+                .map_err(|err| {
+                    error!(?err, "Invalid snapshot_vm id: non-UTF8 text");
+                    capnp::Error::failed(format!("invalid vm id utf8: {err}"))
+                })?;
+
+            let destination = params
+                .get_destination()
+                .inspect_err(|err| {
+                    error!(?err, "Invalid snapshot_vm RPC payload: missing destination");
+                })?
+                .to_str()
+                .map_err(|err| {
+                    error!(?err, "Invalid snapshot_vm destination: non-UTF8 text");
+                    capnp::Error::failed(format!("invalid destination utf8: {err}"))
+                })?;
+
+            if destination.is_empty() {
+                return Err(capnp::Error::failed("destination must not be empty".into()));
+            }
+
+            debug!(vm_id, %destination, "snapshot_vm request parsed");
+
+            let dest_path = std::path::PathBuf::from(destination);
+
+            let guard = state.get().await;
+            let handle = guard.get(vm_id).ok_or_else(|| {
+                warn!(vm_id, "snapshot_vm requested unknown VM id");
+                capnp::Error::failed(format!("VM with id {vm_id} doesn't exist"))
+            })?;
+
+            handle.snapshot(dest_path.clone()).await.map_err(|err| {
+                error!(vm_id, ?err, "snapshot_vm failed");
+                capnp::Error::failed(format!("snapshot failed: {err}"))
+            })?;
+
+            // Return the canonicalized absolute path when possible; fall back to the
+            // raw destination if canonicalize fails (e.g. on a path the caller still
+            // wants to reference even though it's not yet visible to the kernel).
+            let resolved = tokio::fs::canonicalize(&dest_path)
+                .await
+                .unwrap_or(dest_path);
+            let resolved_str = resolved.to_string_lossy();
+            response.get().set_path(&resolved_str);
+
+            info!(vm_id, path = %resolved_str, "snapshot_vm RPC handled successfully");
+            Ok(())
+        })
+    }
+
+    fn backup_disk(
+        &mut self,
+        request: commands::worker_capnp::worker::BackupDiskParams<F::BackendConfig>,
+        mut response: commands::worker_capnp::worker::BackupDiskResults<F::BackendConfig>,
+    ) -> capnp::capability::Promise<(), capnp::Error> {
+        let state = self.state.clone();
+        capnp::capability::Promise::from_future(async move {
+            let params = request.get()?;
+            let vm_id = params
+                .get_id()
+                .inspect_err(|err| error!(?err, "Invalid backup_disk RPC payload: missing id"))?
+                .to_str()
+                .map_err(|err| {
+                    error!(?err, "Invalid backup_disk id: non-UTF8 text");
+                    capnp::Error::failed(format!("invalid vm id utf8: {err}"))
+                })?;
+            let destination = params
+                .get_destination()
+                .inspect_err(|err| {
+                    error!(?err, "Invalid backup_disk RPC payload: missing destination");
+                })?
+                .to_str()
+                .map_err(|err| {
+                    error!(?err, "Invalid backup_disk destination: non-UTF8 text");
+                    capnp::Error::failed(format!("invalid destination utf8: {err}"))
+                })?;
+
+            if destination.is_empty() {
+                return Err(capnp::Error::failed("destination must not be empty".into()));
+            }
+
+            debug!(vm_id, %destination, "backup_disk request parsed");
+
+            let dest_path = std::path::PathBuf::from(destination);
+
+            let guard = state.get().await;
+            let handle = guard.get(vm_id).ok_or_else(|| {
+                warn!(vm_id, "backup_disk requested unknown VM id");
+                capnp::Error::failed(format!("VM with id {vm_id} doesn't exist"))
+            })?;
+
+            handle.backup_disk(dest_path.clone()).await.map_err(|err| {
+                error!(vm_id, ?err, "backup_disk failed");
+                capnp::Error::failed(format!("backup failed: {err}"))
+            })?;
+
+            let resolved = tokio::fs::canonicalize(&dest_path)
+                .await
+                .unwrap_or(dest_path);
+            let resolved_str = resolved.to_string_lossy();
+            response.get().set_path(&resolved_str);
+
+            info!(vm_id, path = %resolved_str, "backup_disk RPC handled successfully");
+            Ok(())
+        })
+    }
+
     fn read(
         &mut self,
         _: commands::worker_capnp::worker::ReadParams<F::BackendConfig>,
