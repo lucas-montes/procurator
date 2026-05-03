@@ -1,9 +1,10 @@
 mod client;
-mod ip_allocator;
 mod dtos;
 mod errors;
-mod factory;
+pub mod factory;
 mod handle;
-mod tap;
+pub mod ip_allocator;
+pub mod tap;
 
 pub use factory::Factory;
+pub use handle::Handle as VmHandle;

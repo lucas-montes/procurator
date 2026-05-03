@@ -12,7 +12,6 @@ fn netmask_to_prefix(mask: &Ipv4Addr) -> u8 {
     u32::from_be_bytes(mask.octets()).count_ones() as u8
 }
 
-
 //TODO: we should use more types to know if we are receiving it from the server or using it for the client
 // meaning that it contains the latest and updated config
 
@@ -128,6 +127,8 @@ impl<'a> VmConfigRef<'a> {
     ///
     /// 4. **Console / serial** — console off (CH spam goes nowhere), serial
     ///    redirected to the per-VM `serial.log`.
+    /// 5. **OpenCode password** — append `procurator.opencode-password=<password>`
+    ///    to the cmdline so the in-image `opencode-server` service can read it.
     pub fn finalize_for_runtime(
         mut self,
         ip: &Ipv4Addr,
@@ -136,6 +137,7 @@ impl<'a> VmConfigRef<'a> {
         writable_disk_path: &'a str,
         serial_log_path: &'a str,
         network: NetConfigRef<'a>,
+        opencode_password: &str,
     ) -> Self {
         // ── 1. Cmdline ───────────────────────────────────────────────
         // Mutate the existing `String` in place to reuse its allocation.
@@ -151,7 +153,7 @@ impl<'a> VmConfigRef<'a> {
         // appended tokens push past the current capacity (typically once).
         let _ = write!(
             cmdline,
-            " procurator.ip={ip} procurator.gw={gateway} procurator.pfx={prefix}"
+            " procurator.ip={ip} procurator.gw={gateway} procurator.pfx={prefix} procurator.opencode-password={opencode_password}"
         );
 
         // ── 2. Disk ──────────────────────────────────────────────────
@@ -329,8 +331,11 @@ impl<'a> TryFrom<commands::common_capnp::vm_spec::Reader<'a, commands::ch_capnp:
                     // flake's `artifacts` derivation). The worker appends
                     // runtime tokens and overwrites this field before POSTing
                     // to Cloud Hypervisor.
-                    cmdline: require_non_empty(payload.get_cmdline()?.to_str()?, "payload.cmdline")?
-                        .to_owned(),
+                    cmdline: require_non_empty(
+                        payload.get_cmdline()?.to_str()?,
+                        "payload.cmdline",
+                    )?
+                    .to_owned(),
                     initramfs: require_non_empty(
                         payload.get_initramfs()?.to_str()?,
                         "payload.initramfs",
@@ -526,10 +531,7 @@ mod tests {
         assert!(out.contains(" procurator.gw=10.0.0.1 "));
         assert!(out.ends_with(" procurator.pfx=8"));
         // No stock `ip=` token (we use `procurator.ip=` instead).
-        assert!(
-            !out.split_whitespace()
-                .any(|t: &str| t.starts_with("ip="))
-        );
+        assert!(!out.split_whitespace().any(|t: &str| t.starts_with("ip=")));
     }
 
     /// Regression guard for the bug we hit on 2026-04-20: emitting

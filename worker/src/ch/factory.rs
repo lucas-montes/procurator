@@ -168,6 +168,18 @@ impl VmFactory for Factory {
 
         let vm_leased_ip = lease.ip().to_string();
 
+        // Generate a random password for OpenCode server
+        let opencode_password = uuid::Uuid::new_v4().to_string();
+
+        // Store the password in the database
+        if let Err(e) = self
+            .ip_allocator
+            .store_opencode_password(&vm_id, &opencode_password)
+            .await
+        {
+            tracing::error!(vm_id = %vm_id, error = %e, "Failed to store opencode password");
+        }
+
         // The capnp payload carries the image-specific base cmdline produced
         // by the flake's `artifacts` derivation (kernel params + `init=`
         // with the NixOS toplevel hash). `finalize_for_runtime` layers all
@@ -179,6 +191,7 @@ impl VmFactory for Factory {
             artifacts.writable_disk(),
             artifacts.serial_log(),
             NetConfigRef::new(&tap_name, lease.mac()),
+            &opencode_password,
         );
 
         let client = Client::new(vm_dir.socket_path);
@@ -198,7 +211,7 @@ impl VmFactory for Factory {
             tap,
             vm_id.clone(),
             self.ip_allocator.clone(),
-            vm_leased_ip
+            vm_leased_ip,
         );
         Ok(CreateCommand::new(handle, vm_id))
     }
@@ -511,9 +524,8 @@ mod tests {
         {
             let mut payload = vm_cfg.reborrow().init_payload();
             payload.set_kernel(kernel);
-            payload.set_cmdline(
-                "console=ttyS0 root=/dev/vda rw init=/nix/store/fake-toplevel/init",
-            );
+            payload
+                .set_cmdline("console=ttyS0 root=/dev/vda rw init=/nix/store/fake-toplevel/init");
             payload.set_initramfs(initramfs);
         }
 
@@ -642,5 +654,4 @@ mod tests {
         let result = prepare_artifacts::<LocalArtifactResolver>(&vm_dir, &spec).await;
         assert!(result.is_err());
     }
-
 }

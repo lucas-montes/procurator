@@ -189,6 +189,33 @@
               ip route replace default via "$GW" dev eth0
             '';
           };
+
+          # OpenCode API Server - starts after network is configured by procurator-netcfg.
+          # Password is passed via kernel cmdline token procurator.opencode-password=.
+          # If no password is provided, starts without authentication.
+          opencode-server = {
+            description = "OpenCode API Server";
+            wantedBy = ["multi-user.target"];
+            after = ["procurator-netcfg.service"];
+            path = [pkgs.opencode pkgs.gawk];
+            script = ''
+              CMDLINE=$(cat /proc/cmdline)
+              get() { echo "$CMDLINE" | awk -v k="$1" '{for(i=1;i<=NF;i++) if($i ~ "^"k"=") {sub("^"k"=","",$i); print $i; exit}}'; }
+              PASSWORD=$(get procurator.opencode-password)
+              if [ -z "$PASSWORD" ]; then
+                echo "opencode-server: no procurator.opencode-password in cmdline, starting without auth"
+                exec ${pkgs.opencode}/bin/opencode serve --hostname 0.0.0.0 --port 4096
+              else
+                echo "opencode-server: starting with password auth"
+                export OPENCODE_SERVER_PASSWORD="$PASSWORD"
+                exec ${pkgs.opencode}/bin/opencode serve --hostname 0.0.0.0 --port 4096
+              fi
+            '';
+            serviceConfig = {
+              Type = "simple";
+              Restart = "always";
+            };
+          };
         };
         # Extra packages
         environment.systemPackages = extraPackages;

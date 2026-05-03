@@ -54,6 +54,7 @@ struct VmStatus {
   drifted @5 :Bool;                 # desiredHash != observedHash?
   metrics @6 :VmMetrics;
   ip @7 :Text;
+  externalEndpoint @8 :Text;        # External URL to reach the VM (e.g., "https://localhost:8443/vm/<id>/")
 }
 
 struct Generation {

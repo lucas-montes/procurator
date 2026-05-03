@@ -1,5 +1,6 @@
 use std::net::Ipv4Addr;
 
+use sqlx::SqlitePool;
 use tracing::error;
 
 use crate::database::Database;
@@ -38,15 +39,20 @@ impl IpLease {
 /// Leases are persisted in the worker database via [`Database`].
 #[derive(Debug, Clone)]
 pub struct IpAllocator {
-    db: Database,
+    db: SqlitePool,
     start: Ipv4Addr,
     end: Ipv4Addr,
     mask: Ipv4Addr,
 }
 
 impl IpAllocator {
-    pub fn new(db: Database, start: Ipv4Addr, end: Ipv4Addr, mask: Ipv4Addr) -> Self {
-        Self { db, start, end, mask }
+    pub fn new(db: SqlitePool, start: Ipv4Addr, end: Ipv4Addr, mask: Ipv4Addr) -> Self {
+        Self {
+            db,
+            start,
+            end,
+            mask,
+        }
     }
 
     /// Reserve the next available IP for `vm_id` and persist it.
@@ -60,6 +66,15 @@ impl IpAllocator {
     /// Release the IP lease held by `vm_id`.
     pub async fn release(&self, vm_id: &str) -> Result<(), sqlx::Error> {
         self.db.release_ip(vm_id).await
+    }
+
+    /// Store opencode password for a VM
+    pub async fn store_opencode_password(
+        &self,
+        vm_id: &str,
+        password: &str,
+    ) -> Result<(), sqlx::Error> {
+        self.db.store_opencode_password(vm_id, password).await
     }
 
     async fn next_ip(&self) -> Result<Ipv4Addr, sqlx::Error> {
@@ -136,11 +151,14 @@ mod tests {
         let allocator = IpAllocator::new(
             db,
             Ipv4Addr::new(10, 0, 0, 1),
-            Ipv4Addr::new(10, 0, 0, 1),  // only one IP
+            Ipv4Addr::new(10, 0, 0, 1), // only one IP
             Ipv4Addr::new(255, 255, 0, 0),
         );
 
-        allocator.reserve("vm-aaa").await.expect("first reserve should succeed");
+        allocator
+            .reserve("vm-aaa")
+            .await
+            .expect("first reserve should succeed");
         let err = allocator.reserve("vm-bbb").await;
         assert!(err.is_err());
     }

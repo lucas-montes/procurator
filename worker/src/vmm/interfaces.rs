@@ -1,7 +1,7 @@
 use serde::de::DeserializeOwned;
 
-use super::{Error, supervisor::CreateCommand};
-
+use crate::supervisor::CreateCommand;
+use crate::vmm::errors::Error;
 
 /// This is the interface that should create process and talk to the hypervisor or whatever backend we are using to manage vms/vmms
 /// The questions is, do all backends need a client and a process like cloud hypervisor?
@@ -25,65 +25,7 @@ pub trait Factory: Clone + 'static + std::fmt::Debug {
     fn create_vm(
         &self,
         source: Self::CreateVmSpec<'_>,
-    ) -> impl Future<Output = Result<CreateCommand<Self>, Error>>
+    ) -> impl Future<Output = Result<CreateCommand<Self>, Error>> + Send
     where
         Self: Sized;
-}
-
-#[derive(Debug)]
-pub enum HandleError {
-    Start(String),
-    Cleanup(String),
-    Backup(String),
-}
-
-impl std::fmt::Display for HandleError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            HandleError::Start(msg) => write!(f, "start failed: {}", msg),
-            HandleError::Cleanup(msg) => write!(f, "cleanup failed: {}", msg),
-            HandleError::Backup(msg) => write!(f, "backup failed: {}", msg),
-        }
-    }
-}
-
-impl std::error::Error for HandleError {}
-
-/// This is the interface used to communicate with the the VM itself, either a process in case of cloud hypervisor or whatever else is needed
-/// However we might want an id? is good enough to have it in the registry.s map only?
-/// A handle that holds the process running the VM and the client to communicate with him.
-/// maybe don't needed actually, or yes because the registry needs to hold it and do stuff with it. at least check that everything is running ok, start, stop and other stuff from either the registry or the server
-pub trait Handle
-where
-    Self: Sized,
-{
-
-    fn ip(&self) -> &str;
-
-    fn start(&self) -> impl Future<Output = Result<(), HandleError>> + Send;
-
-    fn delete(self) -> impl Future<Output = Result<(), HandleError>> + Send;
-
-    fn health(&self) -> impl Future<Output = Result<(), HandleError>> + Send;
-
-    /// Pause a running VM.
-    fn pause(&self) -> impl Future<Output = Result<(), HandleError>> + Send;
-
-    /// Resume a previously paused VM.
-    fn resume(&self) -> impl Future<Output = Result<(), HandleError>> + Send;
-
-    /// Take a full live snapshot (memory + device state) of the VM into `destination`.
-    /// Implementations are expected to leave the VM running (pause+snapshot+resume).
-    fn snapshot(
-        &self,
-        destination: std::path::PathBuf,
-    ) -> impl Future<Output = Result<(), HandleError>> + Send;
-
-    /// Take a disk-only backup of the VM into `destination`.
-    /// Implementations are expected to briefly pause the VM for consistency, copy the
-    /// writable disk file with `tokio::fs::copy`, then resume.
-    fn backup_disk(
-        &self,
-        destination: std::path::PathBuf,
-    ) -> impl Future<Output = Result<(), HandleError>> + Send;
 }

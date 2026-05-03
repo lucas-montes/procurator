@@ -1,9 +1,10 @@
 mod errors;
 mod interfaces;
-mod registry;
-mod supervisor;
+pub mod registry;
+pub mod supervisor;
 
-pub use interfaces::{Factory, Handle, HandleError};
+pub use interfaces::Factory;
+pub use interfaces::Handle as HandleTrait;
 pub use registry::{Reader, Registry};
 pub use supervisor::{Command, CreateCommand, Supervisor};
 

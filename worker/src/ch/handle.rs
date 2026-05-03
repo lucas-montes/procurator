@@ -4,9 +4,10 @@ use tokio::process::Child;
 use tracing::{debug, error, warn};
 
 use crate::{
+    crate::ch::errors::HandleError,
     ch::ip_allocator::IpAllocator,
     ch::tap::{Persisted, Tap},
-    vmm::{Handle as VmHandle, HandleError},
+    vmm::Handle as VmHandle,
 };
 
 use super::client::Client;
@@ -33,7 +34,7 @@ pub struct Handle {
     tap: Tap<Persisted>,
     vm_id: String,
     lease_allocator: IpAllocator,
-    ip: String
+    ip: String,
 }
 
 impl Handle {
@@ -45,7 +46,7 @@ impl Handle {
         tap: Tap<Persisted>,
         vm_id: String,
         lease_allocator: IpAllocator,
-        ip: String
+        ip: String,
     ) -> Self {
         Self {
             client,
@@ -55,7 +56,7 @@ impl Handle {
             tap,
             vm_id,
             lease_allocator,
-            ip
+            ip,
         }
     }
 
@@ -101,7 +102,6 @@ impl Handle {
 }
 
 impl VmHandle for Handle {
-
     //TODO: maybe we could fetch if from the IpAllocator instead of saving it in the handle itself.
     fn ip(&self) -> &str {
         &self.ip

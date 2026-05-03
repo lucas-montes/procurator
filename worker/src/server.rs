@@ -6,6 +6,7 @@ use capnp_rpc::{RpcSystem, rpc_twoparty_capnp, twoparty};
 use futures::AsyncReadExt;
 use tracing::{debug, error, info, instrument, warn};
 
+use super::config::ProxyConfig;
 use super::vmm::{Command, Factory, Handle, Reader, Registry};
 
 #[derive(Clone)]
@@ -14,6 +15,7 @@ pub struct Server<F: Factory> {
     factory: F,
     tx: Sender<Command<F>>,
     listen_addr: SocketAddr,
+    proxy_config: ProxyConfig,
 }
 
 impl<F: Factory> Server<F> {
@@ -22,12 +24,14 @@ impl<F: Factory> Server<F> {
         factory: F,
         tx: Sender<Command<F>>,
         listen_addr: SocketAddr,
+        proxy_config: ProxyConfig,
     ) -> Self {
         Self {
             state,
             factory,
             tx,
             listen_addr,
+            proxy_config,
         }
     }
 
@@ -172,6 +176,7 @@ impl<F: Factory> commands::worker_capnp::worker::Server<F::BackendConfig> for Se
         warn!("list_vms RPC called");
         let state = self.state.clone();
         let worker_id = self.listen_addr.to_string();
+        let proxy_config = self.proxy_config.clone();
         capnp::capability::Promise::from_future(async move {
             let data = state.get().await;
 
@@ -184,6 +189,20 @@ impl<F: Factory> commands::worker_capnp::worker::Server<F::BackendConfig> for Se
                 vm.set_desired_hash("");
                 vm.set_observed_hash("");
                 vm.set_ip(handle.ip());
+
+                // Build external endpoint URL
+                let external_endpoint = format!(
+                    "{}://{}:{}/vm/{}/",
+                    if proxy_config.enable_tls {
+                        "https"
+                    } else {
+                        "http"
+                    },
+                    proxy_config.external_domain,
+                    proxy_config.listen_addr.port(),
+                    vm_id
+                );
+                vm.set_external_endpoint(&external_endpoint);
 
                 let status = if handle.health().await.is_ok() {
                     "running"

@@ -78,4 +78,41 @@ impl Database {
                 .await?;
         Ok(row.map(|ip| ip.parse().expect("we should only be saving valid ips")))
     }
+
+    /// Get the IP address for a given VM ID from the ip_leases table.
+    /// Returns `None` if the VM ID is not found (e.g., VM deleted or not yet assigned).
+    pub async fn get_ip_by_vm_id(&self, vm_id: &str) -> Result<Option<Ipv4Addr>, sqlx::Error> {
+        let row: Option<String> = sqlx::query_scalar("SELECT ip FROM ip_leases WHERE vm_id = ?1")
+            .bind(vm_id)
+            .fetch_optional(&self.0)
+            .await?;
+
+        Ok(row.map(|ip| ip.parse().expect("we should only be saving valid ips")))
+    }
+
+    /// Store the opencode password for a VM in the database.
+    pub async fn store_opencode_password(
+        &self,
+        vm_id: &str,
+        password: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE ip_leases SET opencode_password = ?1 WHERE vm_id = ?2")
+            .bind(password)
+            .bind(vm_id)
+            .execute(&self.0)
+            .await?;
+        Ok(())
+    }
+
+    /// Retrieve the opencode password for a VM from the database.
+    /// Returns `None` if the VM ID is not found or no password is set.
+    pub async fn get_opencode_password(&self, vm_id: &str) -> Result<Option<String>, sqlx::Error> {
+        let row: Option<String> =
+            sqlx::query_scalar("SELECT opencode_password FROM ip_leases WHERE vm_id = ?1")
+                .bind(vm_id)
+                .fetch_optional(&self.0)
+                .await?;
+
+        Ok(row)
+    }
 }

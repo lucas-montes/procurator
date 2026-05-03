@@ -243,7 +243,6 @@ impl Tap<Initialized> {
     }
 }
 
-
 // NOTE: these tests can only be run with SUDO and linux probably
 #[cfg(test)]
 mod tests {
