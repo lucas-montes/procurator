@@ -13,3 +13,4 @@ dummyBare
 repos/
 git-server/
 worker/tests/data/*
+context/tmp
