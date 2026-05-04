@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+
+{% block title %}Agents - {{ project_name }} - {{ username }} - Repohub{% endblock %}
+
+{% block content %}
+<style>
+    .status-chip {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.2rem 0.6rem;
+        border-radius: 999px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        background: #ddf4ff;
+        color: #0969da;
+        margin-left: 0.5rem;
+    }
+
+    .table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.9rem;
+    }
+
+    .table th {
+        text-align: left;
+        padding: 0.75rem 0.5rem;
+        color: #57606a;
+        border-bottom: 1px solid #d0d7de;
+    }
+
+    .table td {
+        padding: 0.75rem 0.5rem;
+        border-bottom: 1px solid #eaeef2;
+    }
+
+    .agent-card {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+</style>
+
+<div class="breadcrumb">
+    <a href="/">Users</a>
+    <span>/</span>
+    <a href="/{{ username }}">{{ username }}</a>
+    <span>/</span>
+    <a href="/{{ username }}/{{ project_name }}">{{ project_name }}</a>
+    <span>/</span>
+    <span>Agents</span>
+</div>
+
+<div class="card" style="padding: 1.75rem;">
+    <h2>🤖 Agents</h2>
+    <p class="meta">Automation services connected to your internal CI and workflows.</p>
+</div>
+
+<div class="grid">
+    {% for agent in agents %}
+    <div class="card agent-card" style="padding: 1.5rem;">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+            <h3>{{ agent.name }}</h3>
+            <span class="status-chip">{{ agent.status }}</span>
+        </div>
+        <p class="meta">{{ agent.description }}</p>
+        <div class="meta">
+            <span class="meta-item">Last run: {{ agent.last_run }}</span>
+            <span class="meta-item">Next: {{ agent.next_run }}</span>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<div class="card" style="padding: 1.5rem;">
+    <h3>Recent Runs</h3>
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Agent</th>
+                <th>Status</th>
+                <th>Duration</th>
+                <th>Started</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for run in runs %}
+            <tr>
+                <td>{{ run.name }}</td>
+                <td>{{ run.status }}</td>
+                <td>{{ run.duration }}</td>
+                <td>{{ run.started_at }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

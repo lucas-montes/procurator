@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+
+{% block title %}Stats - {{ project_name }} - {{ username }} - Repohub{% endblock %}
+
+{% block content %}
+<style>
+    .chart {
+        display: flex;
+        flex-direction: column;
+        gap: 0.6rem;
+        margin-top: 1rem;
+    }
+
+    .chart-row {
+        display: grid;
+        grid-template-columns: 80px 1fr 50px;
+        gap: 0.75rem;
+        align-items: center;
+        font-size: 0.85rem;
+        color: #57606a;
+    }
+
+    .chart-bar {
+        height: 10px;
+        background: #eaeef2;
+        border-radius: 999px;
+        overflow: hidden;
+    }
+
+    .chart-bar-fill {
+        height: 100%;
+        background: #2da44e;
+        border-radius: 999px;
+    }
+
+    .chart-bar-fill.secondary {
+        background: #0969da;
+    }
+
+    .table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.9rem;
+    }
+
+    .table th {
+        text-align: left;
+        padding: 0.75rem 0.5rem;
+        color: #57606a;
+        border-bottom: 1px solid #d0d7de;
+    }
+
+    .table td {
+        padding: 0.75rem 0.5rem;
+        border-bottom: 1px solid #eaeef2;
+    }
+</style>
+
+<div class="breadcrumb">
+    <a href="/">Users</a>
+    <span>/</span>
+    <a href="/{{ username }}">{{ username }}</a>
+    <span>/</span>
+    <a href="/{{ username }}/{{ project_name }}">{{ project_name }}</a>
+    <span>/</span>
+    <span>Stats</span>
+</div>
+
+<div class="card" style="padding: 1.75rem;">
+    <h2>📊 Stats</h2>
+    <p class="meta">Key metrics from internal CI and database reporting.</p>
+</div>
+
+<div class="grid">
+    {% for kpi in kpis %}
+    <div class="stat">
+        <div class="stat-value">{{ kpi.value }}</div>
+        <div class="stat-label">{{ kpi.label }}</div>
+    </div>
+    {% endfor %}
+</div>
+
+<div class="grid" style="margin-top: 1.5rem;">
+    <div class="card" style="padding: 1.5rem;">
+        <h3>Build Volume (5 days)</h3>
+        <div class="chart">
+            {% for point in build_series %}
+            <div class="chart-row">
+                <span>{{ point.label }}</span>
+                <div class="chart-bar">
+                    <div class="chart-bar-fill" style="width: {{ point.width_pct }}%;"></div>
+                </div>
+                <span>{{ point.value }}</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="card" style="padding: 1.5rem;">
+        <h3>Failure Reasons</h3>
+        <div class="chart">
+            {% for point in failure_series %}
+            <div class="chart-row">
+                <span>{{ point.label }}</span>
+                <div class="chart-bar">
+                    <div class="chart-bar-fill secondary" style="width: {{ point.width_pct }}%;"></div>
+                </div>
+                <span>{{ point.value }}</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<div class="card" style="padding: 1.5rem; margin-top: 1.5rem;">
+    <h3>Recent CI Runs</h3>
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Repository</th>
+                <th>Status</th>
+                <th>Duration</th>
+                <th>Started</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for run in recent_runs %}
+            <tr>
+                <td>{{ run.name }}</td>
+                <td>{{ run.status }}</td>
+                <td>{{ run.duration }}</td>
+                <td>{{ run.started_at }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="card" style="padding: 1.5rem; margin-top: 1.5rem;">
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap;">
+        <div>
+            <h3>🛰️ Hyperping Monitors</h3>
+            <p class="meta">Unified monitor view with uptime, latency, and alerting.</p>
+        </div>
+        <span class="badge">{{ monitors.len() }} monitors</span>
+    </div>
+    <table class="table" style="margin-top: 1rem;">
+        <thead>
+            <tr>
+                <th>Monitor</th>
+                <th>Status</th>
+                <th>Latency</th>
+                <th>Uptime</th>
+                <th>Last Check</th>
+                <th>SSL</th>
+                <th>Regions</th>
+                <th>Alerting</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for monitor in monitors %}
+            <tr>
+                <td>
+                    <div style="font-weight: 600;">{{ monitor.name }}</div>
+                    <div class="meta">{{ monitor.target }}</div>
+                </td>
+                <td>{{ monitor.status }}</td>
+                <td>{{ monitor.latency_ms }} ms</td>
+                <td>{{ monitor.uptime }}</td>
+                <td>{{ monitor.last_check }}</td>
+                <td>{{ monitor.ssl_expires }}</td>
+                <td>{{ monitor.regions }}</td>
+                <td>{{ monitor.alerting }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="card" style="padding: 1.5rem; margin-top: 1.5rem;">
+    <h3>Hyperping Options</h3>
+    <div class="grid" style="margin-top: 1rem;">
+        {% for option in monitor_options %}
+        <div class="card" style="padding: 1.25rem; margin-bottom: 0;">
+            <h3 style="margin-bottom: 0.5rem;">{{ option.name }}</h3>
+            <p class="meta">{{ option.description }}</p>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+
+{% block title %}Documentation - {{ project_name }} - {{ username }} - Repohub{% endblock %}
+
+{% block content %}
+<style>
+    .status-chip {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.2rem 0.6rem;
+        border-radius: 999px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        background: #ddf4ff;
+        color: #0969da;
+    }
+
+    .table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.9rem;
+    }
+
+    .table th {
+        text-align: left;
+        padding: 0.75rem 0.5rem;
+        color: #57606a;
+        border-bottom: 1px solid #d0d7de;
+    }
+
+    .table td {
+        padding: 0.75rem 0.5rem;
+        border-bottom: 1px solid #eaeef2;
+    }
+</style>
+
+<div class="breadcrumb">
+    <a href="/">Users</a>
+    <span>/</span>
+    <a href="/{{ username }}">{{ username }}</a>
+    <span>/</span>
+    <a href="/{{ username }}/{{ project_name }}">{{ project_name }}</a>
+    <span>/</span>
+    <span>Documentation</span>
+</div>
+
+<div class="card" style="padding: 1.75rem;">
+    <h2>📖 Documentation</h2>
+    <p class="meta">Readonly view of internal documentation sources and status.</p>
+</div>
+
+<div class="grid">
+    {% for source in sources %}
+    <div class="card" style="padding: 1.5rem;">
+        <h3>{{ source.name }}</h3>
+        <p class="meta">Location: {{ source.location }}</p>
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+            <span class="meta">Updated {{ source.updated_at }}</span>
+            <span class="status-chip">{{ source.status }}</span>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<div class="card" style="padding: 1.5rem;">
+    <h3>Latest Documents</h3>
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Title</th>
+                <th>Repository</th>
+                <th>Status</th>
+                <th>Updated</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for doc in documents %}
+            <tr>
+                <td>{{ doc.title }}</td>
+                <td>{{ doc.repo }}</td>
+                <td>{{ doc.status }}</td>
+                <td>{{ doc.updated_at }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

@@ -11,8 +11,17 @@
     <span>{{ project.name }}</span>
 </div>
 
-<div class="card">
-    <h2>📦 {{ project.name }}</h2>
+<div class="card" style="padding: 1.75rem;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1.5rem; flex-wrap: wrap;">
+        <h2>📦 {{ project.name }}</h2>
+        <div style="display: flex; flex-direction: column; gap: 0.5rem; min-width: 360px; flex: 1; max-width: 520px;">
+            <label for="clone-url" class="meta" style="font-weight: 600;">Clone URL</label>
+            <div style="display: flex; gap: 0.75rem; align-items: center;">
+                <input id="clone-url" type="text" readonly style="flex: 1; padding: 0.7rem 0.85rem; border: 1px solid #d0d7de; border-radius: 10px; background: #f6f8fa; font-size: 0.95rem;" value="" aria-label="Clone URL">
+                <button class="btn" type="button" onclick="copyCloneUrl()" style="padding: 0.7rem 1rem;">Copy</button>
+            </div>
+        </div>
+    </div>
     {% match project.description %}
         {% when Some with (desc) %}
             <p>{{ desc }}</p>
@@ -23,15 +32,35 @@
     </p>
 </div>
 
-<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem;">
-    <a href="/{{ username }}/{{ project.name }}/configuration" class="card" style="text-decoration: none; color: inherit;">
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.5rem; margin-bottom: 1.75rem;">
+    <a href="/{{ username }}/{{ project.name }}/configuration" class="card" style="text-decoration: none; color: inherit; min-height: 140px; display: flex; flex-direction: column; justify-content: center; padding: 1.5rem;">
         <h3>⚙️ Configuration</h3>
         <p class="meta">Manage infrastructure and settings</p>
     </a>
 
-    <a href="/{{ username }}/{{ project.name }}/testing" class="card" style="text-decoration: none; color: inherit;">
+    <a href="/{{ username }}/{{ project.name }}/testing" class="card" style="text-decoration: none; color: inherit; min-height: 140px; display: flex; flex-direction: column; justify-content: center; padding: 1.5rem;">
         <h3>🧪 Testing</h3>
         <p class="meta">E2E testing and monitoring</p>
+    </a>
+
+    <a href="/{{ username }}/{{ project.name }}/agents" class="card" style="text-decoration: none; color: inherit; min-height: 140px; display: flex; flex-direction: column; justify-content: center; padding: 1.5rem;">
+        <h3>🤖 Agents</h3>
+        <p class="meta">Automation, bots, and workflows</p>
+    </a>
+
+    <a href="/{{ username }}/{{ project.name }}/documentation" class="card" style="text-decoration: none; color: inherit; min-height: 140px; display: flex; flex-direction: column; justify-content: center; padding: 1.5rem;">
+        <h3>📖 Documentation</h3>
+        <p class="meta">Specs, guides, and reference</p>
+    </a>
+
+    <a href="/{{ username }}/{{ project.name }}/stats" class="card" style="text-decoration: none; color: inherit; min-height: 140px; display: flex; flex-direction: column; justify-content: center; padding: 1.5rem;">
+        <h3>📊 Stats</h3>
+        <p class="meta">Usage, builds, and activity</p>
+    </a>
+
+    <a href="/{{ username }}/{{ project.name }}/milestones" class="card" style="text-decoration: none; color: inherit; min-height: 140px; display: flex; flex-direction: column; justify-content: center; padding: 1.5rem;">
+        <h3>🏁 Milestones</h3>
+        <p class="meta">Roadmap and delivery targets</p>
     </a>
 
 </div>
@@ -138,6 +167,31 @@ git@gitlab.com:user/worker-service.git" style="font-family: monospace;"></textar
 <script>
     const username = "{{ username }}";
     const projectName = "{{ project.name }}";
+    const cloneUrlInput = document.getElementById('clone-url');
+    if (cloneUrlInput) {
+        const host = window.location.hostname || 'localhost';
+        cloneUrlInput.value = `git@${host}:${username}/${projectName}.git`;
+    }
+
+    function copyCloneUrl() {
+        const input = document.getElementById('clone-url');
+        if (!input) return;
+        const value = input.value;
+        if (!value) return;
+
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(value).catch(() => {
+                input.select();
+                document.execCommand('copy');
+                input.setSelectionRange(0, 0);
+            });
+            return;
+        }
+
+        input.select();
+        document.execCommand('copy');
+        input.setSelectionRange(0, 0);
+    }
 
     function openRepoModal() {
         document.getElementById('repoModal').classList.add('active');
