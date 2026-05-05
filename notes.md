@@ -1,7 +1,12 @@
-# SCE notes
+Let's have a continous loop of testing and deployment.
+We gather metrics all the time, those are sent to repohub.
+We run the latest version in a sandbox and throw things at it, and we check the ouputs.
+If an output fails, we create a ticket in repohub.
+Then, either with a clanker or manually someone assigns the ticket. (an llm could create the ticket, description and add the details).
+If the issue is easy, we assign a clanker to fix it, create a PR or patchset, and we test it in a sandbox again.
+The challenge would be, how to deploy a complex system with multiple parts? like db, redis, multiple services to be ran in order?
+For that we either need a clear docker-compose (or nix thing), docs that explain the other and that a clanker could follow, or to have a ProcFile/Makefile/process-compose that will spin up the whole.
 
-How to use opencode?
-Do I need to clone the whole repo?
 
 
 # PRocurator notes

@@ -5,11 +5,11 @@ edition = "2024"
 
 [[bin]]
 name = "pcr"
-path = "src/main.rs"
+path = "pcr/main.rs"
 
 [[bin]]
 name = "pcr-worker-test"
-path = "src/worker/main.rs"
+path = "worker/main.rs"
 
 [dependencies]
 clap = { version = "4.5.40", features = ["derive"] }
