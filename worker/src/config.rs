@@ -1,13 +1,8 @@
-use std::{
-    net::SocketAddr,
-    num::NonZeroU64,
-    path::{Path, },
-};
+use std::{net::SocketAddr, num::NonZeroU64, path::Path};
 
 use serde::Deserialize;
 
 use crate::vmm::Factory;
-
 
 #[derive(Debug, Deserialize)]
 pub struct Config<F: Factory> {

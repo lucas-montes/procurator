@@ -33,7 +33,7 @@ pub struct Handle {
     tap: Tap<Persisted>,
     vm_id: String,
     lease_allocator: IpAllocator,
-    ip: String
+    ip: String,
 }
 
 impl Handle {
@@ -45,7 +45,7 @@ impl Handle {
         tap: Tap<Persisted>,
         vm_id: String,
         lease_allocator: IpAllocator,
-        ip: String
+        ip: String,
     ) -> Self {
         Self {
             client,
@@ -55,7 +55,7 @@ impl Handle {
             tap,
             vm_id,
             lease_allocator,
-            ip
+            ip,
         }
     }
 
@@ -101,7 +101,6 @@ impl Handle {
 }
 
 impl VmHandle for Handle {
-
     //TODO: maybe we could fetch if from the IpAllocator instead of saving it in the handle itself.
     fn ip(&self) -> &str {
         &self.ip

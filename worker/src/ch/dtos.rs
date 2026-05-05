@@ -12,7 +12,6 @@ fn netmask_to_prefix(mask: &Ipv4Addr) -> u8 {
     u32::from_be_bytes(mask.octets()).count_ones() as u8
 }
 
-
 //TODO: we should use more types to know if we are receiving it from the server or using it for the client
 // meaning that it contains the latest and updated config
 
@@ -329,8 +328,11 @@ impl<'a> TryFrom<commands::common_capnp::vm_spec::Reader<'a, commands::ch_capnp:
                     // flake's `artifacts` derivation). The worker appends
                     // runtime tokens and overwrites this field before POSTing
                     // to Cloud Hypervisor.
-                    cmdline: require_non_empty(payload.get_cmdline()?.to_str()?, "payload.cmdline")?
-                        .to_owned(),
+                    cmdline: require_non_empty(
+                        payload.get_cmdline()?.to_str()?,
+                        "payload.cmdline",
+                    )?
+                    .to_owned(),
                     initramfs: require_non_empty(
                         payload.get_initramfs()?.to_str()?,
                         "payload.initramfs",
@@ -526,10 +528,7 @@ mod tests {
         assert!(out.contains(" procurator.gw=10.0.0.1 "));
         assert!(out.ends_with(" procurator.pfx=8"));
         // No stock `ip=` token (we use `procurator.ip=` instead).
-        assert!(
-            !out.split_whitespace()
-                .any(|t: &str| t.starts_with("ip="))
-        );
+        assert!(!out.split_whitespace().any(|t: &str| t.starts_with("ip=")));
     }
 
     /// Regression guard for the bug we hit on 2026-04-20: emitting

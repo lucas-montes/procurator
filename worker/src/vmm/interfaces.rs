@@ -2,7 +2,6 @@ use serde::de::DeserializeOwned;
 
 use super::{Error, supervisor::CreateCommand};
 
-
 /// This is the interface that should create process and talk to the hypervisor or whatever backend we are using to manage vms/vmms
 /// The questions is, do all backends need a client and a process like cloud hypervisor?
 pub trait Factory: Clone + 'static + std::fmt::Debug {
@@ -57,7 +56,6 @@ pub trait Handle
 where
     Self: Sized,
 {
-
     fn ip(&self) -> &str;
 
     fn start(&self) -> impl Future<Output = Result<(), HandleError>> + Send;

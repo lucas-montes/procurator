@@ -198,7 +198,7 @@ impl VmFactory for Factory {
             tap,
             vm_id.clone(),
             self.ip_allocator.clone(),
-            vm_leased_ip
+            vm_leased_ip,
         );
         Ok(CreateCommand::new(handle, vm_id))
     }
@@ -511,9 +511,8 @@ mod tests {
         {
             let mut payload = vm_cfg.reborrow().init_payload();
             payload.set_kernel(kernel);
-            payload.set_cmdline(
-                "console=ttyS0 root=/dev/vda rw init=/nix/store/fake-toplevel/init",
-            );
+            payload
+                .set_cmdline("console=ttyS0 root=/dev/vda rw init=/nix/store/fake-toplevel/init");
             payload.set_initramfs(initramfs);
         }
 
@@ -642,5 +641,4 @@ mod tests {
         let result = prepare_artifacts::<LocalArtifactResolver>(&vm_dir, &spec).await;
         assert!(result.is_err());
     }
-
 }

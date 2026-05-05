@@ -46,7 +46,12 @@ pub struct IpAllocator {
 
 impl IpAllocator {
     pub fn new(db: Database, start: Ipv4Addr, end: Ipv4Addr, mask: Ipv4Addr) -> Self {
-        Self { db, start, end, mask }
+        Self {
+            db,
+            start,
+            end,
+            mask,
+        }
     }
 
     /// Reserve the next available IP for `vm_id` and persist it.
@@ -136,11 +141,14 @@ mod tests {
         let allocator = IpAllocator::new(
             db,
             Ipv4Addr::new(10, 0, 0, 1),
-            Ipv4Addr::new(10, 0, 0, 1),  // only one IP
+            Ipv4Addr::new(10, 0, 0, 1), // only one IP
             Ipv4Addr::new(255, 255, 0, 0),
         );
 
-        allocator.reserve("vm-aaa").await.expect("first reserve should succeed");
+        allocator
+            .reserve("vm-aaa")
+            .await
+            .expect("first reserve should succeed");
         let err = allocator.reserve("vm-bbb").await;
         assert!(err.is_err());
     }
