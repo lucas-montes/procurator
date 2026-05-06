@@ -26,6 +26,8 @@ autonix.workspace = true
 futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+repo_outils.workspace = true
+
 
 [lints]
 workspace = true

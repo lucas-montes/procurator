@@ -8,6 +8,8 @@ tokio = {workspace = true, features = ["io-util"]}
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+git2 = { version = "0.19", features = ["vendored-libgit2"] }
+
 
 [lints]
 workspace = true

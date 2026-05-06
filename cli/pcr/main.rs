@@ -1,15 +1,13 @@
-mod init;
-mod vcs;
 mod agents;
+mod init;
 mod stack;
-
+mod vcs;
 
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
-use crate::{agents::AgentsArgs, vcs::VcsArgs, stack::StackArgs};
-
+use crate::{agents::AgentsArgs, stack::StackArgs, vcs::VcsArgs};
 
 #[derive(Debug)]
 enum Error {
@@ -43,7 +41,6 @@ enum Commands {
 
     /// Workspace management for AI agents
     Agents(AgentsArgs),
-
 }
 
 #[derive(Debug, Args)]
@@ -52,7 +49,6 @@ struct InitArgs {
     #[arg(short, long)]
     path: Option<PathBuf>,
 }
-
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {

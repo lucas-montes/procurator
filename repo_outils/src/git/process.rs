@@ -108,10 +108,6 @@ impl std::fmt::Display for RepoPath {
     }
 }
 
-// ============================================================================
-// Git Operations
-// ============================================================================
-
 /// Create a new bare Git repository at the specified path
 pub fn create_bare_repo(bare_path: &Path) -> Result<()> {
     if bare_path.exists() {
