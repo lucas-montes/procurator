@@ -1,11 +1,5 @@
 mod process;
 mod repo;
 
-pub use process::{
-    create_bare_repo,
-clone_into_bare,
-delete_repo,
-RepoPath,
-RepoError
-};
-pub use repo::{GitRepo, SubmoduleInfo, filter_submodules};
+pub use process::{RepoError, RepoPath, clone_into_bare, create_bare_repo, delete_repo};
+pub use repo::{GitRepo, RepoCache, SubmoduleInfo, filter_submodules};

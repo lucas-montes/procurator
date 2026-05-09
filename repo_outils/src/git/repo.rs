@@ -2,7 +2,8 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use tracing::{error, info};
+use std::process::Command;
+use tracing::{error, info, warn};
 
 /// Errors that can occur during git operations.
 #[derive(Debug)]
@@ -11,6 +12,7 @@ pub enum Git2Error {
     IoError(std::io::Error),
     SubmoduleError(String),
     AuthError(String),
+    CommandError(String),
     NotARepository,
     NoRemote,
 }
@@ -22,6 +24,7 @@ impl std::fmt::Display for Git2Error {
             Git2Error::IoError(e) => write!(f, "IO error: {}", e),
             Git2Error::SubmoduleError(msg) => write!(f, "Submodule error: {}", msg),
             Git2Error::AuthError(msg) => write!(f, "Auth error: {}", msg),
+            Git2Error::CommandError(msg) => write!(f, "Command error: {}", msg),
             Git2Error::NotARepository => write!(f, "Not a git repository"),
             Git2Error::NoRemote => write!(f, "No remote configured"),
         }
@@ -74,10 +77,32 @@ impl GitRepo {
         })
     }
 
-    /// Clone repository from URL to local path using ssh-agent auth.
+    /// Clone repository from URL to local path.
+    ///
+    /// Uses local bare mirror cache with `--reference` when available,
+    /// then gracefully falls back to direct git2 cloning.
     pub fn clone<P: AsRef<Path>>(url: &str, path: P) -> Result<Self> {
         info!("Cloning {} to {}", url, path.as_ref().display());
 
+        match RepoCache::default() {
+            Ok(cache) => match cache.clone_with_reference(url, path.as_ref()) {
+                Ok(repo) => {
+                    info!("Clone completed using local cache reference");
+                    Ok(repo)
+                }
+                Err(e) => {
+                    warn!("Cache clone failed ({}), falling back to direct clone", e);
+                    Self::clone_direct(url, path)
+                }
+            },
+            Err(e) => {
+                warn!("Cache unavailable ({}), using direct clone", e);
+                Self::clone_direct(url, path)
+            }
+        }
+    }
+
+    fn clone_direct<P: AsRef<Path>>(url: &str, path: P) -> Result<Self> {
         let mut callbacks = git2::RemoteCallbacks::new();
         callbacks.credentials(
             |_url: &str, username_from_url: Option<&str>, _allowed_types: git2::CredentialType| {
@@ -161,6 +186,14 @@ impl GitRepo {
             error!("No origin remote found");
             Git2Error::NoRemote
         })?;
+
+        if let Some(remote_url) = remote.url() {
+            if let Ok(cache) = RepoCache::default() {
+                if let Err(e) = cache.sync_mirror(remote_url) {
+                    warn!("Failed to refresh mirror cache from pull: {}", e);
+                }
+            }
+        }
 
         let mut callbacks = git2::RemoteCallbacks::new();
         callbacks.credentials(
@@ -268,6 +301,173 @@ impl GitRepo {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    /// Check if the repository has uncommitted changes.
+    pub fn has_changes(&self) -> Result<bool> {
+        let statuses = self.repo.statuses(None)?;
+        Ok(statuses.len() > 0)
+    }
+
+    /// Create a new branch with the given name.
+    pub fn branch(&self, name: &str) -> Result<()> {
+        info!("Creating branch '{}'", name);
+
+        let head = self.repo.head()?;
+        let head_commit = head.peel_to_commit()?;
+        let target = head_commit.id();
+
+        // Create the branch reference
+        let branch_ref = self
+            .repo
+            .reference(
+                &format!("refs/heads/{}", name),
+                target,
+                false, // force (overwrite if exists?)
+                "Create branch",
+            )
+            .map_err(|e| {
+                error!("Failed to create branch '{}': {}", name, e);
+                Git2Error::from(e)
+            })?;
+
+        // Set HEAD to the new branch
+        self.repo
+            .set_head(&branch_ref.name().unwrap())
+            .map_err(|e| {
+                error!("Failed to set HEAD to branch '{}': {}", name, e);
+                Git2Error::from(e)
+            })?;
+
+        info!("Branch '{}' created", name);
+        Ok(())
+    }
+
+    /// Get the current branch name.
+    pub fn current_branch(&self) -> Result<String> {
+        let head = self.repo.head()?;
+        Ok(head.shorthand().unwrap_or("HEAD").to_string())
+    }
+}
+
+/// Local bare repository cache for faster clones using `--reference`.
+#[derive(Debug, Clone)]
+pub struct RepoCache {
+    base_path: PathBuf,
+}
+
+impl RepoCache {
+    /// Build cache under `~/.cache/procurator/repo-cache/`.
+    pub fn default() -> Result<Self> {
+        let home = std::env::var("HOME")
+            .map_err(|e| Git2Error::CommandError(format!("HOME is not set: {}", e)))?;
+
+        Ok(Self {
+            base_path: PathBuf::from(home)
+                .join(".cache")
+                .join("procurator")
+                .join("repo-cache"),
+        })
+    }
+
+    /// Clone repository using local mirror as reference.
+    pub fn clone_with_reference(&self, url: &str, destination: &Path) -> Result<GitRepo> {
+        std::fs::create_dir_all(&self.base_path)?;
+        let mirror_path = self.ensure_mirror(url)?;
+
+        let output = Command::new("git")
+            .arg("clone")
+            .arg("--reference")
+            .arg(&mirror_path)
+            .arg(url)
+            .arg(destination)
+            .output()?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(Git2Error::CommandError(format!(
+                "git clone with reference failed: {}",
+                stderr
+            )));
+        }
+
+        GitRepo::open(destination)
+    }
+
+    pub fn sync_mirror(&self, url: &str) -> Result<PathBuf> {
+        self.ensure_mirror(url)
+    }
+
+    fn ensure_mirror(&self, url: &str) -> Result<PathBuf> {
+        let mirror_path = self.mirror_path(url);
+
+        if mirror_path.exists() {
+            self.update_mirror(&mirror_path)?;
+        } else {
+            self.init_mirror(url, &mirror_path)?;
+        }
+
+        Ok(mirror_path)
+    }
+
+    fn init_mirror(&self, url: &str, mirror_path: &Path) -> Result<()> {
+        info!(
+            "Initializing local bare mirror for {} at {}",
+            url,
+            mirror_path.display()
+        );
+
+        let output = Command::new("git")
+            .arg("clone")
+            .arg("--mirror")
+            .arg(url)
+            .arg(mirror_path)
+            .output()?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(Git2Error::CommandError(format!(
+                "git clone --mirror failed: {}",
+                stderr
+            )));
+        }
+
+        Ok(())
+    }
+
+    fn update_mirror(&self, mirror_path: &Path) -> Result<()> {
+        info!("Updating local mirror at {}", mirror_path.display());
+
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(mirror_path)
+            .arg("fetch")
+            .arg("--all")
+            .output()?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(Git2Error::CommandError(format!(
+                "git fetch --all for mirror failed: {}",
+                stderr
+            )));
+        }
+
+        Ok(())
+    }
+
+    fn mirror_path(&self, url: &str) -> PathBuf {
+        self.base_path.join(Self::mirror_name(url))
+    }
+
+    fn mirror_name(url: &str) -> String {
+        let trimmed = url.trim_end_matches('/').trim_end_matches(".git");
+        let normalized: String = trimmed
+            .chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+            .collect();
+
+        format!("{}.git", normalized)
+    }
 }
 
 /// Submodule metadata for filtering operations.
@@ -329,6 +529,19 @@ pub fn filter_submodules(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_repo_cache_mirror_name_normalizes_url() {
+        let url = "git@github.com:org/my-repo.git";
+        let name = RepoCache::mirror_name(url);
+        assert_eq!(name, "git_github_com_org_my_repo.git");
+    }
+
+    #[test]
+    fn test_repo_cache_default_path_uses_home() {
+        let cache = RepoCache::default().expect("cache path");
+        assert!(cache.base_path.ends_with(".cache/procurator/repo-cache"));
+    }
 
     #[test]
     fn test_filter_submodules() {
