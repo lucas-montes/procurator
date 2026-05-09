@@ -43,10 +43,11 @@ This consolidated plan merges all prior VCS plans and preserves the most recent 
 - [x] T07: Implement agent prepare and list
 - [x] T08: Add local bare repo cache
 - [x] T09: Add execution logs and timing coverage
+- [x] T10: Final validation and cleanup
 
 ## Next Task (Ready)
 
-- **Next task:** None — plan task stack complete.
+- **Next task:** None — plan complete.
 - **ready_for_implementation:** yes
 
 ## T08 Scope
@@ -81,3 +82,33 @@ This consolidated plan merges all prior VCS plans and preserves the most recent 
 2. Nix is installed where cache operations are expected.
 3. SSH keys/agent are configured for Git and cache endpoints.
 4. Submodule URLs are reachable with configured credentials.
+
+## Validation Report (T10)
+
+### Commands run
+- `cargo test` -> exit 0 (workspace tests passed)
+- `cargo fmt --all -- --check` -> exit 0
+- `cargo clippy --workspace --all-targets` -> exit 101 (pre-existing lint debt outside VCS scope)
+- `cargo clippy -p cli -p repo_outils --all-targets` -> exit 101 (fails due to workspace-level `autonix` lints under current lint config)
+- `cargo build` -> exit 0
+
+### Failed checks and follow-ups
+- Clippy currently fails due to extensive pre-existing lint-policy debt concentrated in non-VCS crates (primarily `autonix` and `cache`), plus warning-only items in other crates.
+- This task intentionally did not expand scope to remediate cross-crate lint debt.
+- Follow-up recommendation: create a dedicated lint-debt plan to align workspace with current clippy deny levels.
+
+### Success-criteria verification
+- [x] `pcr vcs project clone <url>` clones project and submodules (implemented and validated previously; no regressions found)
+- [x] `pcr vcs project pull --repos docs,config` selective filtering behavior remains present
+- [x] `pcr vcs project push` pushes main then changed submodules only
+- [x] `pcr vcs repo clone <url>` implemented and now cache-aware via `RepoCache`
+- [x] `pcr vcs repo pull` and `pcr vcs repo push` remain functional with optional Nix cache logic
+- [x] `pcr vcs repo branch <name>` implemented via git2 branch helper
+- [x] `pcr vcs project branch <name>` retained current guided/manual behavior
+- [x] `pcr vcs agent prepare <url> <branch>` implemented with co-located workspace path
+- [x] `pcr vcs agent list` implemented with workspace status table
+- [x] Local repo cache path + `--reference` clone flow implemented (`RepoCache`)
+- [x] Execution timing logs present across VCS command handlers
+
+### Residual risks
+- Workspace-wide clippy policy remains red and can obscure future regressions unless addressed separately.
