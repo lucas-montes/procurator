@@ -22,12 +22,12 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::TunFileUnavailable(e) => write!(f, "tun device open failed: {}", e),
-            Error::IfaceNameInvalid(s) => write!(f, "invalid interface name: {}", s),
-            Error::TapCreationFailed(e) => write!(f, "tap creation failed: {}", e),
-            Error::TapPersistenceFailed(e) => write!(f, "tap persistence failed: {}", e),
-            Error::NetlinkError(s) => write!(f, "netlink error: {}", s),
-            Error::BridgeNotFound(s) => write!(f, "bridge not found: {}", s),
+            Error::TunFileUnavailable(e) => write!(f, "tun device open failed: {e}"),
+            Error::IfaceNameInvalid(s) => write!(f, "invalid interface name: {s}"),
+            Error::TapCreationFailed(e) => write!(f, "tap creation failed: {e}"),
+            Error::TapPersistenceFailed(e) => write!(f, "tap persistence failed: {e}"),
+            Error::NetlinkError(s) => write!(f, "netlink error: {s}"),
+            Error::BridgeNotFound(s) => write!(f, "bridge not found: {s}"),
         }
     }
 }
@@ -58,7 +58,7 @@ impl FromStr for TapName {
 
         let mut name = [0; libc::IF_NAMESIZE];
         for (i, c) in s.bytes().enumerate() {
-            name[i] = c as libc::c_char;
+            name[i] = c.cast_signed();
         }
 
         Ok(Self(name))
@@ -71,9 +71,9 @@ impl std::fmt::Display for TapName {
             .0
             .iter()
             .take_while(|&&c| c != 0)
-            .map(|&c| c as u8 as char)
+            .map(|&c| c.cast_unsigned() as char)
             .collect::<String>();
-        write!(f, "{}", name)
+        write!(f, "{name}")
     }
 }
 
@@ -196,7 +196,7 @@ impl Tap<Initialized> {
         let mut req = libc::ifreq {
             ifr_name: iface_name.0,
             ifr_ifru: libc::__c_anonymous_ifr_ifru {
-                ifru_flags: flags as i16,
+                ifru_flags: i16::try_from(flags).expect("IFF_TAP and friends fit in i16"),
             },
         };
 
@@ -243,7 +243,13 @@ impl Tap<Initialized> {
     }
 }
 
-// NOTE: these tests can only be run with SUDO and linux probably
+// NOTE: these tests require CAP_NET_ADMIN / privileged access to create TAP
+// interfaces via ioctl on /dev/net/tun. They are ignored by default so that
+// `cargo test -p worker` passes in non-privileged environments (CI, local
+// dev). To run them explicitly, use:
+//
+//   cargo test -p worker --ignored ch::tap::tests
+//
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -262,6 +268,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires CAP_NET_ADMIN to open /dev/net/tun — run with: cargo test -p worker --ignored ch::tap::tests"]
     fn test_create_tap() {
         let tap1 = Tap::new(Some("tap1")).expect("Failed to create TAP interface with name");
 
@@ -275,6 +282,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires CAP_NET_ADMIN to open /dev/net/tun — run with: cargo test -p worker --ignored ch::tap::tests"]
     fn test_should_fail_because_same_name_used() {
         let tap = Tap::new(Some("tap2")).expect("Failed to create TAP interface");
 
@@ -284,7 +292,7 @@ mod tests {
             assert_eq!(err.to_string(), "Device or resource busy (os error 16)");
         } else {
             panic!("Expected error when creating TAP interface with duplicate name");
-        };
+        }
 
         assert_eq!(tap.iface_name.to_string(), "tap2");
     }
