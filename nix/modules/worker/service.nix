@@ -32,6 +32,17 @@ with lib; let
       listenAddr       = cfg.listenAddr;
       masterAddr       = derivedMasterAddr;
       healthTickMillis = cfg.healthTickMillis;
+      proxy = {
+        opencode_upstream_port = defaults.proxy.opencode_upstream_port; # No override for this field yet; add cfg.proxyOpencodeUpstreamPort if needed.
+        publicListenAddr = cfg.proxyPublicListenAddr;
+        tlsCertPath = cfg.proxyTlsCertPath;
+        tlsKeyPath = cfg.proxyTlsKeyPath;
+        jwtHs256Secret = cfg.proxyJwtHs256Secret;
+        timeouts = {
+          upstreamConnectTimeoutMillis = cfg.proxyUpstreamConnectTimeoutMillis;
+          upstreamRequestTimeoutMillis = cfg.proxyUpstreamRequestTimeoutMillis;
+        };
+      };
       vmm = {
         binaryPath    = cfg.cloudHypervisorBinaryPath;
         runtimeDir    = cfg.vmRuntimeDir;
@@ -66,6 +77,48 @@ in {
       default = defaults.healthTickMillis;
       example = 5000;
       description = "Interval in milliseconds between worker health ticks.";
+    };
+
+    proxyPublicListenAddr = mkOption {
+      type = types.str;
+      default = defaults.proxy.publicListenAddr;
+      example = "0.0.0.0:8443";
+      description = "Public HTTPS address and port for the worker VM proxy listener.";
+    };
+
+    proxyTlsCertPath = mkOption {
+      type = types.str;
+      default = defaults.proxy.tlsCertPath;
+      example = "/var/lib/procurator-worker/tls/server.crt";
+      description = "Absolute path to the TLS certificate PEM file for the proxy listener.";
+    };
+
+    proxyTlsKeyPath = mkOption {
+      type = types.str;
+      default = defaults.proxy.tlsKeyPath;
+      example = "/var/lib/procurator-worker/tls/server.key";
+      description = "Absolute path to the TLS private key PEM file for the proxy listener.";
+    };
+
+    proxyJwtHs256Secret = mkOption {
+      type = types.str;
+      default = defaults.proxy.jwtHs256Secret;
+      example = "super-secret";
+      description = "Shared HS256 secret used to validate incoming proxy JWT bearer tokens.";
+    };
+
+    proxyUpstreamConnectTimeoutMillis = mkOption {
+      type = types.nullOr types.ints.positive;
+      default = defaults.proxy.timeouts.upstreamConnectTimeoutMillis;
+      example = 2000;
+      description = "Optional upstream connect timeout for proxy requests in milliseconds.";
+    };
+
+    proxyUpstreamRequestTimeoutMillis = mkOption {
+      type = types.nullOr types.ints.positive;
+      default = defaults.proxy.timeouts.upstreamRequestTimeoutMillis;
+      example = 30000;
+      description = "Optional upstream request timeout for proxy requests in milliseconds.";
     };
 
     master = mkOption {

@@ -23,8 +23,11 @@ libc = "0.2"
 # VMM dependencies
 hyper = { version = "0.14", features = ["client", "http1", "stream"] }
 hyperlocal = "0.8"
+tokio-rustls = "0.26"
+rustls-pemfile = "2"
 serde.workspace = true
 serde_json.workspace = true
+jsonwebtoken = "9"
 
 [lints]
 workspace = true

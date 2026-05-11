@@ -13,6 +13,17 @@ let
     listenAddr = "0.0.0.0:8080";
     masterAddr = "0.0.0.0:8081";
     healthTickMillis = 1000;
+    proxy = {
+      opencode_upstream_port = 4096;
+      publicListenAddr = "0.0.0.0:8443";
+      tlsCertPath = "/var/lib/procurator-worker/tls/server.crt";
+      tlsKeyPath = "/var/lib/procurator-worker/tls/server.key";
+      jwtHs256Secret = "change-me";
+      timeouts = {
+        upstreamConnectTimeoutMillis = null;
+        upstreamRequestTimeoutMillis = null;
+      };
+    };
 
     # worker/src/ch/factory.rs
     vmm = {
@@ -37,13 +48,26 @@ let
     listenAddr ? defaults.listenAddr,
     masterAddr ? defaults.masterAddr,
     healthTickMillis ? defaults.healthTickMillis,
+    proxy ? {},
     vmm ? {},
   }: let
+    resolvedProxy = defaults.proxy // proxy;
+    resolvedProxyTimeouts = defaults.proxy.timeouts // (resolvedProxy.timeouts or {});
     resolvedVmm = defaults.vmm // vmm;
   in {
-    listen_addr = listenAddr;
+    rpc_listen_addr = listenAddr;
     master_addr = masterAddr;
     health_tick_millis = healthTickMillis;
+    proxy = {
+      public_listen_addr = resolvedProxy.publicListenAddr;
+      tls_cert_path = resolvedProxy.tlsCertPath;
+      tls_key_path = resolvedProxy.tlsKeyPath;
+      jwt_hs256_secret = resolvedProxy.jwtHs256Secret;
+      timeouts = {
+        upstream_connect_timeout_millis = resolvedProxyTimeouts.upstreamConnectTimeoutMillis;
+        upstream_request_timeout_millis = resolvedProxyTimeouts.upstreamRequestTimeoutMillis;
+      };
+    };
     vmm = {
       binary_path = resolvedVmm.binaryPath;
       runtime_dir = resolvedVmm.runtimeDir;

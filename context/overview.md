@@ -1,39 +1,29 @@
-# Procurator Overview
+# Overview
 
-Declarative reproducible developer platform powered by Nix.
+## Current focus
+- `worker` now includes a **TLS-terminated path-based reverse proxy** for VM routes at `/vm/{id}/...`.
+- T02 implemented route extraction, VM registry lookup, URI rewrite to VM OpenCode upstream (`http://{vm_ip}:4096`), and response streaming passthrough.
+- T03 implemented proxy authn/authz gate using `Authorization: Bearer <jwt>` with HS256 verification and `vm_ids` membership checks before forwarding.
+- T04 implemented TLS listener wiring so proxy HTTPS and existing RPC listener run concurrently in the same worker process.
+- T05 implemented proxy request observability (`vm_id`, `upstream`, `status`, `latency_ms`, `auth_result`) and deterministic gateway timeout/error translation via configured upstream request timeout.
 
-## Core Purpose
-Procurator provides a declarative way to manage development environments and project stacks using Nix. The CLI tool `pcr` manages projects, repositories, and build environments.
+## Worker proxy status
+- Config supports distinct listeners:
+  - `rpc_listen_addr` (private worker RPC)
+  - `proxy.public_listen_addr` (public TLS proxy)
+- Proxy config includes TLS cert/key paths, JWT HS256 secret, and optional upstream timeout knobs.
+- Startup fails fast on invalid proxy config (missing TLS files, empty JWT secret, listener conflict).
+- Runtime proxy core behavior now available in `worker/src/proxy/core.rs`:
+  - extracts vm id from `/vm/{id}/...`
+  - requires `Authorization: Bearer <jwt>` and verifies HS256 signature using `proxy.jwt_hs256_secret`
+  - enforces VM-scoped authorization by checking `{id}` membership in JWT `vm_ids` claim
+  - strips `/vm/{id}` prefix before upstream dispatch
+  - resolves VM IP from worker registry and forwards to `http://{vm_ip}:4096`
+  - applies optional `proxy.timeouts.upstream_request_timeout_millis` during upstream dispatch
+  - streams upstream HTTP/SSE response body without buffering
+  - returns `401` for missing/invalid token, `403` for token lacking VM access, `404` for unknown VM id, and deterministic gateway class errors (`502` transport/build failures, `504` timeout)
+  - emits per-request logs with `vm_id`, `upstream`, `status`, `latency_ms`, and `auth_result`
 
-## Key Components
-- **CLI (`cli/`)**: Command-line interface with subcommands for VCS, stack management, and agent workspaces
-- **repo_outils (`repo_outils/`)**: Git and Nix utility functions used across the project
-- **autonix (`autonix/`)**: Nix-related automation and analysis tools
-- **repohub (`repohub/`)**: Repository hub service for project discovery
-- **control_plane (`control_plane/`)**: Central coordination service
-- **worker (`worker/`)**: Background job execution service
-- **ci_service (`ci_service/`)**: Continuous integration service
-- **cache (`cache/`)**: Caching service for build artifacts
-
-## CLI Namespaces (pcr)
-- `pcr vcs`: Version control operations (project/repo management)
-- `pcr stack`: Local project stack lifecycle
-- `pcr agents`: Workspace management for AI agents
-- `pcr init`: Initialize workspace
-
-## Technology Stack
-- **Language**: Rust (edition 2024)
-- **Build tool**: Cargo with workspace structure
-- **Git operations**: git2 (Rust bindings with vendored libgit2)
-- **Nix integration**: Flake-based configurations
-- **Async runtime**: Tokio
-- **CLI framework**: Clap with derive macros
-
-## Current State (as of T10)
-- VCS commands are implemented for `pcr vcs repo`, `pcr vcs project`, and `pcr vcs agent`.
-- Project operations support submodules with selective `--repos` / `--exclude` filtering.
-- Repo push supports optional Nix cache upload when cache URL is configured in flake settings.
-- Branch operations exist for repo and project flows (`project branch` remains a guided/manual stub path).
-- Agent workspace prepare/list commands are implemented with co-located workspaces at `<project-dir>/agents/<branch>/`.
-- Local clone acceleration is enabled through bare mirror cache references at `~/.cache/procurator/repo-cache/`.
-- VCS command handlers emit execution timing logs (e.g. `... completed in ...`) for operational visibility.
+## See also
+- [architecture.md](./architecture.md)
+- [worker/public-proxy.md](./worker/public-proxy.md)
