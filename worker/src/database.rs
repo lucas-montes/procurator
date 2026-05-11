@@ -41,7 +41,7 @@ impl Database {
              VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(ip_value) DO UPDATE SET vm_id = ?4, mac = ?3",
         )
-        .bind(u32::from(ip) as i64)
+        .bind(i64::from(u32::from(ip)))
         .bind(ip.to_string())
         .bind(mac)
         .bind(vm_id)
@@ -50,7 +50,7 @@ impl Database {
         Ok(())
     }
 
-    /// Mark the slot as free (is_used = 0) so it can be reused by the next VM.
+    /// Mark the slot as free (`is_used` = 0) so it can be reused by the next VM.
     pub async fn release_ip(&self, vm_id: &str) -> Result<(), sqlx::Error> {
         sqlx::query("UPDATE ip_leases SET vm_id = NULL WHERE vm_id = ?1")
             .bind(vm_id)
@@ -59,7 +59,7 @@ impl Database {
         Ok(())
     }
 
-    /// Return a free previously-used IP slot if one exists (lowest ip_value first).
+    /// Return a free previously-used IP slot if one exists (lowest `ip_value` first).
     pub async fn first_free_ip(&self) -> Result<Option<Ipv4Addr>, sqlx::Error> {
         let row: Option<String> = sqlx::query_scalar(
             "SELECT ip FROM ip_leases WHERE vm_id IS NULL ORDER BY ip_value ASC LIMIT 1",

@@ -16,8 +16,8 @@ impl IpLease {
     fn new(ip: Ipv4Addr, mask: Ipv4Addr) -> Self {
         Self {
             mac: mac_from_ip(ip),
-            ip: ip,
-            mask: mask,
+            ip,
+            mask,
         }
     }
 

@@ -69,7 +69,7 @@ impl<F: Factory> Supervisor<F> {
             // maybe save the config in sqlite
             tracing::error!(id = %id, error = %err, "Failed to start VM");
             return;
-        };
+        }
 
         tracing::info!(id = %id, "VM started successfully");
 

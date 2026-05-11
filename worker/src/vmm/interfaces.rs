@@ -39,9 +39,9 @@ pub enum HandleError {
 impl std::fmt::Display for HandleError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            HandleError::Start(msg) => write!(f, "start failed: {}", msg),
-            HandleError::Cleanup(msg) => write!(f, "cleanup failed: {}", msg),
-            HandleError::Backup(msg) => write!(f, "backup failed: {}", msg),
+            HandleError::Start(msg) => write!(f, "start failed: {msg}"),
+            HandleError::Cleanup(msg) => write!(f, "cleanup failed: {msg}"),
+            HandleError::Backup(msg) => write!(f, "backup failed: {msg}"),
         }
     }
 }

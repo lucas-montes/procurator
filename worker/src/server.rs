@@ -82,7 +82,7 @@ impl<F: Factory> commands::worker_capnp::worker::Server<F::BackendConfig> for Se
 
             let vm_spec = request
                 .get()
-                .and_then(|r| r.get_spec())
+                .and_then(commands::worker_capnp::worker::create_vm_params::Reader::get_spec)
                 .inspect_err(|err| {
                     error!(
                         ?err,
@@ -135,9 +135,12 @@ impl<F: Factory> commands::worker_capnp::worker::Server<F::BackendConfig> for Se
 
         capnp::capability::Promise::from_future(async move {
             debug!("Received delete_vm RPC request");
-            let vm_id = request.get().and_then(|r| r.get_id()).inspect_err(|err| {
-                error!(?err, "Invalid delete_vm RPC payload: missing id");
-            })?;
+            let vm_id = request
+                .get()
+                .and_then(commands::worker_capnp::worker::delete_vm_params::Reader::get_id)
+                .inspect_err(|err| {
+                    error!(?err, "Invalid delete_vm RPC payload: missing id");
+                })?;
 
             let vm_id = vm_id.to_string().map_err(|err| {
                 error!(?err, "Invalid delete_vm id: non-UTF8 text");
@@ -175,10 +178,14 @@ impl<F: Factory> commands::worker_capnp::worker::Server<F::BackendConfig> for Se
         capnp::capability::Promise::from_future(async move {
             let data = state.get().await;
 
-            let mut vms = response.get().init_vms(data.len() as u32);
+            let mut vms = response
+                .get()
+                .init_vms(u32::try_from(data.len()).expect("len fits in u32"));
 
             for (index, (vm_id, handle)) in data.iter().enumerate() {
-                let mut vm = vms.reborrow().get(index as u32);
+                let mut vm = vms
+                    .reborrow()
+                    .get(u32::try_from(index).expect("index fits in u32"));
                 vm.set_id(vm_id);
                 vm.set_worker_id(&worker_id);
                 vm.set_desired_hash("");
@@ -213,7 +220,7 @@ impl<F: Factory> commands::worker_capnp::worker::Server<F::BackendConfig> for Se
         capnp::capability::Promise::from_future(async move {
             let vm_id = request
                 .get()
-                .and_then(|r| r.get_id())
+                .and_then(commands::worker_capnp::worker::pause_vm_params::Reader::get_id)
                 .inspect_err(|err| error!(?err, "Invalid pause_vm RPC payload: missing id"))?
                 .to_str()
                 .map_err(|err| {
@@ -248,7 +255,7 @@ impl<F: Factory> commands::worker_capnp::worker::Server<F::BackendConfig> for Se
         capnp::capability::Promise::from_future(async move {
             let vm_id = request
                 .get()
-                .and_then(|r| r.get_id())
+                .and_then(commands::worker_capnp::worker::resume_vm_params::Reader::get_id)
                 .inspect_err(|err| error!(?err, "Invalid pause_vm RPC payload: missing id"))?
                 .to_str()
                 .map_err(|err| {
@@ -416,7 +423,7 @@ impl<F: Factory> commands::worker_capnp::worker::Server<F::BackendConfig> for Se
 
             worker.set_healthy(healthy);
             worker.set_generation(0);
-            worker.set_running_vms(data.len() as u32);
+            worker.set_running_vms(u32::try_from(data.len()).expect("len fits in u32"));
 
             let mut resources = worker.reborrow().init_available_resources();
             resources.set_cpu(0.0);

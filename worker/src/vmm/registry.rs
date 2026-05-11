@@ -14,7 +14,7 @@ pub struct Unitiliazed;
 
 /// The State holding the information about what is running and other persistent stuff that I need to think about.
 /// How could I have some typeshit that would prevent writing into the hashmap?
-/// MAybe the registry could hold the factory?
+/// Maybe the registry could hold the factory?
 pub struct Registry<F: Factory, Side = Unitiliazed> {
     persistent: Database,
     ephemeral: Arc<RwLock<HashMap<String, F::VmHandle>>>,
