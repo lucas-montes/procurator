@@ -3,7 +3,7 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
-    procurator.url = "path:../..";
+    procurator.url = "path:../../..";
   };
 
   outputs = {
