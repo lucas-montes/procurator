@@ -43,12 +43,11 @@ impl<F: Factory> Config<F> {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProxyConfig {
-    pub opencode_upstream_port: u16,
     pub public_listen_addr: SocketAddr,
     pub tls_cert_path: PathBuf,
     pub tls_key_path: PathBuf,
     pub jwt_hs256_secret: String,
-    pub timeouts: ProxyTimeouts,
+    pub upstream_request_timeout_millis: NonZeroU64,
 }
 
 impl ProxyConfig {
@@ -60,9 +59,6 @@ impl ProxyConfig {
             });
         }
 
-        validate_path_exists(&self.tls_cert_path, "proxy.tls_cert_path")?;
-        validate_path_exists(&self.tls_key_path, "proxy.tls_key_path")?;
-
         if self.jwt_hs256_secret.trim().is_empty() {
             return Err(ConfigError::EmptyProxyJwtSecret);
         }
@@ -71,21 +67,11 @@ impl ProxyConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct ProxyTimeouts {
-    pub upstream_connect_timeout_millis: Option<NonZeroU64>,
-    pub upstream_request_timeout_millis: Option<NonZeroU64>,
-}
-
 #[derive(Debug)]
 enum ConfigError {
     ListenerConflict {
         rpc_listen_addr: SocketAddr,
         proxy_listen_addr: SocketAddr,
-    },
-    MissingPath {
-        field: &'static str,
-        path: PathBuf,
     },
     EmptyProxyJwtSecret,
 }
@@ -100,9 +86,6 @@ impl std::fmt::Display for ConfigError {
                 f,
                 "rpc and proxy listeners must be different (rpc: {rpc_listen_addr}, proxy: {proxy_listen_addr})"
             ),
-            ConfigError::MissingPath { field, path } => {
-                write!(f, "{field} does not exist: {}", path.display())
-            }
             ConfigError::EmptyProxyJwtSecret => {
                 write!(f, "proxy.jwt_hs256_secret must not be empty")
             }
@@ -110,40 +93,20 @@ impl std::fmt::Display for ConfigError {
     }
 }
 
-fn validate_path_exists(path: &Path, field: &'static str) -> Result<(), ConfigError> {
-    if path.exists() {
-        Ok(())
-    } else {
-        Err(ConfigError::MissingPath {
-            field,
-            path: path.to_path_buf(),
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{net::SocketAddr, path::PathBuf};
 
-    use super::{ProxyConfig, ProxyTimeouts};
+    use super::ProxyConfig;
 
     fn proxy_config() -> ProxyConfig {
         ProxyConfig {
-            opencode_upstream_port: 4096,
             public_listen_addr: "0.0.0.0:8443".parse().expect("valid socket addr"),
             tls_cert_path: PathBuf::from("/tmp/procurator2-worker-test-cert.pem"),
             tls_key_path: PathBuf::from("/tmp/procurator2-worker-test-key.pem"),
             jwt_hs256_secret: "super-secret".to_string(),
-            timeouts: ProxyTimeouts::default(),
+            upstream_request_timeout_millis: std::num::NonZeroU64::new(30_000).expect("non-zero"),
         }
-    }
-
-    fn create_temp_file(path: &PathBuf) {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).expect("create test directory");
-        }
-
-        std::fs::write(path, "test").expect("write temp file");
     }
 
     #[test]
@@ -152,22 +115,7 @@ mod tests {
         let addr: SocketAddr = "127.0.0.1:8443".parse().expect("valid socket addr");
         proxy.public_listen_addr = addr;
 
-        create_temp_file(&proxy.tls_cert_path);
-        create_temp_file(&proxy.tls_key_path);
-
         let result = proxy.validate(addr);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn rejects_missing_tls_paths() {
-        let mut proxy = proxy_config();
-        proxy.tls_cert_path = PathBuf::from("/tmp/procurator2-missing-cert.pem");
-        proxy.tls_key_path = PathBuf::from("/tmp/procurator2-missing-key.pem");
-
-        let rpc_addr: SocketAddr = "127.0.0.1:8080".parse().expect("valid socket addr");
-        let result = proxy.validate(rpc_addr);
-
         assert!(result.is_err());
     }
 
@@ -175,9 +123,6 @@ mod tests {
     fn rejects_empty_jwt_secret() {
         let mut proxy = proxy_config();
         proxy.jwt_hs256_secret = "   ".to_string();
-
-        create_temp_file(&proxy.tls_cert_path);
-        create_temp_file(&proxy.tls_key_path);
 
         let rpc_addr: SocketAddr = "127.0.0.1:8080".parse().expect("valid socket addr");
         let result = proxy.validate(rpc_addr);

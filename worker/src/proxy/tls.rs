@@ -16,7 +16,7 @@ use crate::{
     vmm::{Factory, Reader, Registry},
 };
 
-use super::{ProxyRuntimeSettings, proxy_vm_request};
+use super::{OPENCODE_UPSTREAM_PORT, ProxyRuntimeSettings, proxy_vm_request};
 
 /// # Errors
 ///
@@ -27,16 +27,12 @@ use super::{ProxyRuntimeSettings, proxy_vm_request};
 pub async fn serve_tls_proxy<F: Factory>(
     proxy_config: ProxyConfig,
     registry: Registry<F, Reader>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let tls_config = load_tls_config(&proxy_config)?;
     let acceptor = TlsAcceptor::from(Arc::new(tls_config));
     let client: Client<HttpConnector, Body> = Client::new();
-    let opencode_upstream_port = proxy_config.opencode_upstream_port;
     let runtime_settings = ProxyRuntimeSettings::from_timeout_millis(
-        proxy_config
-            .timeouts
-            .upstream_request_timeout_millis
-            .map(std::num::NonZero::get),
+        proxy_config.upstream_request_timeout_millis.get(),
     );
 
     let listener = TcpListener::bind(proxy_config.public_listen_addr)
@@ -61,7 +57,7 @@ pub async fn serve_tls_proxy<F: Factory>(
         let client = client.clone();
         let jwt_hs256_secret = proxy_config.jwt_hs256_secret.clone();
 
-        task::spawn_local(async move {
+        task::spawn(async move {
             let Ok(tls_stream) = acceptor.accept(stream).await else {
                 error!(peer_addr = %peer_addr, "TLS handshake failed for proxy client");
                 return;
@@ -78,8 +74,8 @@ pub async fn serve_tls_proxy<F: Factory>(
                             &client,
                             &jwt_hs256_secret,
                             request,
+                            OPENCODE_UPSTREAM_PORT,
                             runtime_settings,
-                            opencode_upstream_port,
                         )
                         .await,
                     )
@@ -149,7 +145,6 @@ mod tests {
     };
 
     use super::*;
-    use crate::config::ProxyTimeouts;
 
     fn temp_file_path(prefix: &str) -> std::path::PathBuf {
         let nanos = SystemTime::now()
@@ -162,12 +157,11 @@ mod tests {
     #[test]
     fn rejects_missing_cert_file() {
         let config = ProxyConfig {
-            opencode_upstream_port: 4096,
             public_listen_addr: SocketAddr::from(([127, 0, 0, 1], 8443)),
             tls_cert_path: std::path::PathBuf::from("/tmp/procurator2-missing-cert-file.pem"),
             tls_key_path: std::path::PathBuf::from("/tmp/procurator2-missing-key-file.pem"),
             jwt_hs256_secret: "secret".to_string(),
-            timeouts: ProxyTimeouts::default(),
+            upstream_request_timeout_millis: std::num::NonZeroU64::new(30_000).expect("non-zero"),
         };
 
         let result = load_tls_config(&config);
@@ -186,12 +180,11 @@ mod tests {
         writeln!(key_file, "not a key").expect("write key file");
 
         let config = ProxyConfig {
-            opencode_upstream_port: 4096,
             public_listen_addr: SocketAddr::from(([127, 0, 0, 1], 8443)),
             tls_cert_path: cert_path.clone(),
             tls_key_path: key_path.clone(),
             jwt_hs256_secret: "secret".to_string(),
-            timeouts: ProxyTimeouts::default(),
+            upstream_request_timeout_millis: std::num::NonZeroU64::new(30_000).expect("non-zero"),
         };
 
         let result = load_tls_config(&config);

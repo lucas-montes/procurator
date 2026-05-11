@@ -1,7 +1,7 @@
 mod ch;
 mod config;
 mod database;
-pub mod proxy;
+mod proxy;
 mod server;
 mod vmm;
 
@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 
 use proxy::serve_tls_proxy;
 use server::Server;
-use tokio::join;
+use tokio::select;
 use tokio::task;
 
 use tracing::debug;
@@ -53,31 +53,15 @@ async fn run<F: Factory>(
     let server = Server::new(reader_registry.clone(), factory, tx, rpc_listen_addr);
     let supervisor = Supervisor::new(writer_registry, rx);
 
+    let supervisor_task = task::spawn(supervisor.run(health_tick_millis));
+    let proxy_task = task::spawn(serve_tls_proxy(proxy_config, reader_registry));
+
     let local_set = task::LocalSet::new();
-    local_set
-        .run_until(async move {
-            let rpc_task = task::spawn_local(server.serve(rpc_listen_addr));
-            let proxy_task = task::spawn_local(serve_tls_proxy(proxy_config, reader_registry));
-            let supervisor_task = task::spawn(supervisor.run(health_tick_millis));
+    let rpc_handle = local_set.spawn_local(server.serve(rpc_listen_addr));
 
-            let (supervisor_result, rpc_result, proxy_result) =
-                join!(supervisor_task, rpc_task, proxy_task);
-
-            if let Err(err) = supervisor_result {
-                tracing::error!(?err, "Worker supervisor task panicked");
-            }
-
-            match rpc_result {
-                Ok(Ok(())) => tracing::info!("Worker RPC server stopped gracefully"),
-                Ok(Err(err)) => tracing::error!(?err, "Worker RPC server failed"),
-                Err(err) => tracing::error!(?err, "Worker RPC server task panicked"),
-            }
-
-            match proxy_result {
-                Ok(Ok(())) => tracing::info!("Worker proxy server stopped gracefully"),
-                Ok(Err(err)) => tracing::error!(?err, "Worker proxy server failed"),
-                Err(err) => tracing::error!(?err, "Worker proxy server task panicked"),
-            }
-        })
-        .await;
+    select! {
+        res = supervisor_task => tracing::error!(?res, "supervisor exited"),
+        res = proxy_task      => tracing::error!(?res, "proxy exited"),
+        res = local_set.run_until(rpc_handle) => tracing::error!(?res, "rpc exited"),
+    }
 }

@@ -189,6 +189,22 @@
               ip route replace default via "$GW" dev eth0
             '';
           };
+
+          # OpenCode API Server - starts after network is configured by procurator-netcfg.
+          opencode-server = {
+            description = "OpenCode API Server";
+            wantedBy = ["multi-user.target"];
+            after = ["procurator-netcfg.service"];
+            path = [pkgs.opencode pkgs.gawk];
+            script = ''
+              echo "opencode-server: no procurator.opencode-password in cmdline, starting without auth"
+              exec ${pkgs.opencode}/bin/opencode serve --hostname 0.0.0.0 --port 4096
+            '';
+            serviceConfig = {
+              Type = "simple";
+              Restart = "always";
+            };
+          };
         };
         # Extra packages
         environment.systemPackages = extraPackages;
