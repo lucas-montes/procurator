@@ -198,7 +198,7 @@
             path = [pkgs.opencode pkgs.gawk];
             script = ''
               echo "opencode-server: no procurator.opencode-password in cmdline, starting without auth"
-              exec ${pkgs.opencode}/bin/opencode serve --hostname 0.0.0.0 --port 4096
+              exec ${pkgs.opencode}/bin/opencode web --port 4096 --hostname 0.0.0.0
             '';
             serviceConfig = {
               Type = "simple";

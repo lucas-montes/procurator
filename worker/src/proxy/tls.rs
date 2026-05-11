@@ -47,7 +47,7 @@ pub async fn serve_tls_proxy<F: Factory>(
 
     info!(
         addr = %proxy_config.public_listen_addr,
-        "Starting worker proxy TLS listener"
+        "Starting worker's proxy TLS server"
     );
 
     loop {

@@ -38,7 +38,7 @@ impl<F: Factory> Server<F> {
     ///
     #[instrument(skip(self))]
     pub async fn serve(self, addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
-        info!(addr = %addr, "Starting server");
+        info!(addr = %addr, "Starting worker's RPC server");
         let listener = tokio::net::TcpListener::bind(&addr)
             .await
             .inspect_err(|err| {
