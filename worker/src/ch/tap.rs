@@ -191,12 +191,23 @@ impl Tap<Initialized> {
         //                    are silently dropped on some kernel/CH combinations
         //                    (cloud-hypervisor#6550). Mirrors the working dev
         //                    launcher: `ip tuntap add ... mode tap vnet_hdr`.
-        let flags = libc::IFF_TAP | libc::IFF_NO_PI | libc::IFF_TUN_EXCL | libc::IFF_VNET_HDR;
+        // `ifru_flags` is `c_short` (i16) on Linux but the combined flag set
+        // (e.g. IFF_TUN_EXCL = 0x8000) sets the sign bit, so a checked
+        // `i16::try_from` overflows. Build the mask as u16 (truncating each
+        // libc constant down from c_int, exactly as a C compiler would when
+        // assigning to a `short` field) and reinterpret the bit pattern as
+        // i16 via `cast_signed()`. The kernel reads the field as a 16-bit
+        // flag word, so the bit pattern is what matters, not the signed
+        // value.
+        let flags: u16 = (libc::IFF_TAP as u16)
+            | (libc::IFF_NO_PI as u16)
+            | (libc::IFF_TUN_EXCL as u16)
+            | (libc::IFF_VNET_HDR as u16);
 
         let mut req = libc::ifreq {
             ifr_name: iface_name.0,
             ifr_ifru: libc::__c_anonymous_ifr_ifru {
-                ifru_flags: i16::try_from(flags).expect("IFF_TAP and friends fit in i16"),
+                ifru_flags: flags.cast_signed(),
             },
         };
 
