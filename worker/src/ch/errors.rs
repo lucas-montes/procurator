@@ -9,10 +9,10 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::Communication(msg) => write!(f, "Communication error: {}", msg),
-            Error::OperationFailed(msg) => write!(f, "Operation failed: {}", msg),
-            Error::Serialization(err) => write!(f, "Serialization error: {}", err),
-            Error::Io(err) => write!(f, "IO error: {}", err),
+            Error::Communication(msg) => write!(f, "Communication error: {msg}"),
+            Error::OperationFailed(msg) => write!(f, "Operation failed: {msg}"),
+            Error::Serialization(err) => write!(f, "Serialization error: {err}"),
+            Error::Io(err) => write!(f, "IO error: {err}"),
         }
     }
 }

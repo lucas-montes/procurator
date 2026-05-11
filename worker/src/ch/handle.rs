@@ -79,18 +79,17 @@ impl Handle {
             warn!(vm_id = %self.vm_id, error = %err, "Failed to release IP lease");
         }
 
-        if let Some(socket_path) = socket_path {
-            if socket_path.exists() {
-                if let Err(err) = tokio::fs::remove_file(&socket_path).await {
-                    error!(path = %socket_path.display(), error = %err, "Failed to remove CH socket file");
-                };
-            }
+        if let Some(socket_path) = socket_path
+            && socket_path.exists()
+            && let Err(err) = tokio::fs::remove_file(&socket_path).await
+        {
+            error!(path = %socket_path.display(), error = %err, "Failed to remove CH socket file");
         }
         // Remove the entire per-VM working directory (writable disk, serial log, etc.)
-        if self.vm_dir.exists() {
-            if let Err(err) = tokio::fs::remove_dir_all(&self.vm_dir).await {
-                error!(path = %self.vm_dir.display(), error = %err, "Failed to remove CH self.vm_dir");
-            };
+        if self.vm_dir.exists()
+            && let Err(err) = tokio::fs::remove_dir_all(&self.vm_dir).await
+        {
+            error!(path = %self.vm_dir.display(), error = %err, "Failed to remove CH self.vm_dir");
         }
 
         self.child

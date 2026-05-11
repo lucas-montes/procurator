@@ -8,8 +8,10 @@ use tracing::debug;
 /// (e.g. `8`). Used by `VmConfigRef::apply_runtime_network` to emit the
 /// standalone `procurator.pfx=<n>` token; the in-image `procurator-netcfg`
 /// unit recombines it with the IP (`ip addr add <ip>/<pfx>`) before applying.
-fn netmask_to_prefix(mask: &Ipv4Addr) -> u8 {
-    u32::from_be_bytes(mask.octets()).count_ones() as u8
+fn netmask_to_prefix(mask: Ipv4Addr) -> u8 {
+    // SAFETY: count_ones on a u32 is always 0..=32, which fits in u8.
+    u8::try_from(u32::from_be_bytes(mask.octets()).count_ones())
+        .expect("count_ones of IPv4 netmask fits in u8")
 }
 
 //TODO: we should use more types to know if we are receiving it from the server or using it for the client
@@ -100,7 +102,7 @@ impl<'a> VmConfigRef<'a> {
     ///
     /// 1. **Cmdline** — append three independent runtime tokens:
     ///    ```text
-    ///      <base> procurator.ip=<ip> procurator.gw=<gw> procurator.pfx=<prefix>
+    ///     <base> procurator.ip=<ip> procurator.gw=<gw> procurator.pfx=<prefix>
     ///    ```
     ///    This is a contract with the in-image `procurator-netcfg` systemd
     ///    unit (see `nix/lib/diskVm.nix`), which parses `/proc/cmdline` and
@@ -129,9 +131,9 @@ impl<'a> VmConfigRef<'a> {
     ///    redirected to the per-VM `serial.log`.
     pub fn finalize_for_runtime(
         mut self,
-        ip: &Ipv4Addr,
-        gateway: &Ipv4Addr,
-        mask: &Ipv4Addr,
+        ip: Ipv4Addr,
+        gateway: Ipv4Addr,
+        mask: Ipv4Addr,
         writable_disk_path: &'a str,
         serial_log_path: &'a str,
         network: NetConfigRef<'a>,
@@ -393,9 +395,9 @@ mod tests {
         let config = make_vm_config("/original/disk.raw", None);
 
         let finalized = config.finalize_for_runtime(
-            &Ipv4Addr::new(10, 0, 0, 2),
-            &Ipv4Addr::new(10, 0, 0, 1),
-            &Ipv4Addr::new(255, 0, 0, 0),
+            Ipv4Addr::new(10, 0, 0, 2),
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(255, 0, 0, 0),
             "/runtime/overlay.qcow2",
             "/var/log/serial.log",
             NetConfigRef::new("tap0", "02:00:00:00:00:01"),
@@ -489,17 +491,13 @@ mod tests {
     #[test]
     fn netmask_to_prefix_common_masks() {
         use std::net::Ipv4Addr;
-        assert_eq!(super::netmask_to_prefix(&Ipv4Addr::new(255, 0, 0, 0)), 8);
-        assert_eq!(super::netmask_to_prefix(&Ipv4Addr::new(255, 255, 0, 0)), 16);
+        assert_eq!(super::netmask_to_prefix(Ipv4Addr::BROADCAST), 32);
+        assert_eq!(super::netmask_to_prefix(Ipv4Addr::new(255, 255, 0, 0)), 16);
         assert_eq!(
-            super::netmask_to_prefix(&Ipv4Addr::new(255, 255, 255, 0)),
+            super::netmask_to_prefix(Ipv4Addr::new(255, 255, 255, 0)),
             24
         );
-        assert_eq!(
-            super::netmask_to_prefix(&Ipv4Addr::new(255, 255, 255, 255)),
-            32
-        );
-        assert_eq!(super::netmask_to_prefix(&Ipv4Addr::new(0, 0, 0, 0)), 0);
+        assert_eq!(super::netmask_to_prefix(Ipv4Addr::UNSPECIFIED), 0);
     }
 
     #[test]
@@ -510,9 +508,9 @@ mod tests {
         config.payload.cmdline = base.to_string();
 
         let finalized = config.finalize_for_runtime(
-            &Ipv4Addr::new(10, 0, 0, 2),
-            &Ipv4Addr::new(10, 0, 0, 1),
-            &Ipv4Addr::new(255, 0, 0, 0),
+            Ipv4Addr::new(10, 0, 0, 2),
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(255, 0, 0, 0),
             "/runtime/disk.img",
             "/runtime/serial.log",
             NetConfigRef::new("tap0", "02:00:00:00:00:01"),
@@ -547,9 +545,9 @@ mod tests {
         config.payload.cmdline = "BASE".to_string();
 
         let finalized = config.finalize_for_runtime(
-            &Ipv4Addr::new(10, 0, 0, 11),
-            &Ipv4Addr::new(10, 0, 0, 1),
-            &Ipv4Addr::new(255, 0, 0, 0),
+            Ipv4Addr::new(10, 0, 0, 11),
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(255, 0, 0, 0),
             "/runtime/disk.img",
             "/runtime/serial.log",
             NetConfigRef::new("tap0", "02:00:00:00:00:01"),
