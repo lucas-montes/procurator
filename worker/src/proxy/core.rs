@@ -11,6 +11,14 @@ use tokio::time;
 
 use crate::vmm::{Factory, Handle, Reader, Registry};
 
+/// TCP port on which `opencode serve` listens inside every guest image.
+///
+/// This is fixed by the in-image systemd unit (`opencode-server` in
+/// `nix/lib/diskVm.nix`) which invokes `opencode serve --port 4096`.
+/// Changing this requires rebuilding the VM image, so it is not a runtime
+/// configuration knob.
+pub const OPENCODE_UPSTREAM_PORT: u16 = 4096;
+
 #[derive(Debug, Deserialize)]
 struct ProxyJwtClaims {
     vm_ids: Vec<String>,
@@ -18,8 +26,8 @@ struct ProxyJwtClaims {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VmProxyRoute {
-    pub vm_id: String,
-    pub upstream_path_and_query: String,
+    vm_id: String,
+    upstream_path_and_query: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,70 +78,20 @@ pub fn extract_vm_proxy_route(path_and_query: &str) -> Result<VmProxyRoute, Prox
     })
 }
 
-/// # Errors
-///
-/// Returns [`hyper::http::Error`] if the URI cannot be constructed.
-pub fn build_upstream_uri(
-    vm_ip: &str,
-    path_and_query: &str,
-    port: u16,
-) -> Result<Uri, hyper::http::Error> {
-    Uri::builder()
-        .scheme("http")
-        .authority(format!("{vm_ip}:{port}"))
-        .path_and_query(path_and_query)
-        .build()
-}
-
-pub async fn lookup_vm_ip<F: Factory>(
-    registry: &Registry<F, Reader>,
-    vm_id: &str,
-) -> Option<String> {
-    let guard = registry.clone().get().await;
-    guard.get(vm_id).map(|handle| handle.ip().to_string())
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct ProxyRuntimeSettings {
-    pub upstream_request_timeout: Option<Duration>,
+    upstream_request_timeout: Duration,
 }
 
 impl ProxyRuntimeSettings {
-    pub fn from_timeout_millis(upstream_request_timeout_millis: Option<u64>) -> Self {
+    pub fn from_timeout_millis(upstream_request_timeout_millis: u64) -> Self {
         Self {
-            upstream_request_timeout: upstream_request_timeout_millis.map(Duration::from_millis),
+            upstream_request_timeout: Duration::from_millis(upstream_request_timeout_millis),
         }
     }
 }
 
-pub fn map_upstream_error(err: &hyper::Error) -> StatusCode {
-    if err.is_timeout() {
-        StatusCode::GATEWAY_TIMEOUT
-    } else {
-        StatusCode::BAD_GATEWAY
-    }
-}
-
 pub async fn proxy_vm_request<F: Factory>(
-    registry: &Registry<F, Reader>,
-    client: &Client<HttpConnector, Body>,
-    jwt_hs256_secret: &str,
-    request: Request<Body>,
-    settings: ProxyRuntimeSettings,
-    opencode_upstream_port: u16,
-) -> Response<Body> {
-    proxy_vm_request_with_port(
-        registry,
-        client,
-        jwt_hs256_secret,
-        request,
-        opencode_upstream_port,
-        settings,
-    )
-    .await
-}
-
-async fn proxy_vm_request_with_port<F: Factory>(
     registry: &Registry<F, Reader>,
     client: &Client<HttpConnector, Body>,
     jwt_hs256_secret: &str,
@@ -149,134 +107,159 @@ async fn proxy_vm_request_with_port<F: Factory>(
             .path_and_query()
             .map_or(request.uri().path(), |pq| pq.as_str()),
     ) else {
-        let response = simple_error_response(StatusCode::NOT_FOUND, "vm route not found");
-        log_proxy_result(
-            "-",
-            "-",
-            response.status(),
-            started_at.elapsed(),
-            "route_not_found",
+        let status = StatusCode::NOT_FOUND;
+        let latency_ms =
+            u64::try_from(started_at.elapsed().as_millis()).expect("latency fits in u64");
+        tracing::warn!(
+            vm_id = "-",
+            upstream = "-",
+            %status,
+            latency_ms,
+            auth_result = "route_not_found",
+            "Handled proxy request"
         );
-        return response;
+        return simple_error_response(status, "vm route not found");
     };
 
     let auth_result = match authorize_vm_access(request.headers(), jwt_hs256_secret, &route.vm_id) {
         AuthzOutcome::Authorized => "authorized",
         AuthzOutcome::MissingOrInvalidToken => {
-            let response =
-                simple_error_response(StatusCode::UNAUTHORIZED, "missing or invalid token");
-            log_proxy_result(
-                &route.vm_id,
-                "-",
-                response.status(),
-                started_at.elapsed(),
-                "missing_or_invalid_token",
+            let status = StatusCode::UNAUTHORIZED;
+            let latency_ms =
+                u64::try_from(started_at.elapsed().as_millis()).expect("latency fits in u64");
+            tracing::warn!(
+                vm_id = %route.vm_id,
+                upstream = "-",
+                %status,
+                latency_ms,
+                auth_result = "missing_or_invalid_token",
+                "Handled proxy request"
             );
-            return response;
+            return simple_error_response(status, "missing or invalid token");
         }
         AuthzOutcome::ForbiddenForVm => {
-            let response = simple_error_response(StatusCode::FORBIDDEN, "forbidden for vm");
-            log_proxy_result(
-                &route.vm_id,
-                "-",
-                response.status(),
-                started_at.elapsed(),
-                "forbidden_for_vm",
+            let status = StatusCode::FORBIDDEN;
+            let latency_ms =
+                u64::try_from(started_at.elapsed().as_millis()).expect("latency fits in u64");
+            tracing::warn!(
+                vm_id = %route.vm_id,
+                upstream = "-",
+                %status,
+                latency_ms,
+                auth_result = "forbidden_for_vm",
+                "Handled proxy request"
             );
-            return response;
+            return simple_error_response(status, "forbidden for vm");
         }
     };
 
-    let Some(vm_ip) = lookup_vm_ip(registry, &route.vm_id).await else {
-        let response = simple_error_response(StatusCode::NOT_FOUND, "unknown vm id");
-        log_proxy_result(
-            &route.vm_id,
-            "-",
-            response.status(),
-            started_at.elapsed(),
+    let registry = registry.clone().get().await;
+    let vm_ip = registry.get(&route.vm_id).map(|handle| handle.ip());
+
+    let Some(vm_ip) = vm_ip else {
+        let status = StatusCode::NOT_FOUND;
+        let latency_ms =
+            u64::try_from(started_at.elapsed().as_millis()).expect("latency fits in u64");
+        tracing::warn!(
+            vm_id = %route.vm_id,
+            upstream = "-",
+            %status,
+            latency_ms,
             auth_result,
+            "Handled proxy request"
         );
-        return response;
+        return simple_error_response(status, "unknown vm id");
     };
 
-    let upstream_target = format!(
-        "http://{vm_ip}:{upstream_port}{}",
-        route.upstream_path_and_query
-    );
-
-    let Ok(upstream_uri) =
-        build_upstream_uri(&vm_ip, &route.upstream_path_and_query, upstream_port)
+    let Ok(upstream_uri) = Uri::builder()
+        .scheme("http")
+        .authority(format!("{vm_ip}:{upstream_port}"))
+        .path_and_query(route.upstream_path_and_query.as_str())
+        .build()
     else {
-        let response =
-            simple_error_response(StatusCode::BAD_GATEWAY, "failed to build upstream uri");
-        log_proxy_result(
-            &route.vm_id,
-            &upstream_target,
-            response.status(),
-            started_at.elapsed(),
+        let status = StatusCode::BAD_GATEWAY;
+        let latency_ms =
+            u64::try_from(started_at.elapsed().as_millis()).expect("latency fits in u64");
+        tracing::error!(
+            vm_id = %route.vm_id,
+            vm_ip,
+            upstream_port,
+            path_and_query = %route.upstream_path_and_query,
+            %status,
+            latency_ms,
             auth_result,
+            "Handled proxy request"
         );
-        return response;
+        return simple_error_response(status, "failed to build upstream uri");
     };
 
     *request.uri_mut() = upstream_uri;
-
     request.headers_mut().remove(hyper::header::HOST);
 
-    let upstream_response = if let Some(timeout) = settings.upstream_request_timeout {
-        if let Ok(result) = time::timeout(timeout, client.request(request)).await {
-            result
-        } else {
-            let response =
-                simple_error_response(StatusCode::GATEWAY_TIMEOUT, "upstream request timed out");
-            log_proxy_result(
-                &route.vm_id,
-                &upstream_target,
-                response.status(),
-                started_at.elapsed(),
+    let upstream_response = match time::timeout(
+        settings.upstream_request_timeout,
+        client.request(request),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => {
+            let status = StatusCode::GATEWAY_TIMEOUT;
+            let latency_ms =
+                u64::try_from(started_at.elapsed().as_millis()).expect("latency fits in u64");
+            tracing::warn!(
+                vm_id = %route.vm_id,
+                vm_ip,
+                upstream_port,
+                path_and_query = %route.upstream_path_and_query,
+                %status,
+                latency_ms,
                 auth_result,
+                "Handled proxy request"
             );
-            return response;
+            return simple_error_response(status, "upstream request timed out");
         }
-    } else {
-        client.request(request).await
     };
 
     let response = match upstream_response {
         Ok(response) => response,
         Err(err) => {
-            let status = map_upstream_error(&err);
-            simple_error_response(status, "upstream request failed")
+            let status = if err.is_timeout() {
+                StatusCode::GATEWAY_TIMEOUT
+            } else {
+                StatusCode::BAD_GATEWAY
+            };
+            let latency_ms =
+                u64::try_from(started_at.elapsed().as_millis()).expect("latency fits in u64");
+            tracing::error!(
+                vm_id = %route.vm_id,
+                vm_ip,
+            upstream_port,
+            path_and_query = %route.upstream_path_and_query,
+                %status,
+                latency_ms,
+                auth_result,
+                ?err,
+                "Handled proxy request"
+            );
+            return simple_error_response(status, "upstream request failed");
         }
     };
 
-    log_proxy_result(
-        &route.vm_id,
-        &upstream_target,
-        response.status(),
-        started_at.elapsed(),
+    let status = response.status();
+    let latency_ms = u64::try_from(started_at.elapsed().as_millis()).expect("latency fits in u64");
+    tracing::info!(
+        vm_id = %route.vm_id,
+        vm_ip,
+            upstream_port,
+            path_and_query = %route.upstream_path_and_query,
+        %status,
+        latency_ms,
         auth_result,
+        "Handled proxy request"
     );
 
     response
-}
-
-
-fn log_proxy_result(
-    vm_id: &str,
-    upstream: &str,
-    status: StatusCode,
-    latency: Duration,
-    auth_result: &str,
-) {
-    tracing::info!(
-        vm_id = vm_id,
-        upstream = upstream,
-        status = status.as_u16(),
-        latency_ms = u64::try_from(latency.as_millis()).expect("latency fits in u64"),
-        auth_result = auth_result,
-        "Handled proxy request"
-    );
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -420,6 +403,8 @@ mod tests {
     }
 
     const TEST_PROXY_JWT_SECRET: &str = "proxy-secret";
+    /// Long enough that no non-timeout test will hit it.
+    const TEST_TIMEOUT_MILLIS: u64 = 60_000;
 
     impl crate::vmm::Factory for FakeFactory {
         type VmHandle = FakeVmHandle;
@@ -537,13 +522,13 @@ mod tests {
                 .expect("valid authorization header"),
         );
 
-        let response = proxy_vm_request_with_port(
+        let response = proxy_vm_request(
             &reader_registry,
             &client,
             TEST_PROXY_JWT_SECRET,
             request,
             upstream_addr.port(),
-            ProxyRuntimeSettings::from_timeout_millis(None),
+            ProxyRuntimeSettings::from_timeout_millis(TEST_TIMEOUT_MILLIS),
         )
         .await;
 
@@ -593,8 +578,8 @@ mod tests {
             &client,
             TEST_PROXY_JWT_SECRET,
             request,
-            ProxyRuntimeSettings::from_timeout_millis(None),
-            4096,
+            OPENCODE_UPSTREAM_PORT,
+            ProxyRuntimeSettings::from_timeout_millis(TEST_TIMEOUT_MILLIS),
         )
         .await;
 
@@ -634,8 +619,8 @@ mod tests {
             &client,
             TEST_PROXY_JWT_SECRET,
             request,
-            ProxyRuntimeSettings::from_timeout_millis(None),
-            4096,
+            OPENCODE_UPSTREAM_PORT,
+            ProxyRuntimeSettings::from_timeout_millis(TEST_TIMEOUT_MILLIS),
         )
         .await;
 
@@ -687,13 +672,13 @@ mod tests {
                 .expect("valid authorization header"),
         );
 
-        let response = proxy_vm_request_with_port(
+        let response = proxy_vm_request(
             &reader_registry,
             &client,
             TEST_PROXY_JWT_SECRET,
             request,
             upstream_addr.port(),
-            ProxyRuntimeSettings::from_timeout_millis(Some(50)),
+            ProxyRuntimeSettings::from_timeout_millis(50),
         )
         .await;
 
@@ -801,8 +786,8 @@ mod tests {
             &client,
             TEST_PROXY_JWT_SECRET,
             request,
-            ProxyRuntimeSettings::from_timeout_millis(None),
-                4096,
+            OPENCODE_UPSTREAM_PORT,
+            ProxyRuntimeSettings::from_timeout_millis(TEST_TIMEOUT_MILLIS),
         )
         .await;
 
@@ -842,8 +827,8 @@ mod tests {
             &client,
             TEST_PROXY_JWT_SECRET,
             request,
-            ProxyRuntimeSettings::from_timeout_millis(None),
-            4096,
+            OPENCODE_UPSTREAM_PORT,
+            ProxyRuntimeSettings::from_timeout_millis(TEST_TIMEOUT_MILLIS),
         )
         .await;
 
