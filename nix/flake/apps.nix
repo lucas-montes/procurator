@@ -211,6 +211,7 @@ let
   #   PCR_JWT_SECRET  HS256 secret              (default: dev "change-me")
   #   PCR_PROXY_HOST  Proxy hostname            (default: worker.local)
   #   PCR_PROXY_PORT  Proxy port                (default: 8443)
+  #   PCR_JWT_EXP     Token lifetime in seconds  (default: 86400 = 24h)
   worker-bootstrap-url-wrapper = pkgs.writeShellScriptBin "procurator-worker-bootstrap-url" ''
     set -euo pipefail
 
@@ -223,8 +224,16 @@ let
     SECRET="''${PCR_JWT_SECRET:-${devJwtSecret}}"
     PROXY_HOST="''${PCR_PROXY_HOST:-${devProxyHost}}"
     PROXY_PORT="''${PCR_PROXY_PORT:-${devProxyPort}}"
+    EXP_LIFETIME="''${PCR_JWT_EXP:-86400}"
 
-    ${mintJwtSnippet}
+    b64url() { ${pkgs.openssl}/bin/openssl base64 -A | tr -- '+/' '-_' | tr -d '='; }
+    HEADER=$(printf '%s' '{"alg":"HS256","typ":"JWT"}' | b64url)
+    EXP=$(( $(${pkgs.coreutils}/bin/date +%s) + EXP_LIFETIME ))
+    PAYLOAD=$(printf '{"vm_id":"%s","exp":%d}' "$VM_ID" "$EXP" | b64url)
+    SIG=$(printf '%s.%s' "$HEADER" "$PAYLOAD" \
+          | ${pkgs.openssl}/bin/openssl dgst -sha256 -hmac "$SECRET" -binary \
+          | b64url)
+    TOKEN="$HEADER.$PAYLOAD.$SIG"
 
     echo "https://''${VM_ID}.''${PROXY_HOST}:''${PROXY_PORT}/__pcr/auth?token=''${TOKEN}&next=/console"
   '';
