@@ -39,9 +39,40 @@ in {
       default = ["1.1.1.1" "8.8.8.8"];
       description = "Upstream DNS servers the host dnsmasq forwards VM queries to.";
     };
+
+    environment = mkOption {
+      type = types.enum ["dev" "staging" "prod"];
+      default = "dev";
+      description = "Deployment environment. `prod` blocks dev-only settings from being accidentally enabled.";
+    };
+
+    dnsWildcardDomain = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "worker.local";
+      description = ''
+        If set, dnsmasq resolves `*.<domain>` to `127.0.0.1` so that
+        `<vm-id>.<domain>` reaches the proxy running on localhost.
+
+        This is a **dev-only** setting. Setting it together with
+        `environment = "prod"` will cause a build failure.
+      '';
+    };
   };
 
   config = mkIf cfg.enable {
+    # ── Environment safety checks ───────────────────────────────────────
+    assertions = [
+      {
+        assertion = cfg.environment != "prod" || cfg.dnsWildcardDomain == null;
+        message = ''
+          services.procurator.vmm.dnsWildcardDomain is set to "${toString cfg.dnsWildcardDomain}"
+          but environment is "prod". This is a development-only setting that
+          resolves *.<domain> to 127.0.0.1 via dnsmasq. Remove dnsWildcardDomain
+          or set services.procurator.vmm.environment to "dev" or "staging".
+        '';
+      }
+    ];
     # ── Device permissions ──────────────────────────────────────────────
     # Ensure /dev/net/tun and /dev/kvm are group-accessible so the
     # unprivileged worker (via kvm/netdev group membership) can open them.
@@ -90,24 +121,28 @@ in {
     # Kernel forwarding required for NAT.
     boot.kernel.sysctl."net.ipv4.ip_forward" = 1;
 
-    # dnsmasq on the bridge: DNS forwarder only. No DHCP server.
-    # Guests are given their IP statically by the cmdline parameter
-    # that the worker appends at VM-create time. dnsmasq here only answers DNS
-    # queries from the VMs and forwards them upstream.
+    # dnsmasq: DNS forwarder for VMs via the bridge, plus optional dev wildcard.
+    # Guests are given their IP statically by the cmdline parameter that the worker
+    # appends at VM-create time. dnsmasq here answers DNS queries and forwards them
+    # upstream. It listens on all interfaces so the host itself can also query it.
     services.dnsmasq = {
       enable = true;
-      settings = {
-        interface = cfg.bridgeName;
-        # bind-dynamic: attaches when br0 is ready, avoids silent bind failures
-        # that occur with bind-interfaces if br0 gets its IP after dnsmasq starts.
-        bind-dynamic = true;
-        # Explicitly disable DHCP: no dhcp-range, no dhcp-authoritative.
-        # (dnsmasq without dhcp-range does not serve DHCP at all.)
-        port = 53;
-        server = cfg.dnsServers;
-        # Don't read host resolv.conf — only forward to servers listed above.
-        no-resolv = true;
-      };
+      settings =
+        {
+          # bind-dynamic: attaches when br0 is ready, avoids silent bind failures
+          # that occur with bind-interfaces if br0 gets its IP after dnsmasq starts.
+          bind-dynamic = true;
+          # Explicitly disable DHCP: no dhcp-range, no dhcp-authoritative.
+          # (dnsmasq without dhcp-range does not serve DHCP at all.)
+          port = 53;
+          server = cfg.dnsServers;
+          # Don't read host resolv.conf — only forward to servers listed above.
+          no-resolv = true;
+        }
+        # Dev wildcard: resolve *.<domain> to 127.0.0.1 for browser proxy access.
+        // optionalAttrs (cfg.dnsWildcardDomain != null) {
+          address = ["/${cfg.dnsWildcardDomain}/127.0.0.1"];
+        };
     };
   };
 }
