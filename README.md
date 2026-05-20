@@ -116,13 +116,44 @@ nix run ./nix#worker
 nix build ./nix/examples/python-workload#artifacts
 
 # terminal 2: call worker RPCs
-nix run ./nix#worker-test -- read
-nix run ./nix#worker-test -- list
-nix run ./nix#worker-test -- create
-nix run ./nix#worker-test -- delete --id <vm-id>
+nix run .#worker-test -- read
+nix run .#worker-test -- list
+nix run .#worker-test -- create
+nix run .#worker-test -- delete --id <vm-id>
 ```
 
 `worker-test` defaults to `--addr 0.0.0.0:8080` and accepts extra inline flags for `create` (kernel, initramfs, disk, cmdline, cpu, memory, console, serial).
+
+
+# Subdomain proxy — running it
+
+## Why
+The worker runs a TLS-terminated HTTPS reverse proxy so browser/SDK clients can reach OpenCode servers inside VMs. Requests go to `https://<vm-id>.worker.local:8443/<path>` and the proxy routes them to the right VM by extracting the VM id from the `Host` header.
+
+## Commands
+
+```bash
+# Terminal 1: Boot the worker (generates wildcard dev TLS cert on first run)
+nix run .#worker
+
+# Terminal 2: Mint a JWT for a VM and curl through the proxy
+nix run .#worker-curl -- <vm-id> <path> [curl-args...]
+
+# Examples
+nix run .#worker-curl -- 019e16f4-abc /doc
+nix run .#worker-curl -- 019e16f4-abc /session -X POST -H 'content-type: application/json' -d '{}'
+nix run .#worker-curl -- 019e16f4-abc /event -N   # SSE streaming
+
+# Just print a JWT (pipe it into your own curl)
+nix run .#worker-token -- <vm-id>
+
+# Create the bootstrap URL for a VM
+nix run .#worker-bootstrap-url -- 019e4777-a67a-7480-b6e9-a03b8a6ce158
+```
+
+## Expected output with no VMs
+The proxy logs `auth_result = "route_not_found"` with `vm_id = "<vm-id>"`. That's correct — it proves the subdomain routing pipeline works; there's just no VM registered yet.
+
 
 ## Project Status
 

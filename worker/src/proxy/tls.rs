@@ -4,8 +4,16 @@ use std::{
     sync::Arc,
 };
 
-use hyper::{
-    Body, Client, Request, Response, client::HttpConnector, server::conn::Http, service::service_fn,
+use axum::{
+    Router,
+    body::Body,
+    routing::{any, get, post},
+};
+use hyper_util::{
+    client::legacy::{Client, connect::HttpConnector},
+    rt::{TokioExecutor, TokioIo},
+    server::conn::auto::Builder,
+    service::TowerToHyperService,
 };
 use tokio::{net::TcpListener, task};
 use tokio_rustls::{TlsAcceptor, rustls};
@@ -16,7 +24,7 @@ use crate::{
     vmm::{Factory, Reader, Registry},
 };
 
-use super::{OPENCODE_UPSTREAM_PORT, ProxyRuntimeSettings, proxy_vm_request};
+use super::{ProxyRuntimeSettings, ProxyState, auth_bootstrap, auth_logout, proxy_handler};
 
 /// # Errors
 ///
@@ -30,10 +38,23 @@ pub async fn serve_tls_proxy<F: Factory>(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let tls_config = load_tls_config(&proxy_config)?;
     let acceptor = TlsAcceptor::from(Arc::new(tls_config));
-    let client: Client<HttpConnector, Body> = Client::new();
+    let client: Client<HttpConnector, Body> =
+        Client::builder(TokioExecutor::new()).build(HttpConnector::new());
     let runtime_settings = ProxyRuntimeSettings::from_timeout_millis(
         proxy_config.upstream_request_timeout_millis.get(),
     );
+    let state = Arc::new(ProxyState {
+        registry,
+        client,
+        jwt_hs256_secret: proxy_config.jwt_hs256_secret.clone(),
+        base_domain: proxy_config.base_domain.clone(),
+        runtime_settings,
+    });
+    let app = Router::new()
+        .route("/__pcr/auth", get(auth_bootstrap::<F>))
+        .route("/__pcr/logout", post(auth_logout::<F>))
+        .fallback(any(proxy_handler::<F>))
+        .with_state(state);
 
     let listener = TcpListener::bind(proxy_config.public_listen_addr)
         .await
@@ -53,9 +74,7 @@ pub async fn serve_tls_proxy<F: Factory>(
     loop {
         let (stream, peer_addr) = listener.accept().await?;
         let acceptor = acceptor.clone();
-        let registry = registry.clone();
-        let client = client.clone();
-        let jwt_hs256_secret = proxy_config.jwt_hs256_secret.clone();
+        let app = app.clone();
 
         task::spawn(async move {
             let Ok(tls_stream) = acceptor.accept(stream).await else {
@@ -63,26 +82,12 @@ pub async fn serve_tls_proxy<F: Factory>(
                 return;
             };
 
-            let service = service_fn(move |request: Request<Body>| {
-                let registry = registry.clone();
-                let client = client.clone();
-                let jwt_hs256_secret = jwt_hs256_secret.clone();
-                async move {
-                    Ok::<Response<Body>, std::convert::Infallible>(
-                        proxy_vm_request(
-                            &registry,
-                            &client,
-                            &jwt_hs256_secret,
-                            request,
-                            OPENCODE_UPSTREAM_PORT,
-                            runtime_settings,
-                        )
-                        .await,
-                    )
-                }
-            });
-
-            if let Err(err) = Http::new().serve_connection(tls_stream, service).await {
+            let service = TowerToHyperService::new(app);
+            let io = TokioIo::new(tls_stream);
+            if let Err(err) = Builder::new(TokioExecutor::new())
+                .serve_connection(io, service)
+                .await
+            {
                 error!(peer_addr = %peer_addr, ?err, "Proxy HTTPS connection failed");
             }
         });
@@ -160,6 +165,7 @@ mod tests {
             public_listen_addr: SocketAddr::from(([127, 0, 0, 1], 8443)),
             tls_cert_path: std::path::PathBuf::from("/tmp/procurator2-missing-cert-file.pem"),
             tls_key_path: std::path::PathBuf::from("/tmp/procurator2-missing-key-file.pem"),
+            base_domain: "vm.example.test".to_string(),
             jwt_hs256_secret: "secret".to_string(),
             upstream_request_timeout_millis: std::num::NonZeroU64::new(30_000).expect("non-zero"),
         };
@@ -183,6 +189,7 @@ mod tests {
             public_listen_addr: SocketAddr::from(([127, 0, 0, 1], 8443)),
             tls_cert_path: cert_path.clone(),
             tls_key_path: key_path.clone(),
+            base_domain: "vm.example.test".to_string(),
             jwt_hs256_secret: "secret".to_string(),
             upstream_request_timeout_millis: std::num::NonZeroU64::new(30_000).expect("non-zero"),
         };

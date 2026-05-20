@@ -45,6 +45,7 @@
             installBootLoader = false;
             copyChannel = false;
           };
+          opencodePort = 4096;
       in {
         imports = ["${modulesPath}/profiles/qemu-guest.nix"];
 
@@ -87,6 +88,7 @@
         networking = {
           hostName = "cloud-vm";
           useDHCP = false;
+          firewall.allowedTCPPorts = [ 22 opencodePort ];
         };
         # DNS filtering inside the VM:
         # - dnsmasq listens only on loopback (127.0.0.1), NOT on the network interface.
@@ -198,7 +200,7 @@
             path = [pkgs.opencode pkgs.gawk];
             script = ''
               echo "opencode-server: no procurator.opencode-password in cmdline, starting without auth"
-              exec ${pkgs.opencode}/bin/opencode web --port 4096 --hostname 0.0.0.0
+              exec ${pkgs.opencode}/bin/opencode web --port ${toString opencodePort} --hostname 0.0.0.0
             '';
             serviceConfig = {
               Type = "simple";
