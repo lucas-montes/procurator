@@ -1,12 +1,13 @@
 {
   config,
   lib,
-  pkgs,
   ...
 }:
-with lib; let
+with lib;
+let
   cfg = config.services.procurator.vmm;
-in {
+in
+{
   options.services.procurator.vmm = {
     enable = mkEnableOption "Enable procurator VMM host networking";
 
@@ -36,12 +37,19 @@ in {
 
     dnsServers = mkOption {
       type = types.listOf types.str;
-      default = ["1.1.1.1" "8.8.8.8"];
+      default = [
+        "1.1.1.1"
+        "8.8.8.8"
+      ];
       description = "Upstream DNS servers the host dnsmasq forwards VM queries to.";
     };
 
     environment = mkOption {
-      type = types.enum ["dev" "staging" "prod"];
+      type = types.enum [
+        "dev"
+        "staging"
+        "prod"
+      ];
       default = "dev";
       description = "Deployment environment. `prod` blocks dev-only settings from being accidentally enabled.";
     };
@@ -94,7 +102,7 @@ in {
 
     networking = {
       # Create the bridge (no physical ports). TAPs are attached at runtime.
-      bridges.${cfg.bridgeName}.interfaces = [];
+      bridges.${cfg.bridgeName}.interfaces = [ ];
 
       # Assign the configured address to the bridge.
       interfaces.${cfg.bridgeName}.ipv4.addresses = [
@@ -106,7 +114,7 @@ in {
       # NAT: masquerade VM traffic through the configured external interface.
       nat = {
         enable = true;
-        internalInterfaces = [cfg.bridgeName];
+        internalInterfaces = [ cfg.bridgeName ];
         externalInterface = cfg.externalInterface;
       };
 
@@ -115,7 +123,7 @@ in {
       # procurator.ip=/gw=/pfx= tokens the worker appends to the kernel cmdline
       # (parsed by the procurator-netcfg systemd unit inside the image).
       # This is safe because only our VMs are on this bridge.
-      firewall.trustedInterfaces = [cfg.bridgeName];
+      firewall.trustedInterfaces = [ cfg.bridgeName ];
     };
 
     # Kernel forwarding required for NAT.
@@ -127,22 +135,21 @@ in {
     # upstream. It listens on all interfaces so the host itself can also query it.
     services.dnsmasq = {
       enable = true;
-      settings =
-        {
-          # bind-dynamic: attaches when br0 is ready, avoids silent bind failures
-          # that occur with bind-interfaces if br0 gets its IP after dnsmasq starts.
-          bind-dynamic = true;
-          # Explicitly disable DHCP: no dhcp-range, no dhcp-authoritative.
-          # (dnsmasq without dhcp-range does not serve DHCP at all.)
-          port = 53;
-          server = cfg.dnsServers;
-          # Don't read host resolv.conf — only forward to servers listed above.
-          no-resolv = true;
-        }
-        # Dev wildcard: resolve *.<domain> to 127.0.0.1 for browser proxy access.
-        // optionalAttrs (cfg.dnsWildcardDomain != null) {
-          address = ["/${cfg.dnsWildcardDomain}/127.0.0.1"];
-        };
+      settings = {
+        # bind-dynamic: attaches when br0 is ready, avoids silent bind failures
+        # that occur with bind-interfaces if br0 gets its IP after dnsmasq starts.
+        bind-dynamic = true;
+        # Explicitly disable DHCP: no dhcp-range, no dhcp-authoritative.
+        # (dnsmasq without dhcp-range does not serve DHCP at all.)
+        port = 53;
+        server = cfg.dnsServers;
+        # Don't read host resolv.conf — only forward to servers listed above.
+        no-resolv = true;
+      }
+      # Dev wildcard: resolve *.<domain> to 127.0.0.1 for browser proxy access.
+      // optionalAttrs (cfg.dnsWildcardDomain != null) {
+        address = [ "/${cfg.dnsWildcardDomain}/127.0.0.1" ];
+      };
     };
   };
 }

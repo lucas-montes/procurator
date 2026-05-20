@@ -14,7 +14,7 @@ pub enum Error {
     TapPersistenceFailed(std::io::Error),
     /// Errors coming from rtnetlink or other netlink operations. Stored as a string
     /// to avoid depending on rtnetlink's error types in the error API.
-    NetlinkError(String),
+    Netlink(String),
     /// Bridge/interface not found when resolving by name.
     BridgeNotFound(String),
 }
@@ -26,7 +26,7 @@ impl std::fmt::Display for Error {
             Error::IfaceNameInvalid(s) => write!(f, "invalid interface name: {s}"),
             Error::TapCreationFailed(e) => write!(f, "tap creation failed: {e}"),
             Error::TapPersistenceFailed(e) => write!(f, "tap persistence failed: {e}"),
-            Error::NetlinkError(s) => write!(f, "netlink error: {s}"),
+            Error::Netlink(s) => write!(f, "netlink error: {s}"),
             Error::BridgeNotFound(s) => write!(f, "bridge not found: {s}"),
         }
     }
@@ -93,7 +93,7 @@ pub struct Tap<State = Initialized> {
 impl Tap<Persisted> {
     pub async fn delete(self) -> Result<(), Error> {
         let (connection, handle, _) =
-            rtnetlink::new_connection().map_err(|e| Error::NetlinkError(e.to_string()))?;
+            rtnetlink::new_connection().map_err(|e| Error::Netlink(e.to_string()))?;
         tokio::spawn(connection);
 
         let index = handle
@@ -103,7 +103,7 @@ impl Tap<Persisted> {
             .execute()
             .try_next()
             .await
-            .map_err(|e| Error::NetlinkError(e.to_string()))?
+            .map_err(|e| Error::Netlink(e.to_string()))?
             .ok_or_else(|| Error::BridgeNotFound(self.iface_name.to_string()))?
             .header
             .index;
@@ -113,7 +113,7 @@ impl Tap<Persisted> {
             .del(index)
             .execute()
             .await
-            .map_err(|e| Error::NetlinkError(e.to_string()))?;
+            .map_err(|e| Error::Netlink(e.to_string()))?;
 
         Ok(())
     }
@@ -122,7 +122,7 @@ impl Tap<Persisted> {
     pub async fn attach_to_bridge(self, bridge_name: String) -> Result<Self, Error> {
         // Establish netlink connection and find the bridge index.
         let (connection, handle, _) =
-            rtnetlink::new_connection().map_err(|e| Error::NetlinkError(e.to_string()))?;
+            rtnetlink::new_connection().map_err(|e| Error::Netlink(e.to_string()))?;
         tokio::spawn(connection);
 
         let bridge_index = handle
@@ -132,7 +132,7 @@ impl Tap<Persisted> {
             .execute()
             .try_next()
             .await
-            .map_err(|e| Error::NetlinkError(e.to_string()))?
+            .map_err(|e| Error::Netlink(e.to_string()))?
             .ok_or(Error::BridgeNotFound(bridge_name))
             .map(|l| l.header.index)?;
 
@@ -147,7 +147,7 @@ impl Tap<Persisted> {
             )
             .execute()
             .await
-            .map_err(|e| Error::NetlinkError(e.to_string()))?;
+            .map_err(|e| Error::Netlink(e.to_string()))?;
 
         Ok(self)
     }
@@ -161,6 +161,7 @@ impl<State> Tap<State> {
 
 impl Tap<Initialized> {
     /// Method that creaates a new TAP interface. We can optionally set a name for the interface, otherwise one will be created by the kernel.
+    #[allow(clippy::cast_possible_truncation)]
     pub fn new(iface_name: Option<&str>) -> Result<Self, Error> {
         let iface_name = iface_name
             .map(TapName::from_str)

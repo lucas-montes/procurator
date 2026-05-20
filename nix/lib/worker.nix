@@ -20,6 +20,7 @@ let
       publicListenAddr = "0.0.0.0:8443";
       tlsCertPath = "/var/lib/procurator-worker/tls/server.crt";
       tlsKeyPath = "/var/lib/procurator-worker/tls/server.key";
+      baseDomain = "vm.invalid";
       jwtHs256Secret = "change-me";
       upstreamRequestTimeoutMillis = 30000;
     };
@@ -60,6 +61,7 @@ let
       public_listen_addr = resolvedProxy.publicListenAddr;
       tls_cert_path = resolvedProxy.tlsCertPath;
       tls_key_path = resolvedProxy.tlsKeyPath;
+      base_domain = resolvedProxy.baseDomain;
       jwt_hs256_secret = resolvedProxy.jwtHs256Secret;
       upstream_request_timeout_millis = resolvedProxy.upstreamRequestTimeoutMillis;
     };

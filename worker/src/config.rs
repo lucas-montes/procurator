@@ -46,6 +46,7 @@ pub struct ProxyConfig {
     pub public_listen_addr: SocketAddr,
     pub tls_cert_path: PathBuf,
     pub tls_key_path: PathBuf,
+    pub base_domain: String,
     pub jwt_hs256_secret: String,
     pub upstream_request_timeout_millis: NonZeroU64,
 }
@@ -63,6 +64,10 @@ impl ProxyConfig {
             return Err(ConfigError::EmptyProxyJwtSecret);
         }
 
+        if self.base_domain.trim().is_empty() {
+            return Err(ConfigError::EmptyProxyBaseDomain);
+        }
+
         Ok(())
     }
 }
@@ -74,6 +79,7 @@ enum ConfigError {
         proxy_listen_addr: SocketAddr,
     },
     EmptyProxyJwtSecret,
+    EmptyProxyBaseDomain,
 }
 
 impl std::fmt::Display for ConfigError {
@@ -88,6 +94,9 @@ impl std::fmt::Display for ConfigError {
             ),
             ConfigError::EmptyProxyJwtSecret => {
                 write!(f, "proxy.jwt_hs256_secret must not be empty")
+            }
+            ConfigError::EmptyProxyBaseDomain => {
+                write!(f, "proxy.base_domain must not be empty")
             }
         }
     }
@@ -104,6 +113,7 @@ mod tests {
             public_listen_addr: "0.0.0.0:8443".parse().expect("valid socket addr"),
             tls_cert_path: PathBuf::from("/tmp/procurator2-worker-test-cert.pem"),
             tls_key_path: PathBuf::from("/tmp/procurator2-worker-test-key.pem"),
+            base_domain: "vm.example.test".to_string(),
             jwt_hs256_secret: "super-secret".to_string(),
             upstream_request_timeout_millis: std::num::NonZeroU64::new(30_000).expect("non-zero"),
         }
@@ -123,6 +133,17 @@ mod tests {
     fn rejects_empty_jwt_secret() {
         let mut proxy = proxy_config();
         proxy.jwt_hs256_secret = "   ".to_string();
+
+        let rpc_addr: SocketAddr = "127.0.0.1:8080".parse().expect("valid socket addr");
+        let result = proxy.validate(rpc_addr);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_empty_base_domain() {
+        let mut proxy = proxy_config();
+        proxy.base_domain = " ".to_string();
 
         let rpc_addr: SocketAddr = "127.0.0.1:8080".parse().expect("valid socket addr");
         let result = proxy.validate(rpc_addr);

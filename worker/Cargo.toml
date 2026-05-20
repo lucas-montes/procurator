@@ -20,9 +20,14 @@ rtnetlink = "0.20"
 # raw libc bindings for TAP ioctl (TUNSETIFF, TUNSETPERSIST)
 libc = "0.2"
 
-# VMM dependencies
-hyper = { version = "0.14", features = ["client", "http1", "stream"] }
-hyperlocal = "0.8"
+# VMM / HTTP dependencies
+hyper = { version = "1", features = ["client", "http1", "http2", "server"] }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "server", "tokio", "http1", "http2"] }
+hyperlocal = "0.9"
+http-body-util = "0.1"
+bytes = "1"
+axum = { version = "0.7" }
+tower-http = { version = "0.5", features = ["trace"] }
 tokio-rustls = "0.26"
 rustls-pemfile = "2"
 serde.workspace = true

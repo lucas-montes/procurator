@@ -1,3 +1,5 @@
+> **ARCHIVED** — This plan described the original path-based proxy implementation. The proxy has since been refactored to subdomain-based routing (`https://<vm_id>.<base_domain>/...`) with cookie-bootstrap auth. See [worker-proxy-subdomain-hyper1.md](./worker-proxy-subdomain-hyper1.md) for current state.
+>
 # Plan: worker-opencode-public-proxy
 
 ## 1) Change summary

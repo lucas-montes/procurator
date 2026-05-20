@@ -37,6 +37,7 @@ pub struct Handle {
 }
 
 impl Handle {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         client: Client,
         child: Child,

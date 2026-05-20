@@ -36,6 +36,7 @@ with lib; let
         publicListenAddr = cfg.proxyPublicListenAddr;
         tlsCertPath = cfg.proxyTlsCertPath;
         tlsKeyPath = cfg.proxyTlsKeyPath;
+        baseDomain = cfg.proxyBaseDomain;
         jwtHs256Secret = cfg.proxyJwtHs256Secret;
         upstreamRequestTimeoutMillis = cfg.proxyUpstreamRequestTimeoutMillis;
       };
@@ -108,6 +109,18 @@ in {
       default = defaults.proxy.upstreamRequestTimeoutMillis;
       example = 30000;
       description = "Upstream request timeout for proxy requests in milliseconds.";
+    };
+
+    proxyBaseDomain = mkOption {
+      type = types.str;
+      default = defaults.proxy.baseDomain;
+      example = "vm.procurator.example";
+      description = ''
+        Base domain for subdomain-based VM proxy routing. The proxy extracts
+        the VM id from Host headers like `<vm-id>.<base_domain>` and forwards
+        requests to the matching VM upstream. Requires a wildcard TLS cert
+        covering `*.<base_domain>`.
+      '';
     };
 
     master = mkOption {
