@@ -5,6 +5,11 @@
 
 use std::{ops::Deref, str::FromStr};
 
+use crate::domain::signals::{
+    NormalizedCommit, NormalizedDeployment, NormalizedIssue, NormalizedPullRequest,
+    NormalizedReview,
+};
+use serde::Serialize;
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
 use tracing::info;
 
@@ -43,6 +48,8 @@ pub struct UserRow {
     pub id: i64,
     pub username: String,
     pub email: Option<String>,
+    pub github_token: Option<String>,
+    pub github_login: Option<String>,
     pub created_at: String,
 }
 
@@ -73,6 +80,119 @@ pub struct ProjectMemberRow {
     pub user_id: i64,
     pub role: String,
     pub created_at: String,
+}
+
+/// Database row for GitHub pull requests table
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct GithubPullRequestRow {
+    pub id: i64,
+    pub github_id: i64,
+    pub repository_id: i64,
+    pub number: i32,
+    pub title: String,
+    pub author_id: Option<i64>,
+    pub state: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub closed_at: Option<String>,
+    pub merged_at: Option<String>,
+    pub additions: i32,
+    pub deletions: i32,
+    pub changed_files: i32,
+}
+
+/// Database row for GitHub reviews table
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct GithubReviewRow {
+    pub id: i64,
+    pub github_id: i64,
+    pub pull_request_id: i64,
+    pub user_id: Option<i64>,
+    pub state: String,
+    pub submitted_at: String,
+}
+
+/// Database row for GitHub commits table
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct GithubCommitRow {
+    pub id: i64,
+    pub github_sha: String,
+    pub repository_id: i64,
+    pub author_name: Option<String>,
+    pub author_email: Option<String>,
+    pub committer_name: Option<String>,
+    pub committer_email: Option<String>,
+    pub message: String,
+    pub timestamp: String,
+}
+
+/// Database row for GitHub deployments table
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct GithubDeploymentRow {
+    pub id: i64,
+    pub github_id: i64,
+    pub repository_id: i64,
+    pub sha: String,
+    #[sqlx(rename = "ref")]
+    pub ref_field: String,
+    pub task: String,
+    pub payload: Option<String>,
+    pub environment: String,
+    pub state: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub creator_id: Option<i64>,
+}
+
+/// Database row for GitHub issues table
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct GithubIssueRow {
+    pub id: i64,
+    pub github_id: i64,
+    pub repository_id: i64,
+    pub number: i32,
+    pub title: String,
+    pub author_id: Option<i64>,
+    pub state: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub closed_at: Option<String>,
+}
+
+/// Database row for GitHub issue labels table
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct GithubIssueLabelRow {
+    pub id: i64,
+    pub issue_id: i64,
+    pub label_id: i64,
+    pub label_name: String,
+    pub label_color: String,
+}
+
+/// Database row for normalized signal persistence.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct NormalizedSignalRow {
+    pub id: i64,
+    pub repository_id: i64,
+    pub signal_type: String,
+    pub source_key: String,
+    pub occurred_at: String,
+    pub payload_json: String,
+    pub ingested_at: String,
+    pub updated_at: String,
+}
+
+/// Database row for persisted weekly metric snapshots.
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct WeeklyMetricSnapshotRow {
+    pub id: i64,
+    pub repository_id: i64,
+    pub week_start_utc: String,
+    pub metric_version: String,
+    pub metrics_json: String,
+    pub window_days: i32,
+    pub computed_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -151,12 +271,18 @@ impl Database {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT NOT NULL UNIQUE,
                 email TEXT,
+                github_token TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             "#,
         )
         .execute(&self.pool)
         .await?;
+
+        // Migration: add github_login column if missing (existing databases)
+        let _ = sqlx::query(r#"ALTER TABLE users ADD COLUMN github_login TEXT"#)
+            .execute(&self.pool)
+            .await;
 
         // Projects table
         sqlx::query(
@@ -225,6 +351,152 @@ impl Database {
         )
         .execute(&self.pool)
         .await?;
+
+        // Create tables for GitHub data storage
+        sqlx::query(
+            r#"
+             CREATE TABLE IF NOT EXISTS github_pull_requests (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 github_id INTEGER NOT NULL UNIQUE,
+                 repository_id INTEGER NOT NULL,
+                 number INTEGER NOT NULL,
+                 title TEXT NOT NULL,
+                 author_id INTEGER,
+                 state TEXT NOT NULL,
+                 created_at TEXT NOT NULL,
+                 updated_at TEXT NOT NULL,
+                 closed_at TEXT,
+                 merged_at TEXT,
+                 additions INTEGER DEFAULT 0,
+                 deletions INTEGER DEFAULT 0,
+                 changed_files INTEGER DEFAULT 0,
+                 FOREIGN KEY (repository_id) REFERENCES repositories(id),
+                 FOREIGN KEY (author_id) REFERENCES users(id)
+             )
+             "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+             CREATE TABLE IF NOT EXISTS github_reviews (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 github_id INTEGER NOT NULL UNIQUE,
+                 pull_request_id INTEGER NOT NULL,
+                 user_id INTEGER,
+                 state TEXT NOT NULL,
+                 submitted_at TEXT NOT NULL,
+                 FOREIGN KEY (pull_request_id) REFERENCES github_pull_requests(id),
+                 FOREIGN KEY (user_id) REFERENCES users(id)
+             )
+             "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+             CREATE TABLE IF NOT EXISTS github_commits (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 github_sha TEXT NOT NULL UNIQUE,
+                 repository_id INTEGER NOT NULL,
+                 author_name TEXT,
+                 author_email TEXT,
+                 committer_name TEXT,
+                 committer_email TEXT,
+                 message TEXT NOT NULL,
+                 timestamp TEXT NOT NULL,
+                 FOREIGN KEY (repository_id) REFERENCES repositories(id)
+             )
+             "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+             CREATE TABLE IF NOT EXISTS github_deployments (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 github_id INTEGER NOT NULL UNIQUE,
+                 repository_id INTEGER NOT NULL,
+                 sha TEXT NOT NULL,
+                 ref TEXT NOT NULL,
+                 task TEXT NOT NULL,
+                 payload TEXT,
+                 environment TEXT NOT NULL,
+                 state TEXT NOT NULL,
+                 created_at TEXT NOT NULL,
+                 updated_at TEXT NOT NULL,
+                 creator_id INTEGER,
+                 FOREIGN KEY (repository_id) REFERENCES repositories(id),
+                 FOREIGN KEY (creator_id) REFERENCES users(id)
+             )
+             "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+             CREATE TABLE IF NOT EXISTS github_issues (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 github_id INTEGER NOT NULL UNIQUE,
+                 repository_id INTEGER NOT NULL,
+                 number INTEGER NOT NULL,
+                 title TEXT NOT NULL,
+                 author_id INTEGER,
+                 state TEXT NOT NULL,
+                 created_at TEXT NOT NULL,
+                 updated_at TEXT NOT NULL,
+                 closed_at TEXT,
+                 FOREIGN KEY (repository_id) REFERENCES repositories(id),
+                 FOREIGN KEY (author_id) REFERENCES users(id)
+             )
+             "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+             CREATE TABLE IF NOT EXISTS github_issue_labels (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 issue_id INTEGER NOT NULL,
+                 label_id INTEGER NOT NULL,
+                 label_name TEXT NOT NULL,
+                 label_color TEXT NOT NULL,
+                 FOREIGN KEY (issue_id) REFERENCES github_issues(id)
+             )
+             "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Create indexes for GitHub tables for better query performance
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_github_pull_requests_repo_id ON github_pull_requests(repository_id)")
+             .execute(&self.pool)
+             .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_github_pull_requests_number ON github_pull_requests(number)")
+             .execute(&self.pool)
+             .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_github_reviews_pr_id ON github_reviews(pull_request_id)")
+             .execute(&self.pool)
+             .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_github_commits_repo_id ON github_commits(repository_id)")
+             .execute(&self.pool)
+             .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_github_deployments_repo_id ON github_deployments(repository_id)")
+             .execute(&self.pool)
+             .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_github_issues_repo_id ON github_issues(repository_id)",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_github_issue_labels_issue_id ON github_issue_labels(issue_id)")
+             .execute(&self.pool)
+             .await?;
 
         // Gerrit-like review changes
         sqlx::query(
@@ -315,6 +587,57 @@ impl Database {
         .execute(&self.pool)
         .await?;
 
+        // Normalized signal event log and weekly metric snapshots.
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS normalized_signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repository_id INTEGER NOT NULL,
+                signal_type TEXT NOT NULL,
+                source_key TEXT NOT NULL,
+                occurred_at TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                ingested_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (repository_id) REFERENCES repositories(id),
+                UNIQUE(repository_id, signal_type, source_key)
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS weekly_metric_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repository_id INTEGER NOT NULL,
+                week_start_utc TEXT NOT NULL,
+                metric_version TEXT NOT NULL,
+                metrics_json TEXT NOT NULL,
+                window_days INTEGER NOT NULL DEFAULT 7,
+                computed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (repository_id) REFERENCES repositories(id),
+                UNIQUE(repository_id, week_start_utc, metric_version)
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_normalized_signals_repo_time ON normalized_signals(repository_id, occurred_at)",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_weekly_snapshots_repo_week ON weekly_metric_snapshots(repository_id, week_start_utc)",
+        )
+        .execute(&self.pool)
+        .await?;
+
         Ok(())
     }
 
@@ -338,7 +661,7 @@ impl Database {
     pub async fn get_user_by_username(&self, username: &str) -> Result<UserRow> {
         sqlx::query_as::<_, UserRow>(
             r#"
-            SELECT id, username, email, created_at
+            SELECT id, username, email, github_token, github_login, created_at
             FROM users
             WHERE username = ?
             "#,
@@ -357,7 +680,7 @@ impl Database {
     pub async fn get_user_by_id(&self, id: i64) -> Result<UserRow> {
         sqlx::query_as::<_, UserRow>(
             r#"
-            SELECT id, username, email, created_at
+            SELECT id, username, email, github_token, github_login, created_at
             FROM users
             WHERE id = ?
             "#,
@@ -376,7 +699,7 @@ impl Database {
     pub async fn list_users(&self) -> Result<Vec<UserRow>> {
         sqlx::query_as::<_, UserRow>(
             r#"
-            SELECT id, username, email, created_at
+            SELECT id, username, email, github_token, github_login, created_at
             FROM users
             ORDER BY username
             "#,
@@ -384,6 +707,76 @@ impl Database {
         .fetch_all(&self.pool)
         .await
         .map_err(DatabaseError::Query)
+    }
+
+    /// Update the GitHub Personal Access Token for a user.
+    /// Pass `None` to clear the token.
+    pub async fn update_user_github_token(&self, user_id: i64, token: Option<&str>) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE users
+            SET github_token = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(token)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Update the GitHub login (username on GitHub) for a user.
+    /// Pass `None` to clear it.
+    pub async fn update_user_github_login(
+        &self,
+        user_id: i64,
+        github_login: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE users
+            SET github_login = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(github_login)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Look up the GitHub token for the owner of the project that
+    /// contains the given repository.
+    ///
+    /// Returns `None` when the repository or its owner has no token set.
+    pub async fn get_github_token_for_repository(
+        &self,
+        repository_id: i64,
+    ) -> Result<Option<String>> {
+        #[derive(Debug, Clone, sqlx::FromRow)]
+        struct TokenRow {
+            github_token: Option<String>,
+        }
+
+        let result = sqlx::query_as::<_, TokenRow>(
+            r#"
+            SELECT u.github_token
+            FROM repositories r
+            JOIN projects p ON r.project_id = p.id
+            JOIN users u ON p.owner_id = u.id
+            WHERE r.id = ?
+            "#,
+        )
+        .bind(repository_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(DatabaseError::Query)?;
+
+        Ok(result.and_then(|r| r.github_token))
     }
 
     // ========== Project Operations ==========
@@ -524,6 +917,512 @@ impl Database {
         .fetch_all(&self.pool)
         .await
         .map_err(DatabaseError::Query)
+    }
+
+    pub async fn list_all_repositories(&self) -> Result<Vec<RepositoryRow>> {
+        sqlx::query_as::<_, RepositoryRow>(
+            r#"
+            SELECT id, project_id, name, git_url, created_at
+            FROM repositories
+            ORDER BY project_id, name
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(DatabaseError::Query)
+    }
+
+    // ========== GitHub Operations ==========
+
+    pub async fn create_github_pull_request(
+        &self,
+        github_id: i64,
+        repository_id: i64,
+        number: i32,
+        title: &str,
+        author_id: Option<i64>,
+        state: &str,
+        created_at: &str,
+        updated_at: &str,
+        closed_at: Option<&str>,
+        merged_at: Option<&str>,
+        additions: u32,
+        deletions: u32,
+        changed_files: u32,
+    ) -> Result<i64> {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO github_pull_requests (
+                github_id, repository_id, number, title, author_id, state,
+                created_at, updated_at, closed_at, merged_at, additions, deletions, changed_files
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(github_id)
+        .bind(repository_id)
+        .bind(number)
+        .bind(title)
+        .bind(author_id)
+        .bind(state)
+        .bind(created_at)
+        .bind(updated_at)
+        .bind(closed_at)
+        .bind(merged_at)
+        .bind(additions as i32)
+        .bind(deletions as i32)
+        .bind(changed_files as i32)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.last_insert_rowid())
+    }
+
+    pub async fn create_github_review(
+        &self,
+        github_id: i64,
+        pull_request_id: i64,
+        user_id: Option<i64>,
+        state: &str,
+        submitted_at: &str,
+    ) -> Result<i64> {
+        let result = sqlx::query(
+            r#"
+             INSERT INTO github_reviews (
+                 github_id, pull_request_id, user_id, state, submitted_at
+             )
+             VALUES (?, ?, ?, ?, ?)
+             "#,
+        )
+        .bind(github_id)
+        .bind(pull_request_id)
+        .bind(user_id)
+        .bind(state)
+        .bind(submitted_at)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.last_insert_rowid())
+    }
+
+    pub async fn create_github_commit(
+        &self,
+        github_sha: &str,
+        repository_id: i64,
+        author_name: Option<&str>,
+        author_email: Option<&str>,
+        committer_name: Option<&str>,
+        committer_email: Option<&str>,
+        message: &str,
+        timestamp: &str,
+    ) -> Result<i64> {
+        let result = sqlx::query(
+            r#"
+             INSERT INTO github_commits (
+                 github_sha, repository_id, author_name, author_email,
+                 committer_name, committer_email, message, timestamp
+             )
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             "#,
+        )
+        .bind(github_sha)
+        .bind(repository_id)
+        .bind(author_name)
+        .bind(author_email)
+        .bind(committer_name)
+        .bind(committer_email)
+        .bind(message)
+        .bind(timestamp)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.last_insert_rowid())
+    }
+
+    pub async fn create_github_deployment(
+        &self,
+        github_id: i64,
+        repository_id: i64,
+        sha: &str,
+        r#ref: &str,
+        task: &str,
+        payload: Option<&str>,
+        environment: &str,
+        state: &str,
+        created_at: &str,
+        updated_at: &str,
+        creator_id: Option<i64>,
+    ) -> Result<i64> {
+        let result = sqlx::query(
+            r#"
+             INSERT INTO github_deployments (
+                 github_id, repository_id, sha, ref, task, payload, environment,
+                 state, created_at, updated_at, creator_id
+             )
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             "#,
+        )
+        .bind(github_id)
+        .bind(repository_id)
+        .bind(sha)
+        .bind(r#ref)
+        .bind(task)
+        .bind(payload)
+        .bind(environment)
+        .bind(state)
+        .bind(created_at)
+        .bind(updated_at)
+        .bind(creator_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.last_insert_rowid())
+    }
+
+    pub async fn create_github_issue(
+        &self,
+        github_id: i64,
+        repository_id: i64,
+        number: i32,
+        title: &str,
+        author_id: Option<i64>,
+        state: &str,
+        created_at: &str,
+        updated_at: &str,
+        closed_at: Option<&str>,
+    ) -> Result<i64> {
+        let result = sqlx::query(
+            r#"
+             INSERT INTO github_issues (
+                 github_id, repository_id, number, title, author_id, state,
+                 created_at, updated_at, closed_at
+             )
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             "#,
+        )
+        .bind(github_id)
+        .bind(repository_id)
+        .bind(number)
+        .bind(title)
+        .bind(author_id)
+        .bind(state)
+        .bind(created_at)
+        .bind(updated_at)
+        .bind(closed_at)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.last_insert_rowid())
+    }
+
+    pub async fn create_github_issue_label(
+        &self,
+        issue_id: i64,
+        label_id: i64,
+        label_name: &str,
+        label_color: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+             INSERT INTO github_issue_labels (
+                 issue_id, label_id, label_name, label_color
+             )
+             VALUES (?, ?, ?, ?)
+             "#,
+        )
+        .bind(issue_id)
+        .bind(label_id)
+        .bind(label_name)
+        .bind(label_color)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    // ========== GitHub Query Operations ==========
+
+    pub async fn list_github_pull_requests_by_repository(
+        &self,
+        repository_id: i64,
+    ) -> Result<Vec<GithubPullRequestRow>> {
+        sqlx::query_as::<_, GithubPullRequestRow>(
+             r#"
+             SELECT id, github_id, repository_id, number, title, author_id, state,
+                    created_at, updated_at, closed_at, merged_at, additions, deletions, changed_files
+             FROM github_pull_requests
+             WHERE repository_id = ?
+             ORDER BY number
+             "#,
+         )
+         .bind(repository_id)
+         .fetch_all(&self.pool)
+         .await
+         .map_err(DatabaseError::Query)
+    }
+
+    pub async fn upsert_normalized_pull_requests(
+        &self,
+        pull_requests: &[NormalizedPullRequest],
+    ) -> Result<()> {
+        for pull_request in pull_requests {
+            self.upsert_normalized_signal(
+                pull_request.repository_id,
+                "pull_request",
+                &format!("{}", pull_request.id),
+                &pull_request.opened_at().to_rfc3339(),
+                pull_request,
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn upsert_normalized_reviews(&self, reviews: &[NormalizedReview]) -> Result<()> {
+        for review in reviews {
+            let repository_id = self
+                .resolve_repository_id_for_review(review.pull_request_id)
+                .await?;
+
+            self.upsert_normalized_signal(
+                repository_id,
+                "review",
+                &format!("{}", review.id),
+                &review.submitted_timestamp().to_rfc3339(),
+                review,
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn upsert_normalized_commits(&self, commits: &[NormalizedCommit]) -> Result<()> {
+        for commit in commits {
+            self.upsert_normalized_signal(
+                commit.repository_id,
+                "commit",
+                &commit.sha,
+                &commit.committed_timestamp().to_rfc3339(),
+                commit,
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn upsert_normalized_deployments(
+        &self,
+        deployments: &[NormalizedDeployment],
+    ) -> Result<()> {
+        for deployment in deployments {
+            self.upsert_normalized_signal(
+                deployment.repository_id,
+                "deployment",
+                &format!("{}", deployment.id),
+                &deployment.deployed_at().to_rfc3339(),
+                deployment,
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn upsert_normalized_issues(&self, issues: &[NormalizedIssue]) -> Result<()> {
+        for issue in issues {
+            self.upsert_normalized_signal(
+                issue.repository_id,
+                "issue",
+                &format!("{}", issue.id),
+                &issue.opened_at().to_rfc3339(),
+                issue,
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn list_normalized_signals_by_repository(
+        &self,
+        repository_id: i64,
+        limit: i64,
+    ) -> Result<Vec<NormalizedSignalRow>> {
+        sqlx::query_as::<_, NormalizedSignalRow>(
+            r#"
+            SELECT
+                id,
+                repository_id,
+                signal_type,
+                source_key,
+                occurred_at,
+                payload_json,
+                ingested_at,
+                updated_at
+            FROM normalized_signals
+            WHERE repository_id = ?
+            ORDER BY occurred_at DESC
+            LIMIT ?
+            "#,
+        )
+        .bind(repository_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(DatabaseError::Query)
+    }
+
+    pub async fn upsert_weekly_metric_snapshot(
+        &self,
+        repository_id: i64,
+        week_start_utc: &str,
+        metric_version: &str,
+        metrics_json: &str,
+        computed_at: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO weekly_metric_snapshots (
+                repository_id, week_start_utc, metric_version, metrics_json, window_days, computed_at
+            )
+            VALUES (?, ?, ?, ?, 7, ?)
+            ON CONFLICT(repository_id, week_start_utc, metric_version)
+            DO UPDATE SET
+                metrics_json = excluded.metrics_json,
+                window_days = excluded.window_days,
+                computed_at = excluded.computed_at,
+                updated_at = CURRENT_TIMESTAMP
+            "#,
+        )
+        .bind(repository_id)
+        .bind(week_start_utc)
+        .bind(metric_version)
+        .bind(metrics_json)
+        .bind(computed_at)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn list_weekly_metric_snapshots_by_repository(
+        &self,
+        repository_id: i64,
+        limit: i64,
+    ) -> Result<Vec<WeeklyMetricSnapshotRow>> {
+        sqlx::query_as::<_, WeeklyMetricSnapshotRow>(
+            r#"
+            SELECT
+                id,
+                repository_id,
+                week_start_utc,
+                metric_version,
+                metrics_json,
+                window_days,
+                computed_at,
+                updated_at
+            FROM weekly_metric_snapshots
+            WHERE repository_id = ?
+            ORDER BY week_start_utc DESC
+            LIMIT ?
+            "#,
+        )
+        .bind(repository_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(DatabaseError::Query)
+    }
+
+    pub async fn list_weekly_metric_snapshots_in_rolling_window(
+        &self,
+        repository_id: i64,
+        window_start_utc: &str,
+        window_end_utc: &str,
+    ) -> Result<Vec<WeeklyMetricSnapshotRow>> {
+        sqlx::query_as::<_, WeeklyMetricSnapshotRow>(
+            r#"
+            SELECT
+                id,
+                repository_id,
+                week_start_utc,
+                metric_version,
+                metrics_json,
+                window_days,
+                computed_at,
+                updated_at
+            FROM weekly_metric_snapshots
+            WHERE repository_id = ?
+              AND week_start_utc >= ?
+              AND week_start_utc <= ?
+            ORDER BY week_start_utc DESC
+            "#,
+        )
+        .bind(repository_id)
+        .bind(window_start_utc)
+        .bind(window_end_utc)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(DatabaseError::Query)
+    }
+
+    async fn upsert_normalized_signal<T: Serialize>(
+        &self,
+        repository_id: i64,
+        signal_type: &str,
+        source_key: &str,
+        occurred_at: &str,
+        payload: &T,
+    ) -> Result<()> {
+        let payload_json = serde_json::to_string(payload)
+            .map_err(|error| DatabaseError::InvalidData(error.to_string()))?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO normalized_signals (
+                repository_id, signal_type, source_key, occurred_at, payload_json
+            )
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(repository_id, signal_type, source_key)
+            DO UPDATE SET
+                occurred_at = excluded.occurred_at,
+                payload_json = excluded.payload_json,
+                updated_at = CURRENT_TIMESTAMP
+            "#,
+        )
+        .bind(repository_id)
+        .bind(signal_type)
+        .bind(source_key)
+        .bind(occurred_at)
+        .bind(payload_json)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn resolve_repository_id_for_review(&self, pull_request_id: i64) -> Result<i64> {
+        let row = sqlx::query_as::<_, (i64,)>(
+            r#"
+            SELECT repository_id
+            FROM github_pull_requests
+            WHERE github_id = ?
+            LIMIT 1
+            "#,
+        )
+        .bind(pull_request_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(|tuple| tuple.0).ok_or_else(|| {
+            DatabaseError::NotFound(format!(
+                "Repository not found for pull request github_id {}",
+                pull_request_id
+            ))
+        })
     }
 
     // ========== Project Members Operations ==========
@@ -799,5 +1698,172 @@ impl Database {
         .fetch_optional(&self.pool)
         .await
         .map_err(DatabaseError::Query)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{DateTime, Utc};
+
+    fn parse_ts(value: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(value)
+            .expect("valid timestamp")
+            .with_timezone(&Utc)
+    }
+
+    #[tokio::test]
+    async fn initializes_snapshot_table() {
+        let db = Database::new("sqlite::memory:").await.expect("db");
+
+        let snapshots: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='weekly_metric_snapshots'",
+        )
+        .fetch_one(&*db)
+        .await
+        .expect("weekly snapshots table exists");
+
+        assert_eq!(snapshots, 1);
+    }
+
+    #[tokio::test]
+    async fn upserts_normalized_signals_and_weekly_snapshots() {
+        let db = Database::new("sqlite::memory:").await.expect("db");
+
+        let user_id = db
+            .create_user("octocat", Some("octo@example.com"))
+            .await
+            .expect("user");
+        let project_id = db
+            .create_project("dash", user_id, None)
+            .await
+            .expect("project");
+        let repository_id = db
+            .create_repository(project_id, "repohub", "https://example.invalid/repo.git")
+            .await
+            .expect("repo");
+
+        let pull_request = NormalizedPullRequest {
+            id: 101,
+            repository_id,
+            number: 42,
+            title: "Improve snapshot query".to_string(),
+            author_id: user_id,
+            state: "open".to_string(),
+            created_at: parse_ts("2026-05-10T00:00:00Z"),
+            updated_at: parse_ts("2026-05-10T00:10:00Z"),
+            closed_at: None,
+            merged_at: None,
+            additions: 10,
+            deletions: 2,
+            changed_files: 1,
+            head_sha: "abc123".to_string(),
+            head_ref: "feature/snapshots".to_string(),
+            base_sha: "def456".to_string(),
+            base_ref: "main".to_string(),
+            merge_commit_sha: None,
+            draft: false,
+            author_association: Some("CONTRIBUTOR".to_string()),
+        };
+
+        db.create_github_pull_request(
+            pull_request.id,
+            repository_id,
+            pull_request.number,
+            &pull_request.title,
+            Some(pull_request.author_id),
+            &pull_request.state,
+            &pull_request.created_at.to_rfc3339(),
+            &pull_request.updated_at.to_rfc3339(),
+            None,
+            None,
+            pull_request.additions,
+            pull_request.deletions,
+            pull_request.changed_files,
+        )
+        .await
+        .expect("create github pull request");
+
+        db.upsert_normalized_pull_requests(&[pull_request.clone()])
+            .await
+            .expect("upsert pr");
+
+        let review = NormalizedReview {
+            id: 900,
+            pull_request_id: pull_request.id,
+            user_id,
+            state: "APPROVED".to_string(),
+            submitted_at: parse_ts("2026-05-10T01:00:00Z"),
+            body: Some("LGTM".to_string()),
+            commit_id: Some("abc123".to_string()),
+        };
+
+        db.upsert_normalized_reviews(&[review])
+            .await
+            .expect("upsert review");
+
+        let rows = db
+            .list_normalized_signals_by_repository(repository_id, 20)
+            .await
+            .expect("list signals");
+        assert_eq!(rows.len(), 2);
+
+        let pull_request_updated = NormalizedPullRequest {
+            title: "Improve snapshot query v2".to_string(),
+            ..pull_request
+        };
+
+        db.upsert_normalized_pull_requests(&[pull_request_updated])
+            .await
+            .expect("upsert pr again");
+
+        let rows = db
+            .list_normalized_signals_by_repository(repository_id, 20)
+            .await
+            .expect("list signals after update");
+        assert_eq!(rows.len(), 2);
+        assert!(
+            rows.iter()
+                .any(|row| row.payload_json.contains("snapshot query v2"))
+        );
+
+        db.upsert_weekly_metric_snapshot(
+            repository_id,
+            "2026-05-04T00:00:00Z",
+            "v1",
+            r#"{"deployment_frequency":3}"#,
+            "2026-05-11T08:00:00Z",
+        )
+        .await
+        .expect("insert weekly snapshot");
+
+        db.upsert_weekly_metric_snapshot(
+            repository_id,
+            "2026-05-04T00:00:00Z",
+            "v1",
+            r#"{"deployment_frequency":4}"#,
+            "2026-05-11T09:00:00Z",
+        )
+        .await
+        .expect("update weekly snapshot");
+
+        let snapshots = db
+            .list_weekly_metric_snapshots_by_repository(repository_id, 10)
+            .await
+            .expect("list snapshots");
+
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].window_days, 7);
+        assert!(snapshots[0].metrics_json.contains("4"));
+
+        let rolling = db
+            .list_weekly_metric_snapshots_in_rolling_window(
+                repository_id,
+                "2026-05-01T00:00:00Z",
+                "2026-05-10T00:00:00Z",
+            )
+            .await
+            .expect("rolling window query");
+        assert_eq!(rolling.len(), 1);
     }
 }

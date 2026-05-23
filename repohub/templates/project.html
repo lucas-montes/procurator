@@ -115,6 +115,7 @@
             <div class="auth-tabs">
                 <button class="auth-tab active" onclick="switchRepoTab('create')">Create New</button>
                 <button class="auth-tab" onclick="switchRepoTab('import')">Import Existing</button>
+                <button class="auth-tab" onclick="switchRepoTab('github-import')">Import from GitHub</button>
             </div>
 
             <div class="error-message" id="repoError"></div>
@@ -160,6 +161,22 @@ git@gitlab.com:user/worker-service.git" style="font-family: monospace;"></textar
 
                 <p class="form-note">Import multiple repositories at once.</p>
             </div>
+
+            <!-- Import from GitHub Tab -->
+            <div class="tab-content" id="github-import-tab">
+                <div id="github-import-status">
+                    <p style="text-align: center; padding: 2rem 0; color: #586069;">Checking GitHub connection...</p>
+                </div>
+                <div id="github-import-list" style="display: none;">
+                    <div class="form-group">
+                        <label>Select a repository to import:</label>
+                        <div id="github-repo-list" style="max-height: 320px; overflow-y: auto; border: 1px solid #d0d7de; border-radius: 6px;"></div>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn-primary" id="github-import-btn" disabled onclick="handleGithubImport()">Import Selected Repository</button>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -198,12 +215,20 @@ git@gitlab.com:user/worker-service.git" style="font-family: monospace;"></textar
         document.getElementById('create-repo-name').focus();
     }
 
+    // State for GitHub import
+    let githubRepos = [];
+    let selectedGithubRepo = null;
+
     function closeRepoModal(event) {
         if (event && event.target !== event.currentTarget) return;
         document.getElementById('repoModal').classList.remove('active');
         clearRepoError();
         document.getElementById('create-repo-form').reset();
         document.getElementById('import-repo-form').reset();
+        // Reset GitHub import state
+        githubRepos = [];
+        selectedGithubRepo = null;
+        document.getElementById('github-import-btn').disabled = true;
     }
 
     function switchRepoTab(tab) {
@@ -220,6 +245,11 @@ git@gitlab.com:user/worker-service.git" style="font-family: monospace;"></textar
         document.getElementById(tab + '-tab').classList.add('active');
 
         clearRepoError();
+
+        // Load GitHub repos when switching to the GitHub import tab
+        if (tab === 'github-import') {
+            loadGithubRepos();
+        }
     }
 
     function showRepoError(message) {
@@ -232,6 +262,126 @@ git@gitlab.com:user/worker-service.git" style="font-family: monospace;"></textar
         const errorEl = document.getElementById('repoError');
         errorEl.textContent = '';
         errorEl.classList.remove('active');
+    }
+
+    async function loadGithubRepos() {
+        const statusEl = document.getElementById('github-import-status');
+        const listEl = document.getElementById('github-import-list');
+        const repoListEl = document.getElementById('github-repo-list');
+
+        // Show loading state
+        statusEl.style.display = 'block';
+        statusEl.innerHTML = '<p style="text-align: center; padding: 2rem 0; color: #586069;">Checking GitHub connection...</p>';
+        listEl.style.display = 'none';
+
+        try {
+            // First check if connected to GitHub
+            const statusRes = await fetch(`/${username}/github/status`);
+            if (!statusRes.ok) {
+                throw new Error('Failed to check GitHub connection');
+            }
+            const status = await statusRes.json();
+
+            if (!status.connected) {
+                statusEl.innerHTML = `
+                    <div style="text-align: center; padding: 2rem 0;">
+                        <p style="color: #586069; margin-bottom: 1rem;">Connect your GitHub account first to import repositories.</p>
+                        <a href="/${username}" class="btn" style="text-decoration: none;">Connect GitHub</a>
+                    </div>
+                `;
+                return;
+            }
+
+            // Show loading
+            statusEl.innerHTML = '<p style="text-align: center; padding: 2rem 0; color: #586069;">Loading repositories...</p>';
+
+            // Fetch repos
+            const reposRes = await fetch(`/${username}/github/repos`);
+            if (!reposRes.ok) {
+                const text = await reposRes.text();
+                throw new Error(text);
+            }
+            githubRepos = await reposRes.json();
+
+            // Hide status, show list
+            statusEl.style.display = 'none';
+            listEl.style.display = 'block';
+
+            if (githubRepos.length === 0) {
+                repoListEl.innerHTML = '<p style="text-align: center; padding: 2rem 0; color: #586069;">No repositories found on your GitHub account.</p>';
+                return;
+            }
+
+            // Render repo list
+            repoListEl.innerHTML = githubRepos.map(repo => `
+                <div class="github-repo-item" data-repo-id="${repo.id}"
+                     onclick="selectGithubRepo(${repo.id})"
+                     style="padding: 0.75rem 1rem; border-bottom: 1px solid #d0d7de; cursor: pointer; transition: background 0.15s; display: flex; align-items: center; justify-content: space-between; gap: 1rem;">
+                    <div style="flex: 1; min-width: 0;">
+                        <div style="font-weight: 500; color: #0969da;">${repo.full_name}</div>
+                        ${repo.description ? `<div style="font-size: 0.85rem; color: #586069; margin-top: 0.25rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${repo.description}</div>` : ''}
+                    </div>
+                    <span style="flex-shrink: 0; font-size: 0.75rem; font-weight: 600; padding: 0.2rem 0.6rem; border-radius: 12px; ${repo.private ? 'background: #fff8e5; color: #bf8700;' : 'background: #dafbe1; color: #1a7f37;'}">${repo.private ? 'Private' : 'Public'}</span>
+                </div>
+            `).join('');
+
+            // Add hover effect via style tag
+            if (!document.getElementById('github-repo-hover-style')) {
+                const style = document.createElement('style');
+                style.id = 'github-repo-hover-style';
+                style.textContent = '.github-repo-item:hover { background: #f6f8fa; } .github-repo-item.selected { background: #ddf4ff; border-left: 3px solid #0969da; }';
+                document.head.appendChild(style);
+            }
+
+        } catch (err) {
+            statusEl.style.display = 'block';
+            statusEl.innerHTML = `<p style="text-align: center; padding: 2rem 0; color: #cf222e;">Failed to load repositories: ${err.message}</p>`;
+        }
+    }
+
+    function selectGithubRepo(repoId) {
+        // Update visual selection
+        document.querySelectorAll('.github-repo-item').forEach(el => {
+            el.classList.remove('selected');
+        });
+        const selectedEl = document.querySelector(`.github-repo-item[data-repo-id="${repoId}"]`);
+        if (selectedEl) {
+            selectedEl.classList.add('selected');
+        }
+
+        selectedGithubRepo = githubRepos.find(r => r.id === repoId);
+        document.getElementById('github-import-btn').disabled = false;
+    }
+
+    async function handleGithubImport() {
+        if (!selectedGithubRepo) return;
+
+        const btn = document.getElementById('github-import-btn');
+        btn.disabled = true;
+        btn.textContent = 'Importing...';
+
+        try {
+            const res = await fetch(`/${username}/${projectName}/repositories`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: selectedGithubRepo.name,
+                    git_url: selectedGithubRepo.clone_url
+                })
+            });
+
+            if (!res.ok) {
+                const text = await res.text();
+                throw new Error('Failed to import repository: ' + text);
+            }
+
+            // Success - reload page
+            window.location.reload();
+        } catch (err) {
+            showRepoError(err.message);
+            btn.disabled = false;
+            btn.textContent = 'Import Selected Repository';
+        }
     }
 
     function extractRepoName(url) {

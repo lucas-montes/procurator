@@ -79,3 +79,33 @@ pub struct ConfigurationTemplate {
     pub repositories: Vec<Repository>,
     pub repositories_json: String,
 }
+
+// ── DORA Dashboard ────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct WeekEntry {
+    pub week_start: String,
+    pub selected: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct MetricItem {
+    pub label: String,
+    pub value: String,
+}
+
+#[derive(Template)]
+#[template(path = "dora/dashboard.html")]
+pub struct DoraDashboardTemplate {
+    pub username: String,
+    pub project_name: String,
+    pub repo_name: String,
+    pub weeks: Vec<WeekEntry>,
+    pub has_data: bool,
+    pub count_metrics: Vec<MetricItem>,
+    pub cycle_metrics: Vec<MetricItem>,
+    pub dora_metrics: Vec<MetricItem>,
+    pub median_metrics: Vec<MetricItem>,
+    /// Pre-serialized JSON for Chart.js (labels + datasets across all weeks)
+    pub chart_data_json: String,
+}

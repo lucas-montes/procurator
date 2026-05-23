@@ -186,6 +186,28 @@
             background-color: #f3f4f6;
         }
 
+        .btn-danger {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            background-color: #cf222e;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            text-decoration: none;
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+
+        .btn-danger:hover {
+            background-color: #a40e26;
+        }
+
+        .btn-danger:disabled {
+            background-color: #ffb1b8;
+            cursor: not-allowed;
+        }
+
         .empty-state {
             text-align: center;
             padding: 3rem 1rem;
@@ -617,6 +639,7 @@
         {% block content %}{% endblock %}
     </div>
 
+    {% block extra_js %}{% endblock %}
     <script>
         function openAuthModal() {
             document.getElementById('authModal').classList.add('active');

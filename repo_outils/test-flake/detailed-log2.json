@@ -1,117 +1,119 @@
 {
-  "total_steps": 128,
-  "started_at": {
-    "secs_since_epoch": 1767425355,
-    "nanos_since_epoch": 573718647
-  },
-  "completed_at": {
-    "secs_since_epoch": 1767425355,
-    "nanos_since_epoch": 578052170
-  },
-  "timeline": [
-    {
-      "text": "checking derivation packages.x86_64-linux.default",
-      "duration": {
-        "secs": 0,
-        "nanos": 2784939
-      },
-      "children": []
+  "summary": {
+    "total_steps": 129,
+    "started_at": {
+      "secs_since_epoch": 1778351741,
+      "nanos_since_epoch": 513900877
     },
-    {
-      "text": "checking derivation packages.x86_64-linux.helper",
-      "duration": {
-        "secs": 0,
-        "nanos": 27608
-      },
-      "children": []
+    "completed_at": {
+      "secs_since_epoch": 1778351742,
+      "nanos_since_epoch": 68532506
     },
-    {
-      "text": "checking flake output 'packages'",
-      "duration": {
-        "secs": 0,
-        "nanos": 2840714
+    "timeline": [
+      {
+        "text": "checking derivation packages.x86_64-linux.default",
+        "duration": {
+          "secs": 0,
+          "nanos": 358740754
+        },
+        "children": []
       },
-      "children": []
-    },
-    {
-      "text": "checking derivation checks.x86_64-linux.basic-test",
-      "duration": {
-        "secs": 0,
-        "nanos": 29125
+      {
+        "text": "checking derivation packages.x86_64-linux.helper-package-2",
+        "duration": {
+          "secs": 0,
+          "nanos": 245221
+        },
+        "children": []
       },
-      "children": []
-    },
-    {
-      "text": "checking derivation checks.x86_64-linux.format-check",
-      "duration": {
-        "secs": 0,
-        "nanos": 31847
+      {
+        "text": "checking flake output 'packages'",
+        "duration": {
+          "secs": 0,
+          "nanos": 359014699
+        },
+        "children": []
       },
-      "children": []
-    },
-    {
-      "text": "checking derivation checks.x86_64-linux.slow-test",
-      "duration": {
-        "secs": 0,
-        "nanos": 27624
+      {
+        "text": "checking derivation checks.x86_64-linux.basic-test",
+        "duration": {
+          "secs": 0,
+          "nanos": 183074
+        },
+        "children": []
       },
-      "children": []
-    },
-    {
-      "text": "checking flake output 'checks'",
-      "duration": {
-        "secs": 0,
-        "nanos": 131658
+      {
+        "text": "checking derivation checks.x86_64-linux.format-check",
+        "duration": {
+          "secs": 0,
+          "nanos": 156845
+        },
+        "children": []
       },
-      "children": []
-    },
-    {
-      "text": "checking app 'apps.x86_64-linux.default'",
-      "duration": {
-        "secs": 0,
-        "nanos": 52022
+      {
+        "text": "checking derivation checks.x86_64-linux.slow-test",
+        "duration": {
+          "secs": 0,
+          "nanos": 150073
+        },
+        "children": []
       },
-      "children": []
-    },
-    {
-      "text": "checking flake output 'apps'",
-      "duration": {
-        "secs": 0,
-        "nanos": 75892
+      {
+        "text": "checking flake output 'checks'",
+        "duration": {
+          "secs": 0,
+          "nanos": 515269
+        },
+        "children": []
       },
-      "children": []
-    },
-    {
-      "text": "checking derivation devShells.x86_64-linux.default",
-      "duration": {
-        "secs": 0,
-        "nanos": 321946
+      {
+        "text": "checking app 'apps.x86_64-linux.default'",
+        "duration": {
+          "secs": 0,
+          "nanos": 41769
+        },
+        "children": []
       },
-      "children": []
-    },
-    {
-      "text": "checking flake output 'devShells'",
-      "duration": {
-        "secs": 0,
-        "nanos": 351450
+      {
+        "text": "checking flake output 'apps'",
+        "duration": {
+          "secs": 0,
+          "nanos": 52559
+        },
+        "children": []
       },
-      "children": []
-    },
-    {
-      "text": "evaluating flake",
-      "duration": {
-        "secs": 0,
-        "nanos": 3476068
+      {
+        "text": "checking derivation devShells.x86_64-linux.default",
+        "duration": {
+          "secs": 0,
+          "nanos": 25981742
+        },
+        "children": []
       },
-      "children": []
-    },
-    {
-      "text": "running 3 flake checks",
-      "duration": {
-        "secs": 0,
-        "nanos": 334664
+      {
+        "text": "checking flake output 'devShells'",
+        "duration": {
+          "secs": 0,
+          "nanos": 25993103
+        },
+        "children": []
       },
-      "children": []
-    }
-  ]
+      {
+        "text": "evaluating flake",
+        "duration": {
+          "secs": 0,
+          "nanos": 386009206
+        },
+        "children": []
+      },
+      {
+        "text": "running 3 flake checks",
+        "duration": {
+          "secs": 0,
+          "nanos": 12554055
+        },
+        "children": []
+      }
+    ]
+  }
 }

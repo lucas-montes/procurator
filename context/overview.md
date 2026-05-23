@@ -29,7 +29,7 @@ Procurator provides a declarative way to manage development environments and pro
 - **Async runtime**: Tokio
 - **CLI framework**: Clap with derive macros
 
-## Current State (as of T10)
+## Current State
 - VCS commands are implemented for `pcr vcs repo`, `pcr vcs project`, and `pcr vcs agent`.
 - Project operations support submodules with selective `--repos` / `--exclude` filtering.
 - Repo push supports optional Nix cache upload when cache URL is configured in flake settings.
@@ -37,3 +37,9 @@ Procurator provides a declarative way to manage development environments and pro
 - Agent workspace prepare/list commands are implemented with co-located workspaces at `<project-dir>/agents/<branch>/`.
 - Local clone acceleration is enabled through bare mirror cache references at `~/.cache/procurator/repo-cache/`.
 - VCS command handlers emit execution timing logs (e.g. `... completed in ...`) for operational visibility.
+- Repohub now defines a forge-agnostic signal ingestion boundary via `application::ports::ForgeSignalPort`, returning normalized domain signal types and keeping provider DTOs inside adapters.
+- Repohub persists normalized signals in `normalized_signals` (upsert keyed by `(repository_id, signal_type, source_key)`) and weekly metric snapshots in `weekly_metric_snapshots` (upsert keyed by `(repository_id, week_start_utc, metric_version)`) with single-repo rolling-window retrieval.
+- Repohub computes weekly DORA/productivity snapshots through `domain::metrics::WeeklyMetricEngine` with deterministic ordering and edge-case contracts (7-day anchored window, `[start,end)` timestamp inclusion, integer-second medians, and deterministic CFR/MTTR matching semantics).
+- Repohub exposes a DORA metrics read API at `/{username}/{project}/{repo}/dora/metrics?week=` returning JSON array of `WeeklyMetricSnapshotRow`, backed by a periodic background task calling `RefreshOrchestrator::trigger_refresh` on a configurable interval.
+- `ForgeSignalPort` trait requires `Send + Sync` so `RefreshOrchestrator` can be used across `tokio::spawn` boundaries.
+- Repohub renders a minimal read-only DORA dashboard at `/{username}/{project}/{repo}/dora` with week-picker dropdown, grouped metric tables, and Chart.js trend charts over all available weeks.

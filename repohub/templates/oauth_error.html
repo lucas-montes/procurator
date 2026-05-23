@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}{{ error_title }} - Repohub{% endblock %}
+
+{% block content %}
+<div class="card" style="text-align: center; padding: 3rem 2rem;">
+    <div style="font-size: 3rem; margin-bottom: 1rem;">⚠️</div>
+    <h2>{{ error_title }}</h2>
+    <p style="margin: 1.5rem 0; color: #586069; max-width: 500px; margin-left: auto; margin-right: auto;">
+        {{ error_message }}
+    </p>
+
+    {% if !troubleshooting_tips.is_empty() %}
+    <div style="text-align: left; max-width: 450px; margin: 0 auto 1.5rem auto; background: #f6f8fa; border-radius: 6px; padding: 1rem 1.5rem;">
+        <h3 style="font-size: 0.95rem; margin-bottom: 0.75rem; color: #24292e;">Troubleshooting tips</h3>
+        <ul style="list-style: none; padding: 0; margin: 0;">
+            {% for tip in troubleshooting_tips %}
+            <li style="padding: 0.35rem 0; font-size: 0.875rem; color: #586069; display: flex; gap: 0.5rem;">
+                <span style="color: #0969da;">•</span>
+                <span>{{ tip }}</span>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    <div style="margin-top: 1rem;">
+        <a href="{{ back_url }}" class="btn">Go Back</a>
+    </div>
+</div>
+{% endblock %}

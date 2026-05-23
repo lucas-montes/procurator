@@ -1,0 +1,240 @@
+{% extends "base.html" %}
+
+{% block title %}DORA Dashboard - {{ repo_name }} - {{ project_name }} - Repohub{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="/">Users</a>
+    <span>/</span>
+    <a href="/{{ username }}">{{ username }}</a>
+    <span>/</span>
+    <a href="/{{ username }}/{{ project_name }}">{{ project_name }}</a>
+    <span>/</span>
+    <a href="/{{ username }}/{{ project_name }}/{{ repo_name }}">{{ repo_name }}</a>
+    <span>/</span>
+    <span>DORA</span>
+</div>
+
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+        <h2>📊 DORA Dashboard</h2>
+        {% if weeks.len() > 0 %}
+        <div>
+            <label for="week-select" style="font-weight: 500; margin-right: 0.5rem;">Week:</label>
+            <select id="week-select" onchange="navigateWeek(this.value)" style="padding: 0.4rem 0.6rem; border: 1px solid #d0d7de; border-radius: 6px; font-size: 0.9rem;">
+                {% for week in weeks %}
+                <option value="{{ week.week_start }}" {% if week.selected %}selected{% endif %}>{{ week.week_start }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{% if has_data %}
+
+<!-- Counts -->
+<div class="card">
+    <h3>📈 Counts</h3>
+    <table class="metric-table">
+        {% for metric in count_metrics %}
+        <tr>
+            <td class="metric-label">{{ metric.label }}</td>
+            <td class="metric-value">{{ metric.value }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+</div>
+
+<!-- Cycle Stages -->
+<div class="card">
+    <h3>🔄 Cycle Stages (Median)</h3>
+    <table class="metric-table">
+        {% for metric in cycle_metrics %}
+        <tr>
+            <td class="metric-label">{{ metric.label }}</td>
+            <td class="metric-value">{{ metric.value }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+</div>
+
+<!-- DORA Rates -->
+<div class="card">
+    <h3>🎯 DORA Rates</h3>
+    <table class="metric-table">
+        {% for metric in dora_metrics %}
+        <tr>
+            <td class="metric-label">{{ metric.label }}</td>
+            <td class="metric-value">{{ metric.value }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+</div>
+
+<!-- Medians -->
+<div class="card">
+    <h3>⏱️ Medians</h3>
+    <table class="metric-table">
+        {% for metric in median_metrics %}
+        <tr>
+            <td class="metric-label">{{ metric.label }}</td>
+            <td class="metric-value">{{ metric.value }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+</div>
+
+<!-- Charts -->
+<div class="card">
+    <h3>📉 Trend: Counts (All Weeks)</h3>
+    <canvas id="countsChart" height="200"></canvas>
+</div>
+
+<div class="card">
+    <h3>📉 Trend: Median Durations (All Weeks)</h3>
+    <canvas id="durationsChart" height="200"></canvas>
+</div>
+
+<div class="card">
+    <h3>📉 Trend: Cycle Stages (All Weeks)</h3>
+    <canvas id="cyclesChart" height="200"></canvas>
+</div>
+
+<div class="card">
+    <h3>📉 Trend: DORA Rates (All Weeks)</h3>
+    <canvas id="cfrChart" height="200"></canvas>
+</div>
+
+{% else %}
+
+<div class="card">
+    <div class="empty-state">
+        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity: 0.4;">
+            <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+        </svg>
+        <p>No metrics yet — waiting for first refresh</p>
+    </div>
+</div>
+
+{% endif %}
+
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    .metric-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+    .metric-table tr {
+        border-bottom: 1px solid #f0f0f0;
+    }
+    .metric-table tr:last-child {
+        border-bottom: none;
+    }
+    .metric-table td {
+        padding: 0.5rem 0;
+    }
+    .metric-label {
+        font-weight: 500;
+        color: #24292e;
+    }
+    .metric-value {
+        text-align: right;
+        font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+        font-size: 0.95rem;
+        color: #0969da;
+        font-weight: 600;
+    }
+    canvas {
+        width: 100% !important;
+        max-height: 250px;
+    }
+</style>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script>
+// --- Chart data injected from server ---
+const chartData = {{ chart_data_json|safe }};
+
+// --- Week navigation ---
+function navigateWeek(week) {
+    const url = new URL(window.location.href);
+    url.searchParams.set('week', week);
+    window.location.href = url.toString();
+}
+
+// --- Color palette ---
+const colors = [
+    '#0969da', '#2da44e', '#bf3989', '#d0882d',
+    '#8250df', '#fd8c73', '#6e7681', '#1a7f37',
+];
+
+// --- Shared Chart.js defaults ---
+Chart.defaults.color = '#586069';
+Chart.defaults.borderColor = '#d0d7de';
+
+// Helper: build a chart
+function buildChart(canvasId, type, labels, datasets, unit) {
+    const ctx = document.getElementById(canvasId);
+    if (!ctx) return;
+    new Chart(ctx, {
+        type: type,
+        data: {
+            labels: labels,
+            datasets: Object.entries(datasets).map(([label, data], i) => ({
+                label: label,
+                data: data,
+                borderColor: colors[i % colors.length],
+                backgroundColor: colors[i % colors.length] + '33',
+                borderWidth: 2,
+                pointRadius: 3,
+                tension: 0.2,
+                fill: type === 'line' ? false : undefined,
+            })),
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12 } },
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: {
+                        callback: function(value) {
+                            return unit === 's' ? formatSeconds(value) : value;
+                        },
+                    },
+                },
+                x: {
+                    ticks: { maxRotation: 45, minRotation: 0, font: { size: 10 } },
+                },
+            },
+        },
+    });
+}
+
+function formatSeconds(s) {
+    if (s == null) return '';
+    if (s >= 86400) return (s / 86400).toFixed(1) + 'd';
+    if (s >= 3600) return (s / 3600).toFixed(1) + 'h';
+    if (s >= 60) return (s / 60).toFixed(0) + 'm';
+    return s + 's';
+}
+
+// --- Build charts ---
+document.addEventListener('DOMContentLoaded', function() {
+    if (chartData.counts && chartData.counts.labels.length > 0) {
+        buildChart('countsChart', 'bar', chartData.counts.labels, chartData.counts.datasets, '');
+        buildChart('durationsChart', 'line', chartData.durations.labels, chartData.durations.datasets, 's');
+        buildChart('cyclesChart', 'line', chartData.cycles.labels, chartData.cycles.datasets, 's');
+        buildChart('cfrChart', 'line', chartData.cfr.labels, chartData.cfr.datasets, '');
+    }
+});
+</script>
+{% endblock %}

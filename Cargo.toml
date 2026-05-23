@@ -24,7 +24,7 @@ axum = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 
 commands = { path = "commands" }
 repo_outils = { path = "repo_outils" }

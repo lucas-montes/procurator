@@ -1,11 +1,17 @@
 use askama::Template;
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
-    response::{Html, IntoResponse, Response},
+    response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
 };
+use base64::{Engine as _, engine::general_purpose};
+use rand::Rng;
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::{
     adapters::shared::database::Database,
@@ -16,13 +22,16 @@ use crate::{
 use repo_outils::nix::FlakeMetadata;
 
 use super::dto::{
-    CreateProjectRequest, CreateRepositoryRequest, CreateUserRequest, SaveConfigurationRequest,
+    CreateProjectRequest, CreateRepositoryRequest, CreateUserRequest, GithubAccessTokenResponse,
+    GithubRepoItem, GithubUserResponse, SaveConfigurationRequest, UpdateGithubTokenRequest,
 };
 
 #[derive(Clone)]
 pub struct GithubAppState {
     pub db: Database,
     pub repo_service: RepositoryService,
+    pub config: Config,
+    pub oauth_nonces: Arc<Mutex<HashMap<String, (String, Instant)>>>,
 }
 
 impl GithubAppState {
@@ -30,6 +39,8 @@ impl GithubAppState {
         Self {
             db,
             repo_service: RepositoryService::new(config),
+            config: config.clone(),
+            oauth_nonces: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -248,6 +259,17 @@ async fn create_user(
         .await
     {
         Ok(id) => {
+            // If a GitHub token was provided, store it immediately.
+            if let Some(token) = &req.github_token {
+                if let Err(e) = state.db.update_user_github_token(id, Some(token)).await {
+                    tracing::warn!(
+                        user_id = id,
+                        username = req.username,
+                        error = %e,
+                        "Failed to store GitHub token during user creation"
+                    );
+                }
+            }
             tracing::info!(user_id = id, username = req.username, "User created");
             (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response()
         }
@@ -260,6 +282,489 @@ async fn create_user(
                 .into_response()
         }
     }
+}
+
+/// POST /{username}/github-token
+///
+/// Update the GitHub Personal Access Token for a user.
+/// This token is used for DORA metrics data fetching on behalf of the user.
+async fn update_github_token(
+    State(state): State<GithubAppState>,
+    Path(username): Path<String>,
+    Json(req): Json<UpdateGithubTokenRequest>,
+) -> impl IntoResponse {
+    let user = match state.db.get_user_by_username(&username).await {
+        Ok(user) => user,
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                format!("User '{}' not found", username),
+            )
+                .into_response();
+        }
+    };
+
+    match state
+        .db
+        .update_user_github_token(user.id, Some(&req.token))
+        .await
+    {
+        Ok(_) => {
+            tracing::info!(username = %username, "GitHub token updated");
+            (StatusCode::OK, "GitHub token updated").into_response()
+        }
+        Err(e) => {
+            tracing::error!(username = %username, error = %e, "Failed to update GitHub token");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to update GitHub token: {}", e),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// GET /{username}/auth/github
+///
+/// Redirect the user to GitHub's OAuth authorization page.
+/// The `state` parameter encodes the username (base64) and a random nonce
+/// for CSRF protection. The nonce is stored in-memory so the callback can
+/// verify it later.
+async fn auth_github(
+    State(state): State<GithubAppState>,
+    Path(username): Path<String>,
+) -> impl IntoResponse {
+    let client_id = &state.config.github_oauth_client_id;
+    let redirect_uri = &state.config.github_oauth_redirect_url;
+
+    if client_id.is_empty() || redirect_uri.is_empty() {
+        tracing::error!("GitHub OAuth is not configured: missing client_id or redirect_uri");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "GitHub OAuth is not configured on this server".to_string(),
+        )
+            .into_response();
+    }
+
+    // Generate a random 16-byte nonce as a hex string
+    let mut nonce_bytes = [0u8; 16];
+    rand::thread_rng().fill(&mut nonce_bytes);
+    let nonce: String = nonce_bytes.iter().map(|b| format!("{:02x}", b)).collect();
+
+    // Store nonce -> (username, created_at) so the callback can verify the CSRF token
+    // Nonces expire after 10 minutes.
+    {
+        let mut nonces = state.oauth_nonces.lock().expect("nonce lock poisoned");
+        nonces.insert(nonce.clone(), (username.clone(), Instant::now()));
+    }
+
+    // Build state = base64(username):nonce
+    let username_b64 = general_purpose::STANDARD.encode(username.as_bytes());
+    let state_param = format!("{}:{}", username_b64, nonce);
+
+    let redirect_url = format!(
+        "https://github.com/login/oauth/authorize?client_id={}&redirect_uri={}&state={}&scope=repo",
+        client_id, redirect_uri, state_param,
+    );
+
+    tracing::info!(
+        username = %username,
+        "Redirecting to GitHub OAuth authorization"
+    );
+
+    (StatusCode::FOUND, Redirect::to(&redirect_url)).into_response()
+}
+
+/// OAuth error page with troubleshooting tips.
+#[derive(Template)]
+#[template(path = "oauth_error.html")]
+struct OAuthErrorTemplate {
+    error_title: String,
+    error_message: String,
+    troubleshooting_tips: Vec<String>,
+    back_url: String,
+}
+
+/// GET /auth/github/callback
+///
+/// Handle the OAuth callback from GitHub:
+/// 1. Parse `code` and `state` from query params
+/// 2. Decode the state (base64(username):nonce)
+/// 3. Verify the CSRF nonce (must exist and not be expired — 10 min TTL)
+/// 4. Exchange the code for an access token
+/// 5. Fetch the GitHub login from GET /user
+/// 6. Store both token and login in the database
+/// 7. Clean up the consumed nonce
+/// 8. Redirect to the user profile
+async fn auth_github_callback(
+    State(state): State<GithubAppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    // ── Check for user denial ────────────────────────────────────────────
+    if let Some(error) = params.get("error") {
+        tracing::warn!("GitHub OAuth error returned: {}", error);
+        return HtmlTemplate(OAuthErrorTemplate {
+            error_title: "Access Denied".to_string(),
+            error_message: format!(
+                "You denied the GitHub authorization request.{}",
+                params
+                    .get("error_description")
+                    .map(|d| format!(" GitHub says: {}", d))
+                    .unwrap_or_default()
+            ),
+            troubleshooting_tips: vec![
+                "Click the \"Connect to GitHub\" button on your profile page to try again."
+                    .to_string(),
+                "Make sure you grant the requested permissions when prompted.".to_string(),
+                "If the problem persists, check that you are logged into the correct GitHub \
+                 account."
+                    .to_string(),
+            ],
+            back_url: "/".to_string(),
+        })
+        .into_response();
+    }
+
+    // ── Extract code ─────────────────────────────────────────────────────
+    let code = match params.get("code") {
+        Some(code) => code.clone(),
+        None => {
+            return HtmlTemplate(OAuthErrorTemplate {
+                error_title: "Invalid Request".to_string(),
+                error_message: "Missing authorization code from GitHub. The OAuth flow could \
+                                not be completed."
+                    .to_string(),
+                troubleshooting_tips: vec![
+                    "Start the OAuth flow again from your profile page.".to_string(),
+                    "Ensure your browser allows cookies and redirects.".to_string(),
+                ],
+                back_url: "/".to_string(),
+            })
+            .into_response();
+        }
+    };
+
+    // ── Extract state ────────────────────────────────────────────────────
+    let state_param = match params.get("state") {
+        Some(s) => s.clone(),
+        None => {
+            return HtmlTemplate(OAuthErrorTemplate {
+                error_title: "Invalid Request".to_string(),
+                error_message: "Missing state parameter. This could indicate a CSRF attack or a \
+                                broken OAuth flow."
+                    .to_string(),
+                troubleshooting_tips: vec![
+                    "Start the OAuth flow again from your profile page.".to_string(),
+                    "Do not manually craft or modify OAuth URLs.".to_string(),
+                    "If this keeps happening, your session may have expired.".to_string(),
+                ],
+                back_url: "/".to_string(),
+            })
+            .into_response();
+        }
+    };
+
+    // ── Decode state = base64(username):nonce ────────────────────────────
+    let (username_b64, nonce) = match state_param.split_once(':') {
+        Some((b64, n)) => (b64, n.to_string()),
+        None => {
+            return HtmlTemplate(OAuthErrorTemplate {
+                error_title: "Invalid Request".to_string(),
+                error_message: "Malformed state parameter. The OAuth flow cannot be verified."
+                    .to_string(),
+                troubleshooting_tips: vec![
+                    "Start the OAuth flow again from your profile page.".to_string(),
+                    "This may be caused by URL decoding issues.".to_string(),
+                ],
+                back_url: "/".to_string(),
+            })
+            .into_response();
+        }
+    };
+
+    let username_bytes = match general_purpose::STANDARD.decode(username_b64) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return HtmlTemplate(OAuthErrorTemplate {
+                error_title: "Invalid Request".to_string(),
+                error_message: "Could not decode the state parameter. The OAuth flow cannot be \
+                                verified."
+                    .to_string(),
+                troubleshooting_tips: vec![
+                    "Start the OAuth flow again from your profile page.".to_string(),
+                    "This may be caused by a corrupted OAuth state.".to_string(),
+                ],
+                back_url: "/".to_string(),
+            })
+            .into_response();
+        }
+    };
+
+    let username = match String::from_utf8(username_bytes) {
+        Ok(u) => u,
+        Err(_) => {
+            return HtmlTemplate(OAuthErrorTemplate {
+                error_title: "Invalid Request".to_string(),
+                error_message: "Invalid username encoding in state parameter.".to_string(),
+                troubleshooting_tips: vec![
+                    "Start the OAuth flow again from your profile page.".to_string(),
+                ],
+                back_url: "/".to_string(),
+            })
+            .into_response();
+        }
+    };
+
+    // ── Verify nonce (consume it on any outcome) ─────────────────────────
+    let nonce_valid = {
+        let mut nonces = state.oauth_nonces.lock().expect("nonce lock poisoned");
+        match nonces.remove(&nonce) {
+            Some((stored_username, created_at)) if stored_username == username => {
+                if created_at.elapsed() > Duration::from_secs(600) {
+                    tracing::warn!(%username, "Expired OAuth nonce (TTL 10 min)");
+                    None // expired
+                } else {
+                    Some(true) // valid
+                }
+            }
+            Some((_stored_username, _created_at)) => {
+                tracing::warn!(%username, "OAuth nonce username mismatch — possible CSRF");
+                Some(false) // username mismatch
+            }
+            None => {
+                tracing::warn!(%username, "OAuth nonce not found — possible replay or expired");
+                None // not found
+            }
+        }
+    };
+
+    match nonce_valid {
+        None => {
+            // Nonce was not found or expired — we already removed it above
+            return HtmlTemplate(OAuthErrorTemplate {
+                error_title: "Request Expired".to_string(),
+                error_message: "This authorization request has expired or the security token \
+                                was already used. OAuth requests must be completed within 10 \
+                                minutes."
+                    .to_string(),
+                troubleshooting_tips: vec![
+                    "Go back to your profile page and click \"Connect to GitHub\" again."
+                        .to_string(),
+                    "Complete the GitHub authorization promptly.".to_string(),
+                    "Each authorization request can only be used once.".to_string(),
+                ],
+                back_url: "/".to_string(),
+            })
+            .into_response();
+        }
+        Some(false) => {
+            // Username mismatch — possible CSRF
+            return HtmlTemplate(OAuthErrorTemplate {
+                error_title: "Invalid Request".to_string(),
+                error_message: "The OAuth state does not match the current user session. This \
+                                could be a security issue."
+                    .to_string(),
+                troubleshooting_tips: vec![
+                    "Start the OAuth flow again from your profile page.".to_string(),
+                    "Do not share OAuth authorization URLs.".to_string(),
+                    "If you see this repeatedly, your session may have been tampered with."
+                        .to_string(),
+                ],
+                back_url: "/".to_string(),
+            })
+            .into_response();
+        }
+        Some(true) => {
+            // Nonce is valid — continue
+            tracing::info!(%username, "OAuth nonce verified successfully");
+        }
+    }
+
+    // ── Exchange code for access token ───────────────────────────────────
+    let client = reqwest::Client::new();
+    let token_response = match client
+        .post("https://github.com/login/oauth/access_token")
+        .header("Accept", "application/json")
+        .json(&serde_json::json!({
+            "client_id": state.config.github_oauth_client_id,
+            "client_secret": state.config.github_oauth_client_secret,
+            "code": code,
+            "redirect_uri": state.config.github_oauth_redirect_url,
+        }))
+        .send()
+        .await
+    {
+        Ok(resp) => resp,
+        Err(e) => {
+            tracing::error!(%username, error = %e, "Failed to reach GitHub token endpoint");
+            return HtmlTemplate(OAuthErrorTemplate {
+                error_title: "GitHub Error".to_string(),
+                error_message: format!(
+                    "Could not reach GitHub to exchange the authorization code: {}",
+                    e
+                ),
+                troubleshooting_tips: vec![
+                    "Check your internet connection.".to_string(),
+                    "Verify that github.com is accessible.".to_string(),
+                    "Try again — this may be a transient network issue.".to_string(),
+                ],
+                back_url: "/".to_string(),
+            })
+            .into_response();
+        }
+    };
+
+    let token_data: GithubAccessTokenResponse = match token_response.json().await {
+        Ok(data) => data,
+        Err(e) => {
+            tracing::error!(%username, error = %e, "Failed to parse token response from GitHub");
+            return HtmlTemplate(OAuthErrorTemplate {
+                error_title: "GitHub Error".to_string(),
+                error_message: "Received an unexpected response from GitHub during token \
+                                exchange."
+                    .to_string(),
+                troubleshooting_tips: vec![
+                    "Try again later.".to_string(),
+                    "Check the server logs for more details.".to_string(),
+                ],
+                back_url: "/".to_string(),
+            })
+            .into_response();
+        }
+    };
+
+    let access_token = match token_data.access_token {
+        Some(token) => token,
+        None => {
+            let error_desc = token_data
+                .error
+                .unwrap_or_else(|| "unknown_error".to_string());
+            tracing::error!(
+                %username,
+                error = %error_desc,
+                "GitHub token exchange returned an error"
+            );
+            return HtmlTemplate(OAuthErrorTemplate {
+                error_title: "GitHub Error".to_string(),
+                error_message: format!(
+                    "GitHub returned an error during token exchange: {}",
+                    token_data
+                        .error_description
+                        .as_deref()
+                        .unwrap_or("No details provided")
+                ),
+                troubleshooting_tips: vec![
+                    "Verify that the GitHub OAuth App is correctly configured.".to_string(),
+                    "Check that the client ID and client secret are correct.".to_string(),
+                    "Ensure the redirect URL matches what is registered in the GitHub OAuth App."
+                        .to_string(),
+                ],
+                back_url: "/".to_string(),
+            })
+            .into_response();
+        }
+    };
+
+    // ── Fetch GitHub user info ───────────────────────────────────────────
+    let user_response = match client
+        .get("https://api.github.com/user")
+        .header("Authorization", format!("Bearer {}", access_token))
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "repohub")
+        .send()
+        .await
+    {
+        Ok(resp) => resp,
+        Err(e) => {
+            tracing::error!(%username, error = %e, "Failed to fetch GitHub user info");
+            return HtmlTemplate(OAuthErrorTemplate {
+                error_title: "GitHub Error".to_string(),
+                error_message: format!("Could not fetch your GitHub profile information: {}", e),
+                troubleshooting_tips: vec![
+                    "Check your internet connection.".to_string(),
+                    "The token was obtained but user info fetch failed. Try again.".to_string(),
+                ],
+                back_url: "/".to_string(),
+            })
+            .into_response();
+        }
+    };
+
+    let github_login = match user_response.json::<GithubUserResponse>().await {
+        Ok(data) => data.login,
+        Err(e) => {
+            tracing::error!(%username, error = %e, "Failed to parse GitHub user response");
+            return HtmlTemplate(OAuthErrorTemplate {
+                error_title: "GitHub Error".to_string(),
+                error_message: "Received an unexpected response from the GitHub User API."
+                    .to_string(),
+                troubleshooting_tips: vec![
+                    "Try again later.".to_string(),
+                    "Check the server logs for more details.".to_string(),
+                ],
+                back_url: "/".to_string(),
+            })
+            .into_response();
+        }
+    };
+
+    // ── Look up the user in our database ─────────────────────────────────
+    let user = match state.db.get_user_by_username(&username).await {
+        Ok(user) => user,
+        Err(e) => {
+            tracing::error!(%username, error = %e, "User not found during OAuth callback");
+            return HtmlTemplate(OAuthErrorTemplate {
+                error_title: "Invalid Request".to_string(),
+                error_message: format!(
+                    "User '{}' not found in the system. The OAuth flow may have been started \
+                     for a deleted user.",
+                    username
+                ),
+                troubleshooting_tips: vec![
+                    "Create a new user account first.".to_string(),
+                    "Then connect to GitHub from your profile page.".to_string(),
+                ],
+                back_url: "/".to_string(),
+            })
+            .into_response();
+        }
+    };
+
+    // ── Store token and GitHub login ─────────────────────────────────────
+    if let Err(e) = state
+        .db
+        .update_user_github_token(user.id, Some(&access_token))
+        .await
+    {
+        tracing::error!(%username, error = %e, "Failed to store GitHub token");
+        return HtmlTemplate(OAuthErrorTemplate {
+            error_title: "Server Error".to_string(),
+            error_message: "Failed to store your GitHub credentials. Please try again.".to_string(),
+            troubleshooting_tips: vec![
+                "Try again.".to_string(),
+                "If the problem persists, contact the server administrator.".to_string(),
+            ],
+            back_url: "/".to_string(),
+        })
+        .into_response();
+    }
+
+    if let Err(e) = state
+        .db
+        .update_user_github_login(user.id, Some(&github_login))
+        .await
+    {
+        tracing::error!(%username, error = %e, "Failed to store GitHub login");
+        // Non-fatal — token is stored, login can be retried
+    }
+
+    tracing::info!(
+        %username,
+        github_login = %github_login,
+        "GitHub OAuth flow completed successfully"
+    );
+
+    (StatusCode::FOUND, Redirect::to(&format!("/{}", username))).into_response()
 }
 
 async fn user(
@@ -1010,11 +1515,185 @@ async fn repo(
     }
 }
 
+/// GET /{username}/github/status
+///
+/// Return the GitHub connection status for a user:
+/// - `{ "connected": true, "github_login": "..." }` when token is stored
+/// - `{ "connected": false }` when no token
+async fn github_status(
+    State(state): State<GithubAppState>,
+    Path(username): Path<String>,
+) -> impl IntoResponse {
+    let user = match state.db.get_user_by_username(&username).await {
+        Ok(user) => user,
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                format!("User '{}' not found", username),
+            )
+                .into_response();
+        }
+    };
+
+    if user.github_token.is_some() {
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "connected": true,
+                "github_login": user.github_login,
+            })),
+        )
+            .into_response()
+    } else {
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "connected": false,
+            })),
+        )
+            .into_response()
+    }
+}
+
+/// DELETE /{username}/github-token
+///
+/// Disconnect GitHub by clearing the stored token and GitHub login.
+/// Returns 200 on success.
+async fn disconnect_github(
+    State(state): State<GithubAppState>,
+    Path(username): Path<String>,
+) -> impl IntoResponse {
+    let user = match state.db.get_user_by_username(&username).await {
+        Ok(user) => user,
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                format!("User '{}' not found", username),
+            )
+                .into_response();
+        }
+    };
+
+    if let Err(e) = state.db.update_user_github_token(user.id, None).await {
+        tracing::error!(%username, error = %e, "Failed to clear GitHub token");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to disconnect GitHub: {}", e),
+        )
+            .into_response();
+    }
+
+    if let Err(e) = state.db.update_user_github_login(user.id, None).await {
+        tracing::error!(%username, error = %e, "Failed to clear GitHub login");
+        // Non-fatal — token is already cleared
+    }
+
+    tracing::info!(%username, "GitHub disconnected");
+    (StatusCode::OK, "GitHub disconnected").into_response()
+}
+
+/// GET /{username}/github/repos
+///
+/// Fetch the user's GitHub repositories using their stored OAuth token.
+/// Calls GET https://api.github.com/user/repos and returns a JSON array
+/// of repo items (id, name, full_name, html_url, clone_url, private, description).
+///
+/// Returns 400 if the user has no GitHub token configured.
+async fn github_repos(
+    State(state): State<GithubAppState>,
+    Path(username): Path<String>,
+) -> impl IntoResponse {
+    let user = match state.db.get_user_by_username(&username).await {
+        Ok(user) => user,
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                format!("User '{}' not found", username),
+            )
+                .into_response();
+        }
+    };
+
+    let token = match &user.github_token {
+        Some(t) if !t.is_empty() => t.clone(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "No GitHub token configured for this user. Use the OAuth flow to connect your GitHub account.".to_string(),
+            )
+                .into_response();
+        }
+    };
+
+    let client = reqwest::Client::new();
+    let response = match client
+        .get("https://api.github.com/user/repos?per_page=100&sort=updated&type=all")
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "repohub")
+        .send()
+        .await
+    {
+        Ok(resp) => resp,
+        Err(e) => {
+            tracing::error!(%username, error = %e, "Failed to reach GitHub API");
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("Failed to reach GitHub API: {}", e),
+            )
+                .into_response();
+        }
+    };
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        tracing::error!(
+            %username,
+            github_status = %status,
+            "GitHub API returned error fetching repos"
+        );
+        return (
+            StatusCode::BAD_GATEWAY,
+            format!("GitHub API returned error {}: {}", status, body),
+        )
+            .into_response();
+    }
+
+    let repos: Vec<GithubRepoItem> = match response.json().await {
+        Ok(repos) => repos,
+        Err(e) => {
+            tracing::error!(%username, error = %e, "Failed to parse GitHub repo list");
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("Failed to parse GitHub response: {}", e),
+            )
+                .into_response();
+        }
+    };
+
+    tracing::info!(
+        %username,
+        repo_count = repos.len(),
+        "Fetched GitHub repos"
+    );
+
+    (StatusCode::OK, Json(repos)).into_response()
+}
+
 pub fn routes() -> Router<GithubAppState> {
     Router::new()
         .route("/", get(index))
         .route("/users", post(create_user))
         .route("/{username}", get(user))
+        .route(
+            "/{username}/github-token",
+            post(update_github_token).delete(disconnect_github),
+        )
+        .route("/{username}/github/status", get(github_status))
+        .route("/{username}/github/repos", get(github_repos))
+        .route("/{username}/auth/github", get(auth_github))
+        .route("/auth/github/callback", get(auth_github_callback))
         .route("/{username}/projects", post(create_project))
         .route("/{username}/{project}", get(project))
         .route(

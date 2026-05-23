@@ -7,6 +7,7 @@ pub struct User {
     pub id: i64,
     pub username: String,
     pub email: Option<String>,
+    pub github_login: Option<String>,
     pub created_at: String,
 }
 
@@ -16,6 +17,7 @@ impl From<UserRow> for User {
             id: row.id,
             username: row.username,
             email: row.email,
+            github_login: row.github_login,
             created_at: row.created_at,
         }
     }
