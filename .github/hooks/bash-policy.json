@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "_comment": "VS Code equivalent of .opencode/plugins/sce-bash-policy.ts. PreToolUse fires before any tool runs; the script inspects the tool input and must echo a JSON 'hookSpecificOutput.permissionDecision' value (allow|deny|ask) on stdout, or exit code 2 to block. Port the TypeScript bash-policy runtime to a small Node/shell wrapper that reads stdin JSON, evaluates the staged command against .opencode/lib/bash-policy-presets.json (or a relocated copy), and writes the decision JSON. Reference docs: https://code.visualstudio.com/docs/copilot/customization/hooks",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "type": "command",
+        "command": "node .github/hooks/scripts/bash-policy.mjs",
+        "windows": "node .github\\hooks\\scripts\\bash-policy.mjs",
+        "timeout": 15
+      }
+    ]
+  }
+}
