@@ -25,6 +25,8 @@
 - **Failure signal**: Canonical mixed-model CFR/MTTR event projected from production deployments or incident issues.
 - **Forge signal port**: Repohub application-layer contract (`ForgeSignalPort`) for retrieving normalized pull request/review/commit/deployment/issue signals independent of source forge.
 - **Forge repository target**: Provider-neutral identifier (`repository_id`, `owner`, `name`) used by forge adapters to scope signal retrieval.
+- **GitHub App authenticator**: `GithubAppAuthenticator`, the helper that signs GitHub App JWTs and exchanges them for installation access tokens.
+- **GitHub auth wrapper**: `GithubAuth`, the thin abstraction over PAT and GitHub App installation auth that can also build an authenticated `octocrab::Octocrab` client.
 - **Weekly metric snapshot**: Persisted metric payload for a repository/week/version triple keyed by `(repository_id, week_start_utc, metric_version)`.
 - **Weekly metric engine**: `WeeklyMetricEngine` contract that computes a deterministic 7-day snapshot from normalized PR/review/commit/deployment/issue signals.
 - **Weekly window contract**: Fixed 7-day UTC window anchored at `week_start_utc` using half-open bounds `[start, end)`.

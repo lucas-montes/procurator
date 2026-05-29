@@ -23,7 +23,7 @@ use repo_outils::nix::FlakeMetadata;
 
 use super::dto::{
     CreateProjectRequest, CreateRepositoryRequest, CreateUserRequest, GithubAccessTokenResponse,
-    GithubRepoItem, GithubUserResponse, SaveConfigurationRequest, UpdateGithubTokenRequest,
+    GithubUserResponse, SaveConfigurationRequest, UpdateGithubTokenRequest,
 };
 
 #[derive(Clone)]
@@ -32,15 +32,31 @@ pub struct GithubAppState {
     pub repo_service: RepositoryService,
     pub config: Config,
     pub oauth_nonces: Arc<Mutex<HashMap<String, (String, Instant)>>>,
+    pub app_auth: Option<std::sync::Arc<crate::adapters::github::app_auth::GithubAppAuthenticator>>,
 }
 
 impl GithubAppState {
     pub fn new(db: Database, config: &Config) -> Self {
+        // Optionally construct a GitHub App authenticator if configured
+        let app_auth = match (
+            config.github_app_id,
+            config.github_app_private_key_pem.as_deref(),
+        ) {
+            (Some(app_id), Some(pem)) if !pem.is_empty() => Some(std::sync::Arc::new(
+                crate::adapters::github::app_auth::GithubAppAuthenticator::new(
+                    app_id,
+                    pem.as_bytes().to_vec(),
+                ),
+            )),
+            _ => None,
+        };
+
         Self {
             db,
             repo_service: RepositoryService::new(config),
             config: config.clone(),
             oauth_nonces: Arc::new(Mutex::new(HashMap::new())),
+            app_auth,
         }
     }
 }
@@ -1594,9 +1610,9 @@ async fn disconnect_github(
 
 /// GET /{username}/github/repos
 ///
-/// Fetch the user's GitHub repositories using their stored OAuth token.
-/// Calls GET https://api.github.com/user/repos and returns a JSON array
-/// of repo items (id, name, full_name, html_url, clone_url, private, description).
+/// Fetch the user's GitHub repositories through the shared auth abstraction.
+/// The underlying credential can be a PAT today or an installation token once
+/// the migration is fully wired.
 ///
 /// Returns 400 if the user has no GitHub token configured.
 async fn github_repos(
@@ -1625,48 +1641,15 @@ async fn github_repos(
         }
     };
 
-    let client = reqwest::Client::new();
-    let response = match client
-        .get("https://api.github.com/user/repos?per_page=100&sort=updated&type=all")
-        .header("Authorization", format!("Bearer {}", token))
-        .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", "repohub")
-        .send()
-        .await
-    {
-        Ok(resp) => resp,
-        Err(e) => {
-            tracing::error!(%username, error = %e, "Failed to reach GitHub API");
-            return (
-                StatusCode::BAD_GATEWAY,
-                format!("Failed to reach GitHub API: {}", e),
-            )
-                .into_response();
-        }
-    };
+    let auth = crate::adapters::github::auth::GithubAuth::from_pat(token);
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        tracing::error!(
-            %username,
-            github_status = %status,
-            "GitHub API returned error fetching repos"
-        );
-        return (
-            StatusCode::BAD_GATEWAY,
-            format!("GitHub API returned error {}: {}", status, body),
-        )
-            .into_response();
-    }
-
-    let repos: Vec<GithubRepoItem> = match response.json().await {
+    let repos = match auth.list_authenticated_user_repositories().await {
         Ok(repos) => repos,
         Err(e) => {
-            tracing::error!(%username, error = %e, "Failed to parse GitHub repo list");
+            tracing::error!(%username, error = %e, "Failed to fetch GitHub repos");
             return (
                 StatusCode::BAD_GATEWAY,
-                format!("Failed to parse GitHub response: {}", e),
+                format!("Failed to fetch GitHub repos: {}", e),
             )
                 .into_response();
         }

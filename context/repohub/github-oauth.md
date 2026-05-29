@@ -1,6 +1,11 @@
-# GitHub OAuth Connection
+# GitHub OAuth Connection (Legacy)
 
-OAuth-based GitHub account connection for repohub users. Replaces manual PAT entry with a standard OAuth flow.
+Legacy reference for the older OAuth-based GitHub account connection flow.
+The current server-side GitHub integration is documented in
+`context/repohub/github-app-auth.md` and the GitHub App manual test guide.
+
+This doc is kept for historical context and for deployments that still use the
+username-based OAuth/PAT account flow.
 
 ## Config Fields
 

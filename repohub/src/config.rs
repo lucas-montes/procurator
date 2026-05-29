@@ -12,6 +12,10 @@ pub struct Config {
     pub github_oauth_client_id: String,
     pub github_oauth_client_secret: String,
     pub github_oauth_redirect_url: String,
+    // GitHub App configuration
+    pub github_app_id: Option<u64>,
+    pub github_app_private_key_pem: Option<String>,
+    pub github_webhook_secret: Option<String>,
 }
 
 impl Default for Config {
@@ -24,10 +28,14 @@ impl Default for Config {
             // DORA configuration (default values for development)
             dora_interval_seconds: 3600,
             dora_incident_label_patterns: vec![".*incident.*".to_string()],
-            // GitHub OAuth configuration (empty defaults — must be set via env)
+            // GitHub OAuth configuration (empty defaults; configure explicitly when used)
             github_oauth_client_id: String::new(),
             github_oauth_client_secret: String::new(),
             github_oauth_redirect_url: String::new(),
+            // GitHub App defaults
+            github_app_id: None,
+            github_app_private_key_pem: None,
+            github_webhook_secret: None,
         }
     }
 }

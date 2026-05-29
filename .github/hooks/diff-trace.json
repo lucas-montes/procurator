@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "_comment": "VS Code equivalent of .opencode/plugins/sce-agent-trace.ts. VS Code has no native 'session.diff' event; PostToolUse is the closest. The script receives JSON on stdin containing tool_name, tool_input, tool_response. Filter for edit-producing tools (editFiles, applyPatch, create_file, replace_string_in_file, etc.), compute or read the resulting diff, and pipe it into the existing 'sce hooks diff-trace' CLI (or replace with the desired tracing target). Reference docs: https://code.visualstudio.com/docs/copilot/customization/hooks",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "type": "command",
+        "command": "node .github/hooks/scripts/diff-trace.mjs",
+        "windows": "node .github\\hooks\\scripts\\diff-trace.mjs",
+        "timeout": 30
+      }
+    ]
+  }
+}

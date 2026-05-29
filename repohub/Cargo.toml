@@ -19,6 +19,8 @@ chrono = { workspace = true }
 thiserror = "1.0"
 rand = "0.8"
 base64 = "0.21"
+octocrab = "0.18"
+jsonwebtoken = "8"
 
 [lints]
 workspace = true

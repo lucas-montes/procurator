@@ -17,8 +17,10 @@ Quick navigation for AI sessions working on Procurator.
   - [repohub/refresh-orchestrator.md](repohub/refresh-orchestrator.md) - async on-demand refresh pipeline: fetch→persist→compute→persist (T07)
   - [repohub/dora-api.md](repohub/dora-api.md) - DORA metrics HTTP API and periodic background refresh (T08)
   - [repohub/dora-dashboard.md](repohub/dora-dashboard.md) - DORA dashboard template, route, week picker, Chart.js trend charts, and formatting helpers (T09)
-  - [repohub/github-oauth.md](repohub/github-oauth.md) - GitHub OAuth connection flow (config, redirect endpoint, CSRF nonce mechanism)
-  - [repohub/github-oauth-testing.md](repohub/github-oauth-testing.md) - Manual test guide for OAuth flow and repo import
+  - [repohub/github-oauth.md](repohub/github-oauth.md) - Legacy GitHub OAuth connection flow (config, redirect endpoint, CSRF nonce mechanism)
+  - [repohub/github-app-auth.md](repohub/github-app-auth.md) - GitHub App auth layer (`GithubAppAuthenticator`, `GithubAuth`, installation-token caching, Octocrab client helper)
+  - [repohub/github-oauth-testing.md](repohub/github-oauth-testing.md) - GitHub App manual test guide for auth, repo listing, and webhooks
+  - [plans/github-app-migration.md](plans/github-app-migration.md) - GitHub App migration plan for moving repohub off OAuth-centric auth assumptions
 - [data-inventory.md](data-inventory.md) - GitHub signal field inventory and normalization readiness
 - [repohub/persistence.md](repohub/persistence.md) - normalized signal + weekly snapshot persistence model (T05)
 - [plans/](plans/) - Implementation plans and task tracking

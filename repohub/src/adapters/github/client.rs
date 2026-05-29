@@ -21,6 +21,8 @@ pub enum GithubClientError {
     JsonError(#[from] serde_json::Error),
     #[error("GitHub API error: {0}")]
     ApiError(String),
+    #[error("Authentication error: {0}")]
+    AuthError(String),
 }
 
 impl From<GithubClientError> for ForgeError {
@@ -72,7 +74,11 @@ impl GithubClient {
 
     /// Fetch all pull requests for the repository (with pagination)
     pub async fn fetch_pull_requests(&self) -> Result<Vec<GithubPullRequest>, GithubClientError> {
-        let token = self.auth.get_token();
+        let token = self
+            .auth
+            .get_token()
+            .await
+            .map_err(|e| GithubClientError::AuthError(e.to_string()))?;
         let client = reqwest::Client::new();
 
         let mut all_prs = Vec::new();
@@ -168,7 +174,11 @@ impl GithubClient {
 
     /// Fetch all reviews for pull requests in the repository
     pub async fn fetch_pull_request_reviews(&self) -> Result<Vec<GithubReview>, GithubClientError> {
-        let token = self.auth.get_token();
+        let token = self
+            .auth
+            .get_token()
+            .await
+            .map_err(|e| GithubClientError::AuthError(e.to_string()))?;
 
         // First get all PR numbers to fetch reviews for each
         let prs = self.fetch_pull_requests().await?;
@@ -192,7 +202,11 @@ impl GithubClient {
 
     /// Fetch all commits for the repository's default branch
     pub async fn fetch_commits(&self) -> Result<Vec<GithubCommit>, GithubClientError> {
-        let token = self.auth.get_token();
+        let token = self
+            .auth
+            .get_token()
+            .await
+            .map_err(|e| GithubClientError::AuthError(e.to_string()))?;
         let client = reqwest::Client::new();
 
         let mut all_commits = Vec::new();
@@ -241,7 +255,11 @@ impl GithubClient {
 
     /// Fetch all deployments for the repository
     pub async fn fetch_deployments(&self) -> Result<Vec<GithubDeployment>, GithubClientError> {
-        let token = self.auth.get_token();
+        let token = self
+            .auth
+            .get_token()
+            .await
+            .map_err(|e| GithubClientError::AuthError(e.to_string()))?;
         let client = reqwest::Client::new();
 
         let mut all_deployments = Vec::new();
@@ -290,7 +308,11 @@ impl GithubClient {
 
     /// Fetch all issues (including incidents) for the repository
     pub async fn fetch_issues(&self) -> Result<Vec<GithubIssue>, GithubClientError> {
-        let token = self.auth.get_token();
+        let token = self
+            .auth
+            .get_token()
+            .await
+            .map_err(|e| GithubClientError::AuthError(e.to_string()))?;
         let client = reqwest::Client::new();
 
         let mut all_issues = Vec::new();

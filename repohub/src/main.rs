@@ -101,7 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     name: repo_name.to_string(),
                 };
 
-                let auth = repohub::adapters::github::auth::GithubAuth::new(token);
+                let auth = repohub::adapters::github::auth::GithubAuth::from_pat(token);
                 let client = repohub::adapters::github::client::GithubClient::new(
                     auth,
                     db_clone.clone(),

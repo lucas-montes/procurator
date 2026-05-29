@@ -8,8 +8,9 @@ interface and JSON API.
 
 ### 1. Configuration
 
-Configuration is read from the environment. All DORA-specific settings are optional
-(the service runs without them, but DORA features will be disabled).
+`repohub` is configured through `repohub::Config`. The binary uses the defaults
+in code, and a hosting process can populate the fields from environment
+variables or another config source before startup.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -17,9 +18,12 @@ Configuration is read from the environment. All DORA-specific settings are optio
 | `BIND_ADDRESS` | `0.0.0.0:3001` | Server listen address |
 | `DOMAIN` | `homelab` | Domain name for links |
 | `REPOS_BASE_PATH` | `git-server` | Base path for bare Git repos |
-| `GITHUB_OAUTH_CLIENT_ID` | `""` | GitHub OAuth App client ID (empty = OAuth disabled) |
-| `GITHUB_OAUTH_CLIENT_SECRET` | `""` | GitHub OAuth App client secret (empty = OAuth disabled) |
-| `GITHUB_OAUTH_REDIRECT_URL` | `""` | OAuth callback URL, e.g. `http://host:3001/auth/github/callback` |
+| `GITHUB_APP_ID` | `None` | GitHub App ID used for installation auth |
+| `GITHUB_APP_PRIVATE_KEY_PEM` | `None` | PEM-encoded private key used to sign GitHub App JWTs |
+| `GITHUB_WEBHOOK_SECRET` | `None` | Shared secret for validating GitHub App webhook requests |
+| `GITHUB_OAUTH_CLIENT_ID` | `""` | Legacy GitHub OAuth App client ID (empty = legacy flow disabled) |
+| `GITHUB_OAUTH_CLIENT_SECRET` | `""` | Legacy GitHub OAuth App client secret (empty = legacy flow disabled) |
+| `GITHUB_OAUTH_REDIRECT_URL` | `""` | Legacy OAuth callback URL, e.g. `http://host:3001/auth/github/callback` |
 | `GITHUB_DORA_INTERVAL_SECONDS` | `3600` | Background refresh interval (seconds) |
 | `GITHUB_DORA_INCIDENT_LABEL_PATTERNS` | `.*incident.*` | Comma-separated label patterns for incidents |
 
@@ -39,65 +43,100 @@ The database and tables are created automatically on first startup.
 > database with a GitHub `git_url` (e.g. `https://github.com/owner/repo.git`).
 > Repositories hosted elsewhere are skipped. No per-repo configuration needed.
 
-### 3. Connecting Your GitHub Account
+### 3. GitHub App setup
 
-Repohub supports **GitHub OAuth** as the recommended way to connect your GitHub account (replacing the older PAT-based flow).
+Repohub now uses a **GitHub App** for server-side GitHub access, repo listing,
+and webhook validation. GitHub Apps provide installation-scoped, short-lived
+tokens and are the recommended path for new setups.
 
-#### Option A: GitHub OAuth (Recommended)
+##### Step 1: Register a GitHub App
 
-##### Step 1: Register a GitHub OAuth App
-
-1. Go to **GitHub Settings → Developer settings → [OAuth Apps](https://github.com/settings/developers)** → **New OAuth App**
+1. Go to **GitHub Settings → Developer settings → [GitHub Apps](https://github.com/settings/apps)** → **New GitHub App**
 2. Fill in the form:
-   - **Application name:** `Repohub (local)` (or any name you prefer)
-   - **Homepage URL:** `http://localhost:3001` (adjust to your host/port)
-   - **Authorization callback URL:** `http://localhost:3001/auth/github/callback` (must match `GITHUB_OAUTH_REDIRECT_URL` exactly)
-3. Click **Register application**
-4. On the next page, copy the **Client ID** and generate a **Client Secret** (copy it immediately — GitHub shows it only once)
+  - **GitHub App name:** `Repohub (local)` or any name you prefer
+  - **Homepage URL:** `http://localhost:3001` (adjust to your host/port)
+  - **Webhook URL:** `http://localhost:3001/github/webhook`
+  - **Callback URL:** not required for the GitHub App flow; only set one if you still use the legacy OAuth flow
+  - **Webhook secret:** choose a strong secret and copy it into `GITHUB_WEBHOOK_SECRET`
+3. Grant the minimum permissions needed for your workflow.
+  - For repo import and metadata, start with repository metadata read access.
+  - Add more permissions only if your workflows need them.
+4. Subscribe to the webhook events you plan to use, then generate and download the private key PEM.
+5. Install the app on the user/org and repositories you want `repohub` to access.
 
-##### Step 2: Configure Environment Variables
+##### Step 2: Provide the config values
 
-Set these environment variables before starting repohub:
+Populate `repohub::Config` before starting the service:
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `GITHUB_OAUTH_CLIENT_ID` | `""` | Client ID from your GitHub OAuth App |
-| `GITHUB_OAUTH_CLIENT_SECRET` | `""` | Client Secret from your GitHub OAuth App |
-| `GITHUB_OAUTH_REDIRECT_URL` | `""` | Full callback URL — must match the GitHub OAuth App's callback exactly, e.g. `http://localhost:3001/auth/github/callback` |
+```rust
+use repohub::Config;
 
-All three default to empty strings, which **disables OAuth** — the feature is opt-in.
+let config = Config {
+   github_app_id: Some(12345),
+   github_app_private_key_pem: Some(include_str!("/path/to/github-app.pem").to_string()),
+   github_webhook_secret: Some("your-webhook-secret".to_string()),
+   ..Config::default()
+};
+```
 
-##### Step 3: Run Repohub
+##### Step 3: Start Repohub
+
+Start the service with the config populated in your hosting process. If you use
+environment variables, map them to the fields above before constructing
+`Config`.
+
+##### Step 4: Validate the GitHub App flow
+
+1. Start `repohub` and confirm it boots with the GitHub App fields populated.
+2. Verify the GitHub App installation can be used to list repos through
+  `/{username}/github/repos`.
+3. If you expose webhooks locally, send a test webhook to
+  `http://localhost:3001/github/webhook` and confirm the signature matches
+  `github_webhook_secret`.
+
+Legacy OAuth and PAT-based account connection still exist in the UI, but they
+are not the recommended setup for new deployments.
+
+### 4. Manual testing checklist
+
+Use these steps to verify the GitHub App flow locally:
+
+1. Create a GitHub App at `https://github.com/settings/apps` with these values:
+  - **Homepage URL:** `http://localhost:3001`
+  - **Webhook URL:** `http://localhost:3001/github/webhook`
+  - **Callback URL:** only needed for the legacy OAuth flow, not for the GitHub App flow
+  - **Webhook secret:** copy it into `github_webhook_secret`
+  - **Permissions:** start with repository metadata read access and add more only if your workflow needs it
+  - **Events:** subscribe to the webhook events you want to test
+2. Copy the App ID and download the private key PEM.
+3. Fill `repohub::Config` before startup:
+
+```rust
+use repohub::Config;
+
+let config = Config {
+   github_app_id: Some(12345),
+   github_app_private_key_pem: Some(include_str!("/path/to/github-app.pem").to_string()),
+   github_webhook_secret: Some("your-webhook-secret".to_string()),
+   ..Config::default()
+};
+```
+
+4. Start the service:
 
 ```bash
-GITHUB_OAUTH_CLIENT_ID="your_client_id" \
-GITHUB_OAUTH_CLIENT_SECRET="your_client_secret" \
-GITHUB_OAUTH_REDIRECT_URL="http://localhost:3001/auth/github/callback" \
 cargo run -p repohub
 ```
 
-Or place them in a `.env` file:
+5. Verify the GitHub App auth path:
+  - Open a user page and confirm `/{username}/github/repos` returns repositories for the installed app
+  - Open the repo import modal and confirm the GitHub list loads
+6. Verify webhook handling:
+  - Send a test webhook to `http://localhost:3001/github/webhook`
+  - Confirm the request is accepted when the signature matches `github_webhook_secret`
+7. If you still use the legacy OAuth/PAT flow for existing users, confirm that path still works separately
 
-```bash
-GITHUB_OAUTH_CLIENT_ID=your_client_id
-GITHUB_OAUTH_CLIENT_SECRET=your_client_secret
-GITHUB_OAUTH_REDIRECT_URL=http://localhost:3001/auth/github/callback
-```
-
-##### Step 4: Connect in the UI
-
-1. Navigate to your user profile at `http://localhost:3001/{username}`
-2. Click **"Connect to GitHub"** — you'll be redirected to GitHub's authorization page
-3. Authorize the OAuth App
-4. You'll be redirected back to your profile, now showing "Connected as **{github_login}**"
-
-To disconnect, click the **"Disconnect"** button on your profile page.
-
-#### Option B: Personal Access Token (Legacy)
-
-Users may also set a **GitHub Personal Access Token (PAT)** directly. This method is deprecated but still functional for programmatic usage.
-
-Repositories owned by users without a token are skipped during refresh.
+If repo listing is empty or returns `403`, check the app permissions and that the app is installed on the target repository.
 
 ## Available Endpoints
 
@@ -111,10 +150,10 @@ All routes are mounted at the root. Repository context follows the path pattern
 | `GET` | `/` | Home — list all users |
 | `POST` | `/users` | Create a new user (optionally with `github_token`) |
 | `GET` | `/{username}` | View user profile + their projects |
-| `GET` | `/{username}/auth/github` | Start GitHub OAuth flow (redirect to GitHub) |
-| `GET` | `/auth/github/callback` | GitHub OAuth callback handler |
+| `GET` | `/{username}/auth/github` | Start legacy GitHub OAuth flow (redirect to GitHub) |
+| `GET` | `/auth/github/callback` | Legacy GitHub OAuth callback handler |
 | `GET` | `/{username}/github/status` | Check GitHub connection status (JSON) |
-| `GET` | `/{username}/github/repos` | List connected user's GitHub repos (JSON) |
+| `GET` | `/{username}/github/repos` | List repositories available to the configured GitHub auth setup (JSON) |
 | `POST` | `/{username}/github-token` | Update GitHub PAT (legacy) |
 | `DELETE` | `/{username}/github-token` | Disconnect GitHub account |
 | `POST` | `/{username}/projects` | Create a new project |

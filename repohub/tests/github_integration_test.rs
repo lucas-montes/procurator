@@ -6,7 +6,7 @@ mod tests {
     #[test]
     fn test_github_auth_can_be_created_with_pat() {
         // Test that we can create a GithubAuth instance with a PAT
-        let _auth = GithubAuth::new("ghp_test_token".to_string());
+        let _auth = GithubAuth::from_pat("ghp_test_token".to_string());
         // Construction implies the struct is well-formed
     }
 
@@ -16,7 +16,7 @@ mod tests {
             .await
             .expect("Failed to create test database");
 
-        let auth = GithubAuth::new("ghp_test_token".to_string());
+        let auth = GithubAuth::from_pat("ghp_test_token".to_string());
 
         let _client =
             GithubClient::new(auth, db, "test-owner".to_string(), "test-repo".to_string());
