@@ -81,7 +81,12 @@ T01 — Extract `StackCommands` into `cli/pcr/stack/commands.rs`
 - Done check: `cargo build` and `cargo test` pass locally.
 - Verification: green build and test runs.
 
-T06 — Final verification & cleanup
+- [x] T06 — Final verification & cleanup
+- **Status:** done
+- **Completed:** 2026-05-30
+- **Files changed:** Formatted cli/pcr/stack/*.rs; docs already up to date; committed as 2d95d21
+- **Evidence:** `cargo fmt` applied; `git status` clean (only unrelated untracked files); `cargo build` passes
+- **Notes:** Docs (module-layout.md, stack-nix-schema.md) were already current. Commit covers all T01-T06 changes.
 - Boundary: Non-functional cleanup only (formatting, docs, small README note).
 - Steps:
   1. Run `cargo fmt` on modified files.
@@ -95,3 +100,26 @@ Definition of done
 
 Notes
 - Implementation must be done in an implementation session (Shared Context Code agent). This plan records exact tasks, done checks, and verification steps to make implementation deterministic and reviewable.
+
+## Validation Report
+
+### Commands run
+- `cargo test` -> exit 0 (0 passed, 0 failed — no tests exist for stack module)
+- `cargo clippy -p cli` -> exit 0 (only pre-existing warnings in autonix/repo_outils/vcs)
+- `cargo fmt -- --check` -> exit 0 (no formatting issues)
+- `cargo build` -> exit 0 (7 pre-existing warnings in control_plane)
+- No temporary scaffolding introduced; `context/tmp/` contains only old hook logs
+
+### Success-criteria verification
+- [x] All tasks T01–T06 completed — confirmed via plan status (all checkboxes marked)
+- [x] Repository builds (`cargo build`) — confirmed, exit 0
+- [x] Minimal smoke test runs against fixture — confirmed in T04 (procurator stack up exits 0)
+- [x] `cli/pcr/stack/commands.rs` contains `StackCommands` enum — verified
+- [x] `cli/pcr/stack/parser.rs` contains parser functions — verified
+- [x] `tests/fixtures/flakes/stack-simple/flake.nix` exists with 2 services — verified
+- [x] `cargo fmt` applied to all modified files — confirmed
+- [x] Changes committed as `2d95d21` — confirmed
+
+### Residual risks
+- None. All compile warnings are pre-existing in `control_plane`, not introduced by this refactor.
+- The `pcr` CLI binary (`cli/pcr`) cannot be run standalone due to pre-existing VCS compilation errors; the workspace `procurator` binary was used for smoke testing.

@@ -37,6 +37,4 @@ Quick navigation for AI sessions working on Procurator.
 - `cache/` - Caching service
 
 ## Current Work
-- **Active plan**: `plans/stack-refactor-implementation.md`
-- **Completed**: T01 (commands.rs), T02 (parser.rs), T03 (module reconciliation), T04 (integration fixture), T05 (build verification)
-- **Next**: T06 (final verification & cleanup)
+- **Completed plan**: `plans/stack-refactor-implementation.md` (T01–T06 done, committed as 2d95d21)
