@@ -10,7 +10,9 @@ Quick navigation for AI sessions working on Procurator.
 
 ## Domain-Specific Context
 - [vcs/](vcs/) - VCS/version control system (git porcelain)
+- [stack/](stack/) - Stack CLI module layout and behavior
 - [plans/](plans/) - Implementation plans and task tracking
+- [specs/](specs/) - Technical specifications (e.g. Nix schema)
 - [tmp/](tmp/) - Session scratch space
 
 ## Codebase Map
@@ -35,6 +37,6 @@ Quick navigation for AI sessions working on Procurator.
 - `cache/` - Caching service
 
 ## Current Work
-- **Active plan**: `plans/vcs-latest.md`
-- **Completed**: T01, T03, T04, T05, T06, T07, T08, T09
-- **Next**: T10 (final validation and cleanup)
+- **Active plan**: `plans/stack-refactor-implementation.md`
+- **Completed**: T01 (commands.rs), T02 (parser.rs), T03 (module reconciliation), T04 (integration fixture), T05 (build verification)
+- **Next**: T06 (final verification & cleanup)
