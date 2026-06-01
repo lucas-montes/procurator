@@ -1,7 +1,18 @@
-use clap::Args;
+use clap::{Args, Subcommand};
 use std::path::PathBuf;
 
-use super::commands::StackCommands;
+use super::parser::parse_flake_services;
+use super::process::ProcessSupervisor;
+use super::supervisor::{FileStackState, ServiceSupervisor};
+
+#[derive(Debug, Subcommand)]
+/// Subcommands for `pcr stack`
+enum StackCommands {
+    /// Start all services (foreground, Ctrl-C to stop)
+    Start,
+    /// Stop all running services (cross-terminal)
+    Stop,
+}
 
 #[derive(Debug, Args)]
 pub struct StackArgs {
@@ -18,26 +29,29 @@ impl StackArgs {
         let repo_path = self.path.unwrap_or_else(|| PathBuf::from("."));
 
         match self.command {
-            StackCommands::Up => {
-                if let Err(e) = super::parser::parse_and_run(&repo_path) {
+            StackCommands::Start => {
+                let graph = match parse_flake_services(&repo_path) {
+                    Ok(g) => g,
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                };
+                let state_repo = FileStackState::new(repo_path.clone());
+                let mut supervisor = ProcessSupervisor::new(repo_path, Box::new(state_repo));
+                if let Err(e) = supervisor.start(&graph) {
                     eprintln!("Error: {}", e);
                     std::process::exit(1);
                 }
             }
-            StackCommands::Down => {
-                println!("Bringing down the stack...");
-            }
             StackCommands::Stop => {
-                println!("Stopping the stack...");
-            }
-            StackCommands::Start => {
-                println!("Starting the stack...");
-            }
-            StackCommands::Restart => {
-                println!("Restarting the stack...");
+                let state_repo = FileStackState::new(repo_path.clone());
+                let mut supervisor = ProcessSupervisor::new(repo_path, Box::new(state_repo));
+                if let Err(e) = supervisor.stop() {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
             }
         }
     }
 }
-
-// `StackCommands` is defined in `commands.rs` and imported above.

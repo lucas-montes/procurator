@@ -18,7 +18,7 @@ tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 capnp.workspace = true
 capnp-rpc.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["signal"] }
 tokio-util.workspace = true
 uuid.workspace = true
 commands.workspace = true
@@ -26,7 +26,9 @@ autonix.workspace = true
 futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+chrono.workspace = true
 repo_outils.workspace = true
+fs2 = "0.4"
 
 
 [lints]
