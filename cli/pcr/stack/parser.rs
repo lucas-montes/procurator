@@ -36,7 +36,7 @@ impl ServiceGraph {
         for (name, svc) in &self.services {
             if let Some(ports) = &svc.ports {
                 for port in ports {
-                    if *port == 0 || *port > 65535 {
+                    if port.eq(&0) {
                         return Err(format!("Service {} has invalid port {}", name, port));
                     }
                     if !seen_ports.insert(*port) {
@@ -115,13 +115,7 @@ fn has_cycle(services: &HashMap<String, Service>) -> bool {
     false
 }
 
-pub fn parse_and_run(repo_path: &PathBuf) -> Result<(), String> {
-    let graph = parse_flake_services(repo_path)?;
-    run_stack(graph, repo_path)?;
-    Ok(())
-}
-
-pub(crate) fn parse_flake_services(repo_path: &PathBuf) -> Result<ServiceGraph, String> {
+pub fn parse_flake_services(repo_path: &PathBuf) -> Result<ServiceGraph, String> {
     // Run nix eval --json .#stack.services
     let output = std::process::Command::new("nix")
         .arg("eval")
@@ -202,106 +196,4 @@ fn topo_sort(services: &HashMap<String, Service>) -> Result<Vec<String>, String>
     }
 
     Ok(order)
-}
-
-fn run_stack(graph: ServiceGraph, repo_path: &PathBuf) -> Result<(), String> {
-    let rt =
-        tokio::runtime::Runtime::new().map_err(|e| format!("Failed to create runtime: {}", e))?;
-    rt.block_on(async { run_stack_async(graph, repo_path).await })
-}
-
-async fn run_stack_async(graph: ServiceGraph, repo_path: &PathBuf) -> Result<(), String> {
-    use std::process::Stdio;
-    use tokio::io::AsyncBufReadExt;
-
-    let mut children = Vec::new();
-
-    println!("Starting services in order: {:?}", graph.order);
-
-    for svc_name in &graph.order {
-        let svc = graph.services.get(svc_name).unwrap();
-
-        println!("[{}] Starting...", svc_name);
-
-        // Prepare command
-        let (prog, args) = match &svc.cmd {
-            serde_json::Value::String(s) => {
-                // Shell command
-                ("sh".to_string(), vec!["-c".to_string(), s.clone()])
-            }
-            serde_json::Value::Array(arr) => {
-                // Exec form
-                let mut iter = arr.iter();
-                let prog = iter
-                    .next()
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("sh")
-                    .to_string();
-                let args = iter
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect();
-                (prog, args)
-            }
-            _ => return Err(format!("Invalid cmd for service {}", svc_name)),
-        };
-
-        let mut work_dir = repo_path.clone();
-        if let Some(src) = &svc.src {
-            work_dir.push(src);
-        }
-
-        let mut cmd = tokio::process::Command::new(&prog);
-        for arg in args {
-            cmd.arg(arg);
-        }
-
-        cmd.current_dir(&work_dir)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("Failed to spawn {}: {}", svc_name, e))?;
-
-        let name = svc_name.clone();
-        if let Some(stdout) = child.stdout.take() {
-            let mut reader = tokio::io::BufReader::new(stdout).lines();
-            let name_clone = name.clone();
-            tokio::spawn(async move {
-                while let Ok(Some(line)) = reader.next_line().await {
-                    println!("[{}] {}", name_clone, line);
-                }
-            });
-        }
-
-        if let Some(stderr) = child.stderr.take() {
-            let mut reader = tokio::io::BufReader::new(stderr).lines();
-            let name_clone = name.clone();
-            tokio::spawn(async move {
-                while let Ok(Some(line)) = reader.next_line().await {
-                    eprintln!("[{}] ERR {}", name_clone, line);
-                }
-            });
-        }
-
-        children.push((name.clone(), child));
-    }
-
-    println!("All services started. Press Ctrl-C to stop...");
-
-    // Wait indefinitely for children
-    if !children.is_empty() {
-        let _ = children[0].1.wait().await;
-    }
-
-    println!("\nShutting down services...");
-
-    // Stop children in reverse order
-    for (name, mut child) in children.into_iter().rev() {
-        let _ = child.kill().await;
-        let _ = child.wait().await;
-        println!("[{}] stopped", name);
-    }
-
-    Ok(())
 }
