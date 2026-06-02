@@ -17,8 +17,8 @@ enum StackCommands {
 #[derive(Debug, Args)]
 pub struct StackArgs {
     /// Path to repo root (defaults to current directory)
-    #[arg(short, long)]
-    path: Option<PathBuf>,
+    #[arg(short, long, default_value = ".")]
+    path: PathBuf,
 
     #[command(subcommand)]
     command: StackCommands,
@@ -26,27 +26,28 @@ pub struct StackArgs {
 
 impl StackArgs {
     pub fn execute(self) {
-        let repo_path = self.path.unwrap_or_else(|| PathBuf::from("."));
+        let start_supervisor = |repo_root: PathBuf| {
+            let state_repo = FileStackState::new(repo_root.clone());
+            ProcessSupervisor::new(repo_root, state_repo)
+        };
 
         match self.command {
             StackCommands::Start => {
-                let graph = match parse_flake_services(&repo_path) {
+                let graph = match parse_flake_services(&self.path) {
                     Ok(g) => g,
                     Err(e) => {
                         eprintln!("Error: {}", e);
                         std::process::exit(1);
                     }
                 };
-                let state_repo = FileStackState::new(repo_path.clone());
-                let mut supervisor = ProcessSupervisor::new(repo_path, Box::new(state_repo));
+                let mut supervisor = start_supervisor(self.path);
                 if let Err(e) = supervisor.start(&graph) {
                     eprintln!("Error: {}", e);
                     std::process::exit(1);
                 }
             }
             StackCommands::Stop => {
-                let state_repo = FileStackState::new(repo_path.clone());
-                let mut supervisor = ProcessSupervisor::new(repo_path, Box::new(state_repo));
+                let mut supervisor = start_supervisor(self.path);
                 if let Err(e) = supervisor.stop() {
                     eprintln!("Error: {}", e);
                     std::process::exit(1);

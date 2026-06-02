@@ -38,4 +38,4 @@ Quick navigation for AI sessions working on Procurator.
 
 ## Current Work
 - **Completed plan**: `plans/stack-refactor-implementation.md` (T01–T06 done, committed as 2d95d21)
-- **Active plan**: `plans/stack-lifecycle-improvement.md` (T01–T07 done, T08 next)
+- **Completed plan**: `plans/stack-lifecycle-improvement.md` (T01–T08 done, committed as 67e600c)

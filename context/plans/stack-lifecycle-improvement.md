@@ -285,8 +285,18 @@ Clean up state file, exit           │  Clean up state file, exit
 - **Done when**: Context files reflect actual module structure.
 - **Verification**: Compare file list in `cli/pcr/stack/` against `module-layout.md`.
 
-### T08 — Final validation and cleanup
+### T08 — Final validation and cleanup (status:done)
 
+- **Status:** done
+- **Completed:** 2026-06-01
+- **Commit:** `67e600c` on `local-services` branch
+- **Evidence:**
+  - ✅ `cargo fmt --all --check` — clean
+  - ✅ `cargo build -p cli` — only 2 pre-existing VCS errors (unchanged, out of scope)
+  - ✅ `cargo clippy -p cli` — zero stack module issues (all pre-existing in autonix/repo_outils)
+  - ✅ `nix eval --json .#stack.services` — returns valid JSON
+  - ✅ Diff reviewed — no scaffolding/debug artifacts
+  - ✅ `git status` — clean working tree
 - **Goal**: Verify everything works end-to-end and no scaffolding remains.
 - **Boundaries (in/out of scope)**: Full validation of all tasks.
 - **Steps**:

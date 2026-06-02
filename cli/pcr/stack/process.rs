@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
+use chrono::Utc;
 use tokio::io::AsyncBufReadExt;
 use tokio::signal::unix::{SignalKind, signal};
 
@@ -18,13 +19,13 @@ const GRACEFUL_TIMEOUT: Duration = Duration::from_secs(5);
 // Adapter: process-based ServiceSupervisor
 // ---------------------------------------------------------------------------
 
-pub struct ProcessSupervisor {
+pub struct ProcessSupervisor<S: StackState> {
     repo_root: PathBuf,
-    state_repo: Box<dyn StackState>,
+    state_repo: S,
 }
 
-impl ProcessSupervisor {
-    pub fn new(repo_root: PathBuf, state_repo: Box<dyn StackState>) -> Self {
+impl<S: StackState> ProcessSupervisor<S> {
+    pub fn new(repo_root: PathBuf, state_repo: S) -> Self {
         Self {
             repo_root,
             state_repo,
@@ -32,7 +33,7 @@ impl ProcessSupervisor {
     }
 }
 
-impl ServiceSupervisor for ProcessSupervisor {
+impl<S: StackState> ServiceSupervisor for ProcessSupervisor<S> {
     fn start(&mut self, graph: &ServiceGraph) -> Result<RunningStack, String> {
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| format!("failed to create tokio runtime: {}", e))?;
@@ -51,7 +52,7 @@ impl ServiceSupervisor for ProcessSupervisor {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-impl ProcessSupervisor {
+impl<S: StackState> ProcessSupervisor<S> {
     async fn start_async(&self, graph: &ServiceGraph) -> Result<RunningStack, String> {
         // ── Install signal handlers (must happen before spawning children) ──
         let mut sigint =
@@ -63,7 +64,7 @@ impl ProcessSupervisor {
         let mut running = RunningStack {
             version: 1,
             stack_pid: std::process::id(),
-            started_at: iso_timestamp(),
+            started_at: Utc::now().to_rfc3339(),
             services: HashMap::new(),
         };
 
@@ -271,13 +272,4 @@ fn parse_cmd(cmd: &serde_json::Value) -> Result<(String, Vec<String>), String> {
         }
         _ => Err("invalid cmd: expected string or array".to_string()),
     }
-}
-
-// ---------------------------------------------------------------------------
-// Utility: ISO-8601 timestamp (requires chrono workspace dep)
-// ---------------------------------------------------------------------------
-
-fn iso_timestamp() -> String {
-    use chrono::Utc;
-    Utc::now().to_rfc3339()
 }
