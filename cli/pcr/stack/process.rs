@@ -16,6 +16,41 @@ use crate::stack::supervisor::{
 const GRACEFUL_TIMEOUT: Duration = Duration::from_secs(5);
 
 // ---------------------------------------------------------------------------
+// Color palette for per-service log prefixes
+// ---------------------------------------------------------------------------
+
+/// 12 distinct ANSI foreground colors cycled per service.
+const COLORS: &[&str] = &[
+    "\x1b[32m", // green
+    "\x1b[36m", // cyan
+    "\x1b[33m", // yellow
+    "\x1b[35m", // magenta
+    "\x1b[34m", // blue
+    "\x1b[91m", // bright red
+    "\x1b[92m", // bright green
+    "\x1b[96m", // bright cyan
+    "\x1b[93m", // bright yellow
+    "\x1b[95m", // bright magenta
+    "\x1b[94m", // bright blue
+    "\x1b[31m", // red
+];
+const RESET: &str = "\x1b[0m";
+
+/// Build a service-name → ANSI color-code lookup from the boot order.
+fn build_color_map(order: &[String]) -> HashMap<String, String> {
+    order
+        .iter()
+        .enumerate()
+        .map(|(i, name)| (name.clone(), COLORS[i % COLORS.len()].to_string()))
+        .collect()
+}
+
+/// Format a log prefix like `[service_name]` with the service's color.
+fn colored_prefix(name: &str, color: &str) -> String {
+    format!("{}[{}]{}", color, name, RESET)
+}
+
+// ---------------------------------------------------------------------------
 // Adapter: process-based ServiceSupervisor
 // ---------------------------------------------------------------------------
 
@@ -42,7 +77,13 @@ impl<S: StackState> ServiceSupervisor for ProcessSupervisor<S> {
 
     fn stop(&mut self) -> Result<(), String> {
         let state = self.state_repo.load()?;
-        kill_service_pids(&state.services, GRACEFUL_TIMEOUT);
+        let colors: HashMap<String, String> = state
+            .services
+            .keys()
+            .enumerate()
+            .map(|(i, name)| (name.clone(), COLORS[i % COLORS.len()].to_string()))
+            .collect();
+        kill_service_pids(&state.services, &colors, GRACEFUL_TIMEOUT);
         self.state_repo.clear()?;
         Ok(())
     }
@@ -53,12 +94,15 @@ impl<S: StackState> ServiceSupervisor for ProcessSupervisor<S> {
 // ---------------------------------------------------------------------------
 
 impl<S: StackState> ProcessSupervisor<S> {
-    pub(crate) async fn start_impl(&self, graph: &ServiceGraph) -> Result<RunningStack, String> {
+    pub async fn start_impl(&self, graph: &ServiceGraph) -> Result<RunningStack, String> {
         // ── Install signal handlers (must happen before spawning children) ──
         let mut sigint =
             signal(SignalKind::interrupt()).map_err(|e| format!("SIGINT handler: {}", e))?;
         let mut sigterm =
             signal(SignalKind::terminate()).map_err(|e| format!("SIGTERM handler: {}", e))?;
+
+        // ── Assign a color to each service ──
+        let colors = build_color_map(&graph.order);
 
         // ── Spawn children in topological order ──
         let mut running = RunningStack {
@@ -70,6 +114,8 @@ impl<S: StackState> ProcessSupervisor<S> {
 
         for svc_name in &graph.order {
             let svc = graph.services.get(svc_name).unwrap();
+            let color = colors.get(svc_name).map(|s| s.as_str()).unwrap_or("");
+            let prefix = colored_prefix(svc_name, color);
 
             let is_one_shot = svc.one_shot.unwrap_or(false);
 
@@ -90,21 +136,23 @@ impl<S: StackState> ProcessSupervisor<S> {
 
             let mut child = cmd
                 .spawn()
-                .map_err(|e| format!("[{}] failed to spawn: {}", svc_name, e))?;
+                .map_err(|e| format!("{} failed to spawn: {}", prefix, e))?;
 
             let pid = child
                 .id()
-                .ok_or_else(|| format!("[{}] spawned but PID unavailable", svc_name))?;
+                .ok_or_else(|| format!("{} spawned but PID unavailable", prefix))?;
 
-            println!("[{}] started (pid {})", svc_name, pid);
+            println!("{} started (pid {})", prefix, pid);
 
             // Stream stdout
             if let Some(stdout) = child.stdout.take() {
                 let name = svc_name.clone();
+                let color_code = color.to_string();
                 let mut reader = tokio::io::BufReader::new(stdout).lines();
                 tokio::spawn(async move {
+                    let p = colored_prefix(&name, &color_code);
                     while let Ok(Some(line)) = reader.next_line().await {
-                        println!("[{}] {}", name, line);
+                        println!("{} {}", p, line);
                     }
                 });
             }
@@ -112,10 +160,12 @@ impl<S: StackState> ProcessSupervisor<S> {
             // Stream stderr
             if let Some(stderr) = child.stderr.take() {
                 let name = svc_name.clone();
+                let color_code = color.to_string();
                 let mut reader = tokio::io::BufReader::new(stderr).lines();
                 tokio::spawn(async move {
+                    let p = colored_prefix(&name, &color_code);
                     while let Ok(Some(line)) = reader.next_line().await {
-                        eprintln!("[{}] ERR {}", name, line);
+                        eprintln!("{} ERR {}", p, line);
                     }
                 });
             }
@@ -134,17 +184,17 @@ impl<S: StackState> ProcessSupervisor<S> {
                 let exit_status = child
                     .wait()
                     .await
-                    .map_err(|e| format!("[{}] wait error: {}", svc_name, e))?;
+                    .map_err(|e| format!("{} wait error: {}", prefix, e))?;
 
                 if !exit_status.success() {
                     // oneShot failed — abort the whole stack.
                     eprintln!(
-                        "[{}] oneShot failed with exit code {:?}; aborting stack",
-                        svc_name,
+                        "{} oneShot failed with exit code {:?}; aborting stack",
+                        prefix,
                         exit_status.code()
                     );
                     // Kill any services that were already started.
-                    kill_service_pids(&running.services, GRACEFUL_TIMEOUT);
+                    kill_service_pids(&running.services, &colors, GRACEFUL_TIMEOUT);
                     self.state_repo.clear().ok();
                     return Err(format!(
                         "oneShot service '{}' exited with code {:?}",
@@ -153,7 +203,7 @@ impl<S: StackState> ProcessSupervisor<S> {
                     ));
                 }
 
-                println!("[{}] oneShot completed successfully", svc_name);
+                println!("{} oneShot completed successfully", prefix);
                 // Mark as stopped (it already exited).
                 if let Some(entry) = running.services.get_mut(svc_name) {
                     entry.status = ServiceStatus::Stopped;
@@ -194,10 +244,10 @@ impl<S: StackState> ProcessSupervisor<S> {
         // ── Graceful shutdown ──
         // Reload state to get the latest PIDs.
         if let Ok(latest) = self.state_repo.load() {
-            kill_service_pids(&latest.services, GRACEFUL_TIMEOUT);
+            kill_service_pids(&latest.services, &colors, GRACEFUL_TIMEOUT);
         } else {
             // If state is already gone, still try children from our local map.
-            kill_service_pids(&running.services, GRACEFUL_TIMEOUT);
+            kill_service_pids(&running.services, &colors, GRACEFUL_TIMEOUT);
         }
         self.state_repo.clear().ok();
 
@@ -211,7 +261,11 @@ impl<S: StackState> ProcessSupervisor<S> {
 // ---------------------------------------------------------------------------
 
 /// Send SIGTERM to all services, wait up to `timeout`, then SIGKILL survivors.
-fn kill_service_pids(services: &HashMap<String, RunningService>, timeout: Duration) {
+fn kill_service_pids(
+    services: &HashMap<String, RunningService>,
+    colors: &HashMap<String, String>,
+    timeout: Duration,
+) {
     // Phase 1: SIGTERM
     for (name, svc) in services.iter() {
         if svc.pid != 0 && is_pid_alive(svc.pid) {
@@ -221,7 +275,8 @@ fn kill_service_pids(services: &HashMap<String, RunningService>, timeout: Durati
                 .map(|s| s.success())
                 .unwrap_or(false);
             if ok {
-                println!("[{}] SIGTERM sent", name);
+                let color = colors.get(name).map(|s| s.as_str()).unwrap_or("");
+                println!("{} SIGTERM sent", colored_prefix(name, color));
             }
         }
     }
@@ -245,7 +300,8 @@ fn kill_service_pids(services: &HashMap<String, RunningService>, timeout: Durati
                 .arg("-9")
                 .arg(svc.pid.to_string())
                 .status();
-            eprintln!("[{}] force killed", name);
+            let color = colors.get(name).map(|s| s.as_str()).unwrap_or("");
+            eprintln!("{} force killed", colored_prefix(name, color));
         }
     }
 }
