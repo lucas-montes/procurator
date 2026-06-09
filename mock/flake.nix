@@ -10,6 +10,11 @@
     nixpkgs,
   }: {
     stack = {
+      logs = {
+        dir = "./logs";
+        max_lines = 10;
+      };
+
       services = {
         # ── oneShot: runs and exits ──
         migrate = {

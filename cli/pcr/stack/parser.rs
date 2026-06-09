@@ -25,6 +25,15 @@ pub struct ServiceGraph {
     pub order: Vec<String>, // topologically sorted service names
 }
 
+/// Global log configuration, parsed from `stack.logs` in the flake.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogConfig {
+    /// Directory for log files (relative to --path, or absolute).
+    pub dir: PathBuf,
+    /// Max total lines across all services before rotating to a new file.
+    pub max_lines: usize,
+}
+
 impl ServiceGraph {
     pub fn validate(&self) -> Result<(), String> {
         // Check for cycles in dependsOn
@@ -116,7 +125,9 @@ fn has_cycle(services: &HashMap<String, Service>) -> bool {
     false
 }
 
-pub fn parse_flake_services(repo_path: &PathBuf) -> Result<ServiceGraph, String> {
+pub fn parse_flake_services(
+    repo_path: &PathBuf,
+) -> Result<(ServiceGraph, Option<LogConfig>), String> {
     // Run nix eval --json .#stack.services
     let output = std::process::Command::new("nix")
         .arg("eval")
@@ -143,7 +154,31 @@ pub fn parse_flake_services(repo_path: &PathBuf) -> Result<ServiceGraph, String>
     let graph = ServiceGraph { services, order };
     graph.validate()?;
 
-    Ok(graph)
+    // Try to parse optional log config from .#stack.logs
+    let log_config = parse_log_config(repo_path)?;
+
+    Ok((graph, log_config))
+}
+
+/// Parse the optional `stack.logs` attribute from the flake.
+fn parse_log_config(repo_path: &PathBuf) -> Result<Option<LogConfig>, String> {
+    let output = std::process::Command::new("nix")
+        .arg("eval")
+        .arg("--json")
+        .arg(".#stack.logs")
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("Failed to run nix eval for logs: {}", e))?;
+
+    if !output.status.success() {
+        // Attribute not present — file logging is disabled
+        return Ok(None);
+    }
+
+    let config: LogConfig = serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("Failed to parse log config: {}", e))?;
+
+    Ok(Some(config))
 }
 
 fn topo_sort(services: &HashMap<String, Service>) -> Result<Vec<String>, String> {

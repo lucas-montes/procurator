@@ -5,8 +5,10 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use tokio::io::AsyncBufReadExt;
+use tokio::fs;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::signal::unix::{SignalKind, signal};
+use tokio::sync::mpsc;
 
 use crate::stack::parser::ServiceGraph;
 use crate::stack::supervisor::{
@@ -15,10 +17,6 @@ use crate::stack::supervisor::{
 
 /// How long to wait after SIGTERM before sending SIGKILL.
 const GRACEFUL_TIMEOUT: Duration = Duration::from_secs(5);
-
-// ---------------------------------------------------------------------------
-// Color palette for per-service log prefixes
-// ---------------------------------------------------------------------------
 
 /// 30 distinct foreground colors — ANSI 8/16 + 256-color codes.
 const COLORS: &[&str] = &[
@@ -79,12 +77,78 @@ fn colored_prefix(name: &str, color: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// File logging via mpsc channel (no Mutex)
+// ---------------------------------------------------------------------------
+
+/// A single log line to be written to the shared log file.
+#[derive(Debug)]
+pub struct LogLine {
+    pub service: String,
+    pub stream: &'static str, // "STDOUT" or "STDERR"
+    pub text: String,
+}
+
+/// Async writer task: receives lines via channel and writes to a rotating
+/// log file at `<log_dir>/<timestamp>.log`.
+pub(crate) async fn file_writer(
+    mut rx: mpsc::Receiver<LogLine>,
+    log_dir: PathBuf,
+    max_lines: usize,
+) {
+    let _ = fs::create_dir_all(&log_dir).await;
+
+    let mut current_file: Option<fs::File> = None;
+    let mut line_count: usize = 0;
+
+    while let Some(line) = rx.recv().await {
+        // Open first file if needed
+        if current_file.is_none() {
+            current_file = open_new_log(&log_dir).await;
+        }
+
+        // Rotate if limit reached
+        if line_count >= max_lines {
+            current_file = open_new_log(&log_dir).await;
+            line_count = 0;
+        }
+
+        // Format: [2026-06-09T14:30:00.123Z] [service] STREAM message\n
+        let formatted = format!(
+            "[{}] [{}] {} {}\n",
+            Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ"),
+            line.service,
+            line.stream,
+            line.text,
+        );
+
+        if let Some(ref mut file) = current_file {
+            let _ = file.write_all(formatted.as_bytes()).await;
+            let _ = file.flush().await; // flush each line for crash safety
+        }
+    }
+
+    // Flush on shutdown
+    if let Some(ref mut file) = current_file {
+        let _ = file.flush().await;
+    }
+}
+
+/// Open a new log file with an ISO-8601-compact timestamp name.
+async fn open_new_log(dir: &PathBuf) -> Option<fs::File> {
+    let ts = Utc::now().format("%Y-%m-%dT%H-%M-%SZ");
+    let path = dir.join(format!("{}.log", ts));
+    fs::File::create(&path).await.ok()
+}
+
+// ---------------------------------------------------------------------------
 // Adapter: process-based ServiceSupervisor
 // ---------------------------------------------------------------------------
 
 pub struct ProcessSupervisor<S: StackState> {
     repo_root: PathBuf,
     state_repo: S,
+    /// Optional sender for file logging. When `None`, only terminal output.
+    pub log_sender: Option<mpsc::Sender<LogLine>>,
 }
 
 impl<S: StackState> ProcessSupervisor<S> {
@@ -92,6 +156,7 @@ impl<S: StackState> ProcessSupervisor<S> {
         Self {
             repo_root,
             state_repo,
+            log_sender: None,
         }
     }
 }
@@ -115,10 +180,6 @@ impl<S: StackState> ServiceSupervisor for ProcessSupervisor<S> {
         Ok(())
     }
 }
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
 
 impl<S: StackState> ProcessSupervisor<S> {
     pub async fn start_impl(&self, graph: &ServiceGraph) -> Result<RunningStack, String> {
@@ -176,10 +237,20 @@ impl<S: StackState> ProcessSupervisor<S> {
                 let name = svc_name.clone();
                 let color_code = color.to_string();
                 let mut reader = tokio::io::BufReader::new(stdout).lines();
+                let log_tx = self.log_sender.clone();
                 tokio::spawn(async move {
                     let p = colored_prefix(&name, &color_code);
                     while let Ok(Some(line)) = reader.next_line().await {
                         println!("{} {}", p, line);
+                        if let Some(ref tx) = log_tx {
+                            let _ = tx
+                                .send(LogLine {
+                                    service: name.clone(),
+                                    stream: "STDOUT",
+                                    text: line,
+                                })
+                                .await;
+                        }
                     }
                 });
             }
@@ -189,10 +260,20 @@ impl<S: StackState> ProcessSupervisor<S> {
                 let name = svc_name.clone();
                 let color_code = color.to_string();
                 let mut reader = tokio::io::BufReader::new(stderr).lines();
+                let log_tx = self.log_sender.clone();
                 tokio::spawn(async move {
                     let p = colored_prefix(&name, &color_code);
                     while let Ok(Some(line)) = reader.next_line().await {
                         eprintln!("{} ERR {}", p, line);
+                        if let Some(ref tx) = log_tx {
+                            let _ = tx
+                                .send(LogLine {
+                                    service: name.clone(),
+                                    stream: "STDERR",
+                                    text: line,
+                                })
+                                .await;
+                        }
                     }
                 });
             }
@@ -282,10 +363,6 @@ impl<S: StackState> ProcessSupervisor<S> {
         Ok(running)
     }
 }
-
-// ---------------------------------------------------------------------------
-// Utility: signal + kill with graceful escalation
-// ---------------------------------------------------------------------------
 
 /// Send SIGTERM to all services, wait up to `timeout`, then SIGKILL survivors.
 fn kill_service_pids(
