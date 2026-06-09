@@ -60,7 +60,7 @@ async fn main() {
         }
 
         Commands::Stack(args) => {
-            args.execute();
+            args.execute().await;
         }
         Commands::Agents(args) => {
             args.execute();

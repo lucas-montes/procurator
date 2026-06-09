@@ -25,7 +25,7 @@ pub struct StackArgs {
 }
 
 impl StackArgs {
-    pub fn execute(self) {
+    pub async fn execute(self) {
         let start_supervisor = |repo_root: PathBuf| {
             let state_repo = FileStackState::new(repo_root.clone());
             ProcessSupervisor::new(repo_root, state_repo)
@@ -33,25 +33,14 @@ impl StackArgs {
 
         match self.command {
             StackCommands::Start => {
-                let graph = match parse_flake_services(&self.path) {
-                    Ok(g) => g,
-                    Err(e) => {
-                        eprintln!("Error: {}", e);
-                        std::process::exit(1);
-                    }
-                };
-                let mut supervisor = start_supervisor(self.path);
-                if let Err(e) = supervisor.start(&graph) {
-                    eprintln!("Error: {}", e);
-                    std::process::exit(1);
-                }
+                let graph =
+                    parse_flake_services(&self.path).expect("unable to parse flake services");
+                let supervisor = start_supervisor(self.path);
+                supervisor.start_impl(&graph).await.expect("start failed");
             }
             StackCommands::Stop => {
                 let mut supervisor = start_supervisor(self.path);
-                if let Err(e) = supervisor.stop() {
-                    eprintln!("Error: {}", e);
-                    std::process::exit(1);
-                }
+                supervisor.stop().expect("stack stop failed");
             }
         }
     }

@@ -37,7 +37,7 @@ impl<S: StackState> ServiceSupervisor for ProcessSupervisor<S> {
     fn start(&mut self, graph: &ServiceGraph) -> Result<RunningStack, String> {
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| format!("failed to create tokio runtime: {}", e))?;
-        rt.block_on(self.start_async(graph))
+        rt.block_on(self.start_impl(graph))
     }
 
     fn stop(&mut self) -> Result<(), String> {
@@ -53,7 +53,7 @@ impl<S: StackState> ServiceSupervisor for ProcessSupervisor<S> {
 // ---------------------------------------------------------------------------
 
 impl<S: StackState> ProcessSupervisor<S> {
-    async fn start_async(&self, graph: &ServiceGraph) -> Result<RunningStack, String> {
+    pub(crate) async fn start_impl(&self, graph: &ServiceGraph) -> Result<RunningStack, String> {
         // ── Install signal handlers (must happen before spawning children) ──
         let mut sigint =
             signal(SignalKind::interrupt()).map_err(|e| format!("SIGINT handler: {}", e))?;
