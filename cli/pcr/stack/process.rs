@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -36,12 +37,21 @@ const COLORS: &[&str] = &[
 ];
 const RESET: &str = "\x1b[0m";
 
+/// Pick a color from the palette based on a hash of the service name.
+/// This ensures the same service always gets the same color regardless of
+/// startup order or how many other services exist.
+fn color_for(name: &str) -> &'static str {
+    let mut hasher = DefaultHasher::new();
+    name.hash(&mut hasher);
+    let idx = hasher.finish() as usize % COLORS.len();
+    COLORS[idx]
+}
+
 /// Build a service-name → ANSI color-code lookup from the boot order.
 fn build_color_map(order: &[String]) -> HashMap<String, String> {
     order
         .iter()
-        .enumerate()
-        .map(|(i, name)| (name.clone(), COLORS[i % COLORS.len()].to_string()))
+        .map(|name| (name.clone(), color_for(name).to_string()))
         .collect()
 }
 
@@ -80,8 +90,7 @@ impl<S: StackState> ServiceSupervisor for ProcessSupervisor<S> {
         let colors: HashMap<String, String> = state
             .services
             .keys()
-            .enumerate()
-            .map(|(i, name)| (name.clone(), COLORS[i % COLORS.len()].to_string()))
+            .map(|name| (name.clone(), color_for(name).to_string()))
             .collect();
         kill_service_pids(&state.services, &colors, GRACEFUL_TIMEOUT);
         self.state_repo.clear()?;
