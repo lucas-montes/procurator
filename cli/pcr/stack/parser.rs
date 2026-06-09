@@ -11,10 +11,11 @@ pub struct Service {
     #[serde(default)]
     pub ports: Option<Vec<u16>>,
     #[serde(rename = "dependsOn", default)]
-    pub depends_on: Option<Vec<String>>,
+    pub depends_on: Option<Vec<String>>, //NOTE: this should respect the order
     #[serde(rename = "oneShot", default)]
     pub one_shot: Option<bool>,
     #[serde(default)]
+    // NOTE: instead of a periodic option, we could use a cron-like syntax
     pub restart: Option<String>,
 }
 
