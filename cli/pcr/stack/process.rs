@@ -20,24 +20,42 @@ const GRACEFUL_TIMEOUT: Duration = Duration::from_secs(5);
 // Color palette for per-service log prefixes
 // ---------------------------------------------------------------------------
 
-/// 12 distinct ANSI foreground colors cycled per service.
+/// 30 distinct foreground colors — ANSI 8/16 + 256-color codes.
 const COLORS: &[&str] = &[
-    "\x1b[32m", // green
-    "\x1b[36m", // cyan
-    "\x1b[33m", // yellow
-    "\x1b[35m", // magenta
-    "\x1b[34m", // blue
-    "\x1b[91m", // bright red
-    "\x1b[92m", // bright green
-    "\x1b[96m", // bright cyan
-    "\x1b[93m", // bright yellow
-    "\x1b[95m", // bright magenta
-    "\x1b[94m", // bright blue
-    "\x1b[31m", // red
+    "\x1b[31m",       // 0:  red
+    "\x1b[32m",       // 1:  green
+    "\x1b[33m",       // 2:  yellow
+    "\x1b[34m",       // 3:  blue
+    "\x1b[35m",       // 4:  magenta
+    "\x1b[36m",       // 5:  cyan
+    "\x1b[91m",       // 6:  bright red
+    "\x1b[92m",       // 7:  bright green
+    "\x1b[93m",       // 8:  bright yellow
+    "\x1b[94m",       // 9:  bright blue
+    "\x1b[95m",       // 10: bright magenta
+    "\x1b[96m",       // 11: bright cyan
+    "\x1b[38;5;208m", // 12: orange
+    "\x1b[38;5;45m",  // 13: sky blue
+    "\x1b[38;5;200m", // 14: pink
+    "\x1b[38;5;118m", // 15: lime green
+    "\x1b[38;5;99m",  // 16: purple
+    "\x1b[38;5;37m",  // 17: teal
+    "\x1b[38;5;173m", // 18: salmon
+    "\x1b[38;5;141m", // 19: lavender
+    "\x1b[38;5;48m",  // 20: mint
+    "\x1b[38;5;203m", // 21: coral
+    "\x1b[38;5;75m",  // 22: cornflower blue
+    "\x1b[38;5;220m", // 23: gold
+    "\x1b[38;5;205m", // 24: hot pink
+    "\x1b[38;5;120m", // 25: pastel green
+    "\x1b[38;5;68m",  // 26: steel blue
+    "\x1b[38;5;179m", // 27: tan
+    "\x1b[38;5;51m",  // 28: bright cyan
+    "\x1b[38;5;155m", // 29: chartreuse
 ];
 const RESET: &str = "\x1b[0m";
 
-/// Pick a color from the palette based on a hash of the service name.
+/// Pick a color from the 30-color palette based on a hash of the service name.
 /// This ensures the same service always gets the same color regardless of
 /// startup order or how many other services exist.
 fn color_for(name: &str) -> &'static str {
