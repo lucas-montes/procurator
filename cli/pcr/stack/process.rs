@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use chrono::Utc;
 use tokio::io::AsyncBufReadExt;
@@ -9,9 +9,10 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 
 use crate::stack::logging::{LogLine, LogStream, color_for, colored_prefix};
-use crate::stack::parser::ServiceGraph;
+use crate::stack::parser::{Service, ServiceGraph};
 use crate::stack::supervisor::{
-    RunningService, RunningStack, ServiceStatus, ServiceSupervisor, StackState, is_pid_alive,
+    RunningService, RunningStack, ServiceHandle, ServiceStatus, ServiceSupervisor, StackState,
+    flatten_handles, kill_pid,
 };
 
 /// How long to wait after SIGTERM before sending SIGKILL.
@@ -43,161 +44,240 @@ impl<S: StackState> ServiceSupervisor for ProcessSupervisor<S> {
 
     fn stop(&mut self) -> Result<(), String> {
         let state = self.state_repo.load()?;
-        kill_service_pids(&state.services, GRACEFUL_TIMEOUT);
+        for (name, svc) in &state.services {
+            kill_pid(svc.pid, name, GRACEFUL_TIMEOUT);
+        }
         self.state_repo.clear()?;
         Ok(())
     }
 }
 
+// ---------------------------------------------------------------------------
+// Spawn helpers
+// ---------------------------------------------------------------------------
+
+impl<S: StackState> ProcessSupervisor<S> {
+    /// Spawn a single service and return a [`ServiceHandle`].
+    ///
+    /// For oneShot services this awaits completion: on success the handle
+    /// is returned with `pid = 0` / `Status::Stopped`; on failure the error
+    /// is propagated (the caller is responsible for cleaning up already-
+    /// spawned services).
+    async fn spawn_one(&self, name: &str, svc: &Service) -> Result<ServiceHandle, String> {
+        let color = color_for(name);
+        let prefix = colored_prefix(name, color);
+        let is_one_shot = svc.one_shot.unwrap_or(false);
+
+        let (prog, args) = parse_cmd(&svc.cmd)?;
+
+        let mut work_dir = self.repo_root.clone();
+        if let Some(src) = &svc.src {
+            work_dir.push(src);
+        }
+
+        let mut cmd = tokio::process::Command::new(&prog);
+        for arg in &args {
+            cmd.arg(arg);
+        }
+        cmd.current_dir(&work_dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("{} failed to spawn: {}", prefix, e))?;
+
+        let pid = child
+            .id()
+            .ok_or_else(|| format!("{} spawned but PID unavailable", prefix))?;
+
+        println!("{} started (pid {})", prefix, pid);
+
+        let log_tx = self.log_sender.clone();
+
+        // Stream stdout → LogLine channel
+        if let Some(stdout) = child.stdout.take() {
+            let name = name.to_string();
+            let mut reader = tokio::io::BufReader::new(stdout).lines();
+            let tx = log_tx.clone();
+            tokio::spawn(async move {
+                while let Ok(Some(text)) = reader.next_line().await {
+                    if let Some(ref tx) = tx {
+                        let _ = tx
+                            .send(LogLine {
+                                service: name.clone(),
+                                stream: LogStream::Stdout,
+                                text,
+                                timestamp: Utc::now(),
+                            })
+                            .await;
+                    }
+                }
+            });
+        }
+
+        // Stream stderr → LogLine channel
+        if let Some(stderr) = child.stderr.take() {
+            let name = name.to_string();
+            let mut reader = tokio::io::BufReader::new(stderr).lines();
+            let tx = log_tx.clone();
+            tokio::spawn(async move {
+                while let Ok(Some(text)) = reader.next_line().await {
+                    if let Some(ref tx) = tx {
+                        let _ = tx
+                            .send(LogLine {
+                                service: name.clone(),
+                                stream: LogStream::Stderr,
+                                text,
+                                timestamp: Utc::now(),
+                            })
+                            .await;
+                    }
+                }
+            });
+        }
+
+        let mut running = RunningService {
+            cmd: svc.cmd.clone(),
+            pid,
+            status: ServiceStatus::Running,
+        };
+
+        // For oneShot services, wait for completion
+        if is_one_shot {
+            let exit_status = child
+                .wait()
+                .await
+                .map_err(|e| format!("{} wait error: {}", prefix, e))?;
+
+            if !exit_status.success() {
+                return Err(format!(
+                    "oneShot service '{}' exited with code {:?}",
+                    name,
+                    exit_status.code()
+                ));
+            }
+
+            println!("{} oneShot completed successfully", prefix);
+            running.status = ServiceStatus::Stopped;
+            running.pid = 0;
+        }
+
+        Ok(ServiceHandle {
+            name: name.to_string(),
+            running,
+        })
+    }
+
+    /// Spawn services by name, respecting the graph's topological order.
+    ///
+    /// - `names` is a subset of the service names in `graph`.
+    /// - `handles` is mutated in place: new handles are inserted, existing
+    ///   handles are left alone (unless `replace` is true, in which case
+    ///   the old handle is stopped first).
+    /// - State is persisted after each successful spawn.
+    pub async fn spawn_many(
+        &self,
+        names: &[String],
+        graph: &ServiceGraph,
+        handles: &mut HashMap<String, ServiceHandle>,
+        replace: bool,
+        stack_pid: u32,
+        started_at: &str,
+    ) -> Result<(), String> {
+        // Preserve topological order: walk graph.order and pick only the
+        // requested names.
+        let to_spawn: Vec<&str> = graph
+            .order
+            .iter()
+            .filter(|n| names.contains(n))
+            .map(|s| s.as_str())
+            .collect();
+
+        for svc_name in to_spawn {
+            let svc = graph.services.get(svc_name).unwrap();
+
+            // Stop existing handle if replacing.
+            if replace {
+                if let Some(handle) = handles.get_mut(svc_name) {
+                    handle.stop(GRACEFUL_TIMEOUT);
+                }
+            }
+
+            // Skip already-running services (only relevant when !replace).
+            if handles.contains_key(svc_name) {
+                continue;
+            }
+
+            match self.spawn_one(svc_name, svc).await {
+                Ok(handle) => {
+                    handles.insert(svc_name.to_string(), handle);
+                    // Persist after each successful spawn.
+                    let running = flatten_handles(handles, stack_pid, started_at);
+                    self.state_repo.save(&running)?;
+                }
+                Err(e) => {
+                    // oneShot or spawn failed — clean up already-spawned
+                    // services before propagating.
+                    for h in handles.values_mut() {
+                        h.stop(GRACEFUL_TIMEOUT);
+                    }
+                    self.state_repo.clear().ok();
+                    return Err(e);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Spawn **all** services from the graph and return the handle map.
+    pub async fn spawn_all(
+        &self,
+        graph: &ServiceGraph,
+    ) -> Result<HashMap<String, ServiceHandle>, String> {
+        let stack_pid = std::process::id();
+        let started_at = Utc::now().to_rfc3339();
+        let mut handles = HashMap::new();
+        self.spawn_many(
+            &graph.order,
+            graph,
+            &mut handles,
+            false,
+            stack_pid,
+            &started_at,
+        )
+        .await?;
+        Ok(handles)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// start_impl — sync trait wrappers call into this
+// ---------------------------------------------------------------------------
+
 impl<S: StackState> ProcessSupervisor<S> {
     pub async fn start_impl(&self, graph: &ServiceGraph) -> Result<RunningStack, String> {
+        let stack_pid = std::process::id();
+        let started_at = Utc::now().to_rfc3339();
+
         // ── Install signal handlers (must happen before spawning children) ──
         let mut sigint =
             signal(SignalKind::interrupt()).map_err(|e| format!("SIGINT handler: {}", e))?;
         let mut sigterm =
             signal(SignalKind::terminate()).map_err(|e| format!("SIGTERM handler: {}", e))?;
 
-        // ── Spawn children in topological order ──
-        let mut running = RunningStack {
-            version: 1,
-            stack_pid: std::process::id(),
-            started_at: Utc::now().to_rfc3339(),
-            services: HashMap::new(),
-        };
-
-        for svc_name in &graph.order {
-            let svc = graph.services.get(svc_name).unwrap();
-            let color = color_for(svc_name);
-            let prefix = colored_prefix(svc_name, color);
-
-            let is_one_shot = svc.one_shot.unwrap_or(false);
-
-            let (prog, args) = parse_cmd(&svc.cmd)?;
-
-            let mut work_dir = self.repo_root.clone();
-            if let Some(src) = &svc.src {
-                work_dir.push(src);
-            }
-
-            let mut cmd = tokio::process::Command::new(&prog);
-            for arg in &args {
-                cmd.arg(arg);
-            }
-            cmd.current_dir(&work_dir)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
-
-            let mut child = cmd
-                .spawn()
-                .map_err(|e| format!("{} failed to spawn: {}", prefix, e))?;
-
-            let pid = child
-                .id()
-                .ok_or_else(|| format!("{} spawned but PID unavailable", prefix))?;
-
-            println!("{} started (pid {})", prefix, pid);
-
-            let log_tx = self.log_sender.clone();
-
-            // Stream stdout → send LogLine through channel
-            if let Some(stdout) = child.stdout.take() {
-                let name = svc_name.clone();
-                let mut reader = tokio::io::BufReader::new(stdout).lines();
-                let tx = log_tx.clone();
-                tokio::spawn(async move {
-                    while let Ok(Some(text)) = reader.next_line().await {
-                        if let Some(ref tx) = tx {
-                            let _ = tx
-                                .send(LogLine {
-                                    service: name.clone(),
-                                    stream: LogStream::Stdout,
-                                    text,
-                                    timestamp: Utc::now(),
-                                })
-                                .await;
-                        }
-                    }
-                });
-            }
-
-            // Stream stderr → send LogLine through channel
-            if let Some(stderr) = child.stderr.take() {
-                let name = svc_name.clone();
-                let mut reader = tokio::io::BufReader::new(stderr).lines();
-                let tx = log_tx.clone();
-                tokio::spawn(async move {
-                    while let Ok(Some(text)) = reader.next_line().await {
-                        if let Some(ref tx) = tx {
-                            let _ = tx
-                                .send(LogLine {
-                                    service: name.clone(),
-                                    stream: LogStream::Stderr,
-                                    text,
-                                    timestamp: Utc::now(),
-                                })
-                                .await;
-                        }
-                    }
-                });
-            }
-
-            running.services.insert(
-                svc_name.clone(),
-                RunningService {
-                    cmd: svc.cmd.clone(),
-                    pid,
-                    status: ServiceStatus::Running,
-                },
-            );
-
-            // For oneShot services, wait for completion and check exit code.
-            if is_one_shot {
-                let exit_status = child
-                    .wait()
-                    .await
-                    .map_err(|e| format!("{} wait error: {}", prefix, e))?;
-
-                if !exit_status.success() {
-                    // oneShot failed — abort the whole stack.
-                    eprintln!(
-                        "{} oneShot failed with exit code {:?}; aborting stack",
-                        prefix,
-                        exit_status.code()
-                    );
-                    // Kill any services that were already started.
-                    kill_service_pids(&running.services, GRACEFUL_TIMEOUT);
-                    self.state_repo.clear().ok();
-                    return Err(format!(
-                        "oneShot service '{}' exited with code {:?}",
-                        svc_name,
-                        exit_status.code()
-                    ));
-                }
-
-                println!("{} oneShot completed successfully", prefix);
-                // Mark as stopped (it already exited).
-                if let Some(entry) = running.services.get_mut(svc_name) {
-                    entry.status = ServiceStatus::Stopped;
-                    entry.pid = 0;
-                }
-            } else {
-                // Regular service — persist state with the new PID.
-                self.state_repo.save(&running)?;
-            }
-        }
-
-        // Persist final state before entering the wait loop.
-        self.state_repo.save(&running)?;
+        // ── Spawn all children ──
+        let mut handles = self.spawn_all(graph).await?;
 
         // If all services are oneShot (already completed), exit immediately.
-        let has_running = running
-            .services
+        let has_running = handles
             .values()
-            .any(|s| matches!(s.status, ServiceStatus::Running));
+            .any(|h| matches!(h.running.status, ServiceStatus::Running));
         if !has_running {
             println!("All oneShot services completed. Stack exiting.");
             self.state_repo.clear().ok();
-            return Ok(running);
+            return Ok(flatten_handles(&handles, stack_pid, &started_at));
         }
 
         println!("All services started. Press Ctrl-C to stop.");
@@ -212,65 +292,19 @@ impl<S: StackState> ProcessSupervisor<S> {
             }
         }
 
-        // ── Graceful shutdown ──
-        // Reload state to get the latest PIDs.
-        if let Ok(latest) = self.state_repo.load() {
-            kill_service_pids(&latest.services, GRACEFUL_TIMEOUT);
-        } else {
-            // If state is already gone, still try children from our local map.
-            kill_service_pids(&running.services, GRACEFUL_TIMEOUT);
+        // ── Graceful shutdown using handles (they always have the latest PIDs) ──
+        for h in handles.values_mut() {
+            h.stop(GRACEFUL_TIMEOUT);
         }
         self.state_repo.clear().ok();
 
         println!("Stack stopped.");
-        Ok(running)
-    }
-}
-
-/// Send SIGTERM to all services, wait up to `timeout`, then SIGKILL survivors.
-fn kill_service_pids(services: &HashMap<String, RunningService>, timeout: Duration) {
-    // Phase 1: SIGTERM
-    for (name, svc) in services.iter() {
-        if svc.pid != 0 && is_pid_alive(svc.pid) {
-            let ok = std::process::Command::new("kill")
-                .arg(svc.pid.to_string())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
-            if ok {
-                let color = color_for(name);
-                println!("{} SIGTERM sent", colored_prefix(name, color));
-            }
-        }
-    }
-
-    // Phase 2: wait for processes to die (polling)
-    let deadline = Instant::now() + timeout;
-    loop {
-        let all_dead = services
-            .iter()
-            .all(|(_, svc)| svc.pid == 0 || !is_pid_alive(svc.pid));
-        if all_dead || Instant::now() >= deadline {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
-
-    // Phase 3: SIGKILL survivors
-    for (name, svc) in services.iter() {
-        if svc.pid != 0 && is_pid_alive(svc.pid) {
-            let _ = std::process::Command::new("kill")
-                .arg("-9")
-                .arg(svc.pid.to_string())
-                .status();
-            let color = color_for(name);
-            eprintln!("{} force killed", colored_prefix(name, color));
-        }
+        Ok(flatten_handles(&handles, stack_pid, &started_at))
     }
 }
 
 // ---------------------------------------------------------------------------
-// Utility: command parsing
+// Helpers
 // ---------------------------------------------------------------------------
 
 /// Convert the JSON cmd value into (program, args).

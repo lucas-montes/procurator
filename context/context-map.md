@@ -21,6 +21,12 @@ Quick navigation for AI sessions working on Procurator.
 - `cli/pcr/main.rs` - CLI entry point with clap derive
 - `cli/pcr/vcs/cli.rs` - VCS commands (project/repo/agent operations)
 - `cli/pcr/stack/` - Stack management commands
+  - `cli/pcr/stack/cli.rs` - CLI dispatch (start/stop)
+  - `cli/pcr/stack/parser.rs` - Flake service parsing + graph validation
+  - `cli/pcr/stack/process.rs` - Process lifecycle (spawn/kill)
+  - `cli/pcr/stack/supervisor.rs` - Port traits + state persistence
+  - `cli/pcr/stack/logging.rs` - Log writers (terminal, file, both)
+  - `cli/pcr/stack/watch.rs` - Debounced file watcher for hot-reload mode
 - `cli/pcr/agents/` - Agent workspace commands
 
 ### Git Utilities (`repo_outils/`)

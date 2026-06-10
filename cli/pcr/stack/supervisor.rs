@@ -4,7 +4,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
+use crate::stack::logging::{color_for, colored_prefix};
 use crate::stack::parser::ServiceGraph;
 
 /// Serializable running state for a single service.
@@ -36,6 +38,33 @@ pub struct RunningStack {
     pub started_at: String,
     /// Per-service running state, keyed by service name.
     pub services: HashMap<String, RunningService>,
+}
+
+/// A handle to a running service, providing direct lifecycle methods.
+///
+/// This is the in-memory representation used during execution (as opposed to
+/// [`RunningService`] which is the serializable form).
+pub struct ServiceHandle {
+    pub name: String,
+    pub running: RunningService,
+}
+
+impl ServiceHandle {
+    /// Returns `true` if the underlying PID is still alive.
+    pub fn is_alive(&self) -> bool {
+        is_pid_alive(self.running.pid)
+    }
+
+    /// Gracefully stop the process (SIGTERM → poll → SIGKILL),
+    /// then mark as `Stopped` and clear the PID.
+    pub fn stop(&mut self, timeout: Duration) {
+        if self.running.pid == 0 {
+            return;
+        }
+        kill_pid(self.running.pid, &self.name, timeout);
+        self.running.pid = 0;
+        self.running.status = ServiceStatus::Stopped;
+    }
 }
 
 pub trait StackState: Send + Sync {
@@ -196,4 +225,59 @@ pub fn is_pid_alive(pid: u32) -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+/// Send SIGTERM to a single PID, wait up to `timeout`, then SIGKILL survivors.
+pub fn kill_pid(pid: u32, name: &str, timeout: Duration) {
+    if pid == 0 || !is_pid_alive(pid) {
+        return;
+    }
+
+    // Phase 1: SIGTERM
+    let ok = std::process::Command::new("kill")
+        .arg(pid.to_string())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if ok {
+        let color = color_for(name);
+        println!("{} SIGTERM sent", colored_prefix(name, color));
+    }
+
+    // Phase 2: wait for process to die (polling)
+    let deadline = Instant::now() + timeout;
+    loop {
+        if !is_pid_alive(pid) || Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    // Phase 3: SIGKILL if still alive
+    if is_pid_alive(pid) {
+        let _ = std::process::Command::new("kill")
+            .arg("-9")
+            .arg(pid.to_string())
+            .status();
+        let color = color_for(name);
+        eprintln!("{} force killed", colored_prefix(name, color));
+    }
+}
+
+/// Convert a handle map into a serializable [`RunningStack`].
+pub fn flatten_handles(
+    handles: &HashMap<String, ServiceHandle>,
+    stack_pid: u32,
+    started_at: &str,
+) -> RunningStack {
+    let services = handles
+        .iter()
+        .map(|(name, h)| (name.clone(), h.running.clone()))
+        .collect();
+    RunningStack {
+        version: 1,
+        stack_pid,
+        started_at: started_at.to_string(),
+        services,
+    }
 }
