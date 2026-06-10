@@ -1,15 +1,14 @@
 use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use tokio::fs;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+use tokio::io::AsyncBufReadExt;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 
+use crate::stack::logging::{LogLine, LogStream, color_for, colored_prefix};
 use crate::stack::parser::ServiceGraph;
 use crate::stack::supervisor::{
     RunningService, RunningStack, ServiceStatus, ServiceSupervisor, StackState, is_pid_alive,
@@ -18,136 +17,10 @@ use crate::stack::supervisor::{
 /// How long to wait after SIGTERM before sending SIGKILL.
 const GRACEFUL_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// 30 distinct foreground colors — ANSI 8/16 + 256-color codes.
-const COLORS: &[&str] = &[
-    "\x1b[31m",       // 0:  red
-    "\x1b[32m",       // 1:  green
-    "\x1b[33m",       // 2:  yellow
-    "\x1b[34m",       // 3:  blue
-    "\x1b[35m",       // 4:  magenta
-    "\x1b[36m",       // 5:  cyan
-    "\x1b[91m",       // 6:  bright red
-    "\x1b[92m",       // 7:  bright green
-    "\x1b[93m",       // 8:  bright yellow
-    "\x1b[94m",       // 9:  bright blue
-    "\x1b[95m",       // 10: bright magenta
-    "\x1b[96m",       // 11: bright cyan
-    "\x1b[38;5;208m", // 12: orange
-    "\x1b[38;5;45m",  // 13: sky blue
-    "\x1b[38;5;200m", // 14: pink
-    "\x1b[38;5;118m", // 15: lime green
-    "\x1b[38;5;99m",  // 16: purple
-    "\x1b[38;5;37m",  // 17: teal
-    "\x1b[38;5;173m", // 18: salmon
-    "\x1b[38;5;141m", // 19: lavender
-    "\x1b[38;5;48m",  // 20: mint
-    "\x1b[38;5;203m", // 21: coral
-    "\x1b[38;5;75m",  // 22: cornflower blue
-    "\x1b[38;5;220m", // 23: gold
-    "\x1b[38;5;205m", // 24: hot pink
-    "\x1b[38;5;120m", // 25: pastel green
-    "\x1b[38;5;68m",  // 26: steel blue
-    "\x1b[38;5;179m", // 27: tan
-    "\x1b[38;5;51m",  // 28: bright cyan
-    "\x1b[38;5;155m", // 29: chartreuse
-];
-const RESET: &str = "\x1b[0m";
-
-/// Pick a color from the 30-color palette based on a hash of the service name.
-/// This ensures the same service always gets the same color regardless of
-/// startup order or how many other services exist.
-fn color_for(name: &str) -> &'static str {
-    let mut hasher = DefaultHasher::new();
-    name.hash(&mut hasher);
-    let idx = hasher.finish() as usize % COLORS.len();
-    COLORS[idx]
-}
-
-/// Build a service-name → ANSI color-code lookup from the boot order.
-fn build_color_map(order: &[String]) -> HashMap<String, String> {
-    order
-        .iter()
-        .map(|name| (name.clone(), color_for(name).to_string()))
-        .collect()
-}
-
-/// Format a log prefix like `[service_name]` with the service's color.
-fn colored_prefix(name: &str, color: &str) -> String {
-    format!("{}[{}]{}", color, name, RESET)
-}
-
-// ---------------------------------------------------------------------------
-// File logging via mpsc channel (no Mutex)
-// ---------------------------------------------------------------------------
-
-/// A single log line to be written to the shared log file.
-#[derive(Debug)]
-pub struct LogLine {
-    pub service: String,
-    pub stream: &'static str, // "STDOUT" or "STDERR"
-    pub text: String,
-}
-
-/// Async writer task: receives lines via channel and writes to a rotating
-/// log file at `<log_dir>/<timestamp>.log`.
-pub(crate) async fn file_writer(
-    mut rx: mpsc::Receiver<LogLine>,
-    log_dir: PathBuf,
-    max_lines: usize,
-) {
-    let _ = fs::create_dir_all(&log_dir).await;
-
-    let mut current_file: Option<fs::File> = None;
-    let mut line_count: usize = 0;
-
-    while let Some(line) = rx.recv().await {
-        // Open first file if needed
-        if current_file.is_none() {
-            current_file = open_new_log(&log_dir).await;
-        }
-
-        // Rotate if limit reached
-        if line_count >= max_lines {
-            current_file = open_new_log(&log_dir).await;
-            line_count = 0;
-        }
-
-        // Format: [2026-06-09T14:30:00.123Z] [service] STREAM message\n
-        let formatted = format!(
-            "[{}] [{}] {} {}\n",
-            Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ"),
-            line.service,
-            line.stream,
-            line.text,
-        );
-
-        if let Some(ref mut file) = current_file {
-            let _ = file.write_all(formatted.as_bytes()).await;
-            let _ = file.flush().await; // flush each line for crash safety
-        }
-    }
-
-    // Flush on shutdown
-    if let Some(ref mut file) = current_file {
-        let _ = file.flush().await;
-    }
-}
-
-/// Open a new log file with an ISO-8601-compact timestamp name.
-async fn open_new_log(dir: &PathBuf) -> Option<fs::File> {
-    let ts = Utc::now().format("%Y-%m-%dT%H-%M-%SZ");
-    let path = dir.join(format!("{}.log", ts));
-    fs::File::create(&path).await.ok()
-}
-
-// ---------------------------------------------------------------------------
-// Adapter: process-based ServiceSupervisor
-// ---------------------------------------------------------------------------
-
 pub struct ProcessSupervisor<S: StackState> {
     repo_root: PathBuf,
     state_repo: S,
-    /// Optional sender for file logging. When `None`, only terminal output.
+    /// Optional sender for file+terminal logging. When `None`, no output routing.
     pub log_sender: Option<mpsc::Sender<LogLine>>,
 }
 
@@ -170,12 +43,7 @@ impl<S: StackState> ServiceSupervisor for ProcessSupervisor<S> {
 
     fn stop(&mut self) -> Result<(), String> {
         let state = self.state_repo.load()?;
-        let colors: HashMap<String, String> = state
-            .services
-            .keys()
-            .map(|name| (name.clone(), color_for(name).to_string()))
-            .collect();
-        kill_service_pids(&state.services, &colors, GRACEFUL_TIMEOUT);
+        kill_service_pids(&state.services, GRACEFUL_TIMEOUT);
         self.state_repo.clear()?;
         Ok(())
     }
@@ -189,9 +57,6 @@ impl<S: StackState> ProcessSupervisor<S> {
         let mut sigterm =
             signal(SignalKind::terminate()).map_err(|e| format!("SIGTERM handler: {}", e))?;
 
-        // ── Assign a color to each service ──
-        let colors = build_color_map(&graph.order);
-
         // ── Spawn children in topological order ──
         let mut running = RunningStack {
             version: 1,
@@ -202,7 +67,7 @@ impl<S: StackState> ProcessSupervisor<S> {
 
         for svc_name in &graph.order {
             let svc = graph.services.get(svc_name).unwrap();
-            let color = colors.get(svc_name).map(|s| s.as_str()).unwrap_or("");
+            let color = color_for(svc_name);
             let prefix = colored_prefix(svc_name, color);
 
             let is_one_shot = svc.one_shot.unwrap_or(false);
@@ -232,22 +97,22 @@ impl<S: StackState> ProcessSupervisor<S> {
 
             println!("{} started (pid {})", prefix, pid);
 
-            // Stream stdout
+            let log_tx = self.log_sender.clone();
+
+            // Stream stdout → send LogLine through channel
             if let Some(stdout) = child.stdout.take() {
                 let name = svc_name.clone();
-                let color_code = color.to_string();
                 let mut reader = tokio::io::BufReader::new(stdout).lines();
-                let log_tx = self.log_sender.clone();
+                let tx = log_tx.clone();
                 tokio::spawn(async move {
-                    let p = colored_prefix(&name, &color_code);
-                    while let Ok(Some(line)) = reader.next_line().await {
-                        println!("{} {}", p, line);
-                        if let Some(ref tx) = log_tx {
+                    while let Ok(Some(text)) = reader.next_line().await {
+                        if let Some(ref tx) = tx {
                             let _ = tx
                                 .send(LogLine {
                                     service: name.clone(),
-                                    stream: "STDOUT",
-                                    text: line,
+                                    stream: LogStream::Stdout,
+                                    text,
+                                    timestamp: Utc::now(),
                                 })
                                 .await;
                         }
@@ -255,22 +120,20 @@ impl<S: StackState> ProcessSupervisor<S> {
                 });
             }
 
-            // Stream stderr
+            // Stream stderr → send LogLine through channel
             if let Some(stderr) = child.stderr.take() {
                 let name = svc_name.clone();
-                let color_code = color.to_string();
                 let mut reader = tokio::io::BufReader::new(stderr).lines();
-                let log_tx = self.log_sender.clone();
+                let tx = log_tx.clone();
                 tokio::spawn(async move {
-                    let p = colored_prefix(&name, &color_code);
-                    while let Ok(Some(line)) = reader.next_line().await {
-                        eprintln!("{} ERR {}", p, line);
-                        if let Some(ref tx) = log_tx {
+                    while let Ok(Some(text)) = reader.next_line().await {
+                        if let Some(ref tx) = tx {
                             let _ = tx
                                 .send(LogLine {
                                     service: name.clone(),
-                                    stream: "STDERR",
-                                    text: line,
+                                    stream: LogStream::Stderr,
+                                    text,
+                                    timestamp: Utc::now(),
                                 })
                                 .await;
                         }
@@ -302,7 +165,7 @@ impl<S: StackState> ProcessSupervisor<S> {
                         exit_status.code()
                     );
                     // Kill any services that were already started.
-                    kill_service_pids(&running.services, &colors, GRACEFUL_TIMEOUT);
+                    kill_service_pids(&running.services, GRACEFUL_TIMEOUT);
                     self.state_repo.clear().ok();
                     return Err(format!(
                         "oneShot service '{}' exited with code {:?}",
@@ -352,10 +215,10 @@ impl<S: StackState> ProcessSupervisor<S> {
         // ── Graceful shutdown ──
         // Reload state to get the latest PIDs.
         if let Ok(latest) = self.state_repo.load() {
-            kill_service_pids(&latest.services, &colors, GRACEFUL_TIMEOUT);
+            kill_service_pids(&latest.services, GRACEFUL_TIMEOUT);
         } else {
             // If state is already gone, still try children from our local map.
-            kill_service_pids(&running.services, &colors, GRACEFUL_TIMEOUT);
+            kill_service_pids(&running.services, GRACEFUL_TIMEOUT);
         }
         self.state_repo.clear().ok();
 
@@ -365,11 +228,7 @@ impl<S: StackState> ProcessSupervisor<S> {
 }
 
 /// Send SIGTERM to all services, wait up to `timeout`, then SIGKILL survivors.
-fn kill_service_pids(
-    services: &HashMap<String, RunningService>,
-    colors: &HashMap<String, String>,
-    timeout: Duration,
-) {
+fn kill_service_pids(services: &HashMap<String, RunningService>, timeout: Duration) {
     // Phase 1: SIGTERM
     for (name, svc) in services.iter() {
         if svc.pid != 0 && is_pid_alive(svc.pid) {
@@ -379,7 +238,7 @@ fn kill_service_pids(
                 .map(|s| s.success())
                 .unwrap_or(false);
             if ok {
-                let color = colors.get(name).map(|s| s.as_str()).unwrap_or("");
+                let color = color_for(name);
                 println!("{} SIGTERM sent", colored_prefix(name, color));
             }
         }
@@ -404,7 +263,7 @@ fn kill_service_pids(
                 .arg("-9")
                 .arg(svc.pid.to_string())
                 .status();
-            let color = colors.get(name).map(|s| s.as_str()).unwrap_or("");
+            let color = color_for(name);
             eprintln!("{} force killed", colored_prefix(name, color));
         }
     }

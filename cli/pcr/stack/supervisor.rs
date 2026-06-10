@@ -7,10 +7,6 @@ use std::path::PathBuf;
 
 use crate::stack::parser::ServiceGraph;
 
-// ---------------------------------------------------------------------------
-// Data types
-// ---------------------------------------------------------------------------
-
 /// Serializable running state for a single service.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunningService {
@@ -42,10 +38,6 @@ pub struct RunningStack {
     pub services: HashMap<String, RunningService>,
 }
 
-// ---------------------------------------------------------------------------
-// Port: persistence of running stack state
-// ---------------------------------------------------------------------------
-
 pub trait StackState: Send + Sync {
     /// Persist the current running state.
     fn save(&self, state: &RunningStack) -> Result<(), String>;
@@ -57,10 +49,6 @@ pub trait StackState: Send + Sync {
     fn clear(&self) -> Result<(), String>;
 }
 
-// ---------------------------------------------------------------------------
-// Port: process supervision
-// ---------------------------------------------------------------------------
-
 pub trait ServiceSupervisor: Send + Sync {
     /// Start all services declared in the graph and return the running state.
     fn start(&mut self, graph: &ServiceGraph) -> Result<RunningStack, String>;
@@ -68,10 +56,6 @@ pub trait ServiceSupervisor: Send + Sync {
     /// Stop all running services and clear state.
     fn stop(&mut self) -> Result<(), String>;
 }
-
-// ---------------------------------------------------------------------------
-// Adapter: file-based StackState
-// ---------------------------------------------------------------------------
 
 /// File-based implementation of [`StackState`].
 ///
@@ -202,7 +186,7 @@ impl StackState for FileStackState {
 /// Check whether `pid` is currently alive by running `kill -0 <pid>`.
 ///
 /// Signal 0 tests whether the process exists without actually sending a signal.
-pub(crate) fn is_pid_alive(pid: u32) -> bool {
+pub fn is_pid_alive(pid: u32) -> bool {
     if pid == 0 {
         return false;
     }

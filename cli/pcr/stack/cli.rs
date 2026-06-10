@@ -1,10 +1,14 @@
 use clap::{Args, Subcommand};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use tokio::sync::mpsc;
 
+use super::logging::{
+    BothWriter, FileWriter, LogLine, LogWriter, TerminalWriter, color_for, writer_loop,
+};
 use super::parser::parse_flake_services;
-use super::process::{LogLine, ProcessSupervisor, file_writer};
+use super::process::ProcessSupervisor;
 use super::supervisor::{FileStackState, ServiceSupervisor};
 
 #[derive(Debug, Subcommand)]
@@ -41,23 +45,36 @@ impl StackArgs {
                 let mut supervisor = start_supervisor(self.path.clone());
                 let mut _log_handle = None;
 
-                // If file logging is configured, set up the channel and writer task.
-                if let Some(lc) = log_config {
+                // Build colors map for all services
+                let colors: HashMap<String, String> = graph
+                    .order
+                    .iter()
+                    .map(|name| (name.clone(), color_for(name).to_string()))
+                    .collect();
+
+                // Set up terminal writer, optionally combined with file writer
+                let terminal = TerminalWriter::new(colors);
+                let writer: Box<dyn LogWriter> = if let Some(lc) = log_config {
                     let dir = if lc.dir.is_relative() {
                         self.path.join(&lc.dir)
                     } else {
                         lc.dir
                     };
-                    let (tx, rx) = mpsc::channel::<LogLine>(256);
-                    supervisor.log_sender = Some(tx);
-                    _log_handle = Some(tokio::spawn(file_writer(rx, dir, lc.max_lines)));
-                }
+                    let file = FileWriter::new(dir, lc.max_lines);
+                    Box::new(BothWriter::new(terminal, file))
+                } else {
+                    Box::new(terminal)
+                };
+
+                let (tx, rx) = mpsc::channel::<LogLine>(256);
+                supervisor.log_sender = Some(tx);
+                _log_handle = Some(tokio::spawn(writer_loop(rx, writer)));
 
                 supervisor.start_impl(&graph).await.expect("start failed");
 
                 // Drop supervisor to close our end of the log channel.
                 // The reader tasks will detect EOF from dead children, exit,
-                // drop their sender clones, and the file writer will finish.
+                // drop their sender clones, and the writer loop will finish.
                 drop(supervisor);
 
                 if let Some(handle) = _log_handle {
