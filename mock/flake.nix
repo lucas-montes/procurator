@@ -42,17 +42,9 @@
           dependsOn = ["migrate"];
         };
 
-        # ── long-running: Python client, runs directly from source ──
+        # ── long-running: Python client, runs via nixpkgs interpreter ──
         client = {
-          cmd = [
-            "nix"
-            "shell"
-            "nixpkgs#python3"
-            "--command"
-            "python3"
-            "client.py"
-            "client"
-          ];
+          cmd = ["nix" "run" "nixpkgs#python3" "--" "client.py" "client"];
           src = "./services";
           dependsOn = ["server" "migrate"];
         };
