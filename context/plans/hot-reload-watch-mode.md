@@ -164,7 +164,7 @@ No CLI flags are added — watch configuration lives in the flake itself.
 
 ---
 
-- [ ] T03: **Add `WatchConfig` parsing and graph-diff logic** (status:todo)
+- [x] T03: **Add `WatchConfig` parsing and graph-diff logic** (status:done)
 
   - Task ID: T03
   - Goal: Parse the optional `stack.watch` attribute from the flake, and
@@ -205,10 +205,12 @@ No CLI flags are added — watch configuration lives in the flake itself.
     cargo test -p cli -- diff 2>&1 | grep -E "test result|FAILED"
     cargo build -p cli 2>&1 | grep "^error"; echo "exit=$?"
     ```
+  - **Evidence:** `cargo build` zero errors, all 7/7 diff tests pass.
+    **File changed:** `cli/pcr/stack/parser.rs`
 
 ---
 
-- [ ] T04: **Implement the watch loop in `watch.rs`** (status:todo)
+- [x] T04: **Implement the watch loop in `watch.rs`** (status:done)
 
   - Task ID: T04
   - Goal: Build the foreground combined signal + file-watch loop that
@@ -220,8 +222,8 @@ No CLI flags are added — watch configuration lives in the flake itself.
          has a `src` field, resolve the absolute path and record it as
          belonging to that service.
       2. Start `watch_dirs` on all those source directories.
-      3. If `WatchConfig.watch_flake` is true, start a second `watch_dirs`
-         on the repo root's `flake.nix`.
+      3. If `WatchConfig.watch_flake` is true, start a second `watch_file`
+         on the repo root (non-recursive, only `flake.nix` events).
       4. Install SIGINT/SIGTERM handlers.
       5. Enter `tokio::select!` with three branches:
          - **signal** → full graceful shutdown (iterate handles, call
@@ -260,6 +262,8 @@ No CLI flags are added — watch configuration lives in the flake itself.
     cargo build -p cli 2>&1 | grep "^error"; echo "exit=$?"
     # Manual smoke test
     ```
+  - **Evidence:** `cargo build` zero errors, all 10 tests pass.
+    **Files changed:** `cli/pcr/stack/watch.rs`, `cli/pcr/stack/process.rs`
 
 ---
 

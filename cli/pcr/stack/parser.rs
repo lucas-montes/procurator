@@ -34,6 +34,55 @@ pub struct LogConfig {
     pub max_lines: usize,
 }
 
+/// Optional watch-mode configuration, parsed from `stack.watch` in the flake.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchConfig {
+    /// Enable hot-reload watch mode.
+    pub enable: bool,
+    /// Also watch `flake.nix` for service-level changes.
+    #[serde(default)]
+    pub watch_flake: bool,
+}
+
+/// Classification of a single service's change between two graph snapshots.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServiceChange {
+    /// Present in new graph but not in old.
+    Added,
+    /// Present in old graph but not in new.
+    Removed,
+    /// Present in both but `cmd` differs.
+    Changed,
+    /// Present in both with identical `cmd`.
+    Unchanged,
+}
+
+/// Diff two [`ServiceGraph`] snapshots and classify every service.
+///
+/// The comparison is based on the `cmd` field serialised as JSON.
+pub fn diff_graphs(old: &ServiceGraph, new: &ServiceGraph) -> HashMap<String, ServiceChange> {
+    let mut result = HashMap::new();
+
+    // Services in new graph
+    for (name, svc) in &new.services {
+        let change = match old.services.get(name) {
+            None => ServiceChange::Added,
+            Some(old_svc) if old_svc.cmd != svc.cmd => ServiceChange::Changed,
+            Some(_) => ServiceChange::Unchanged,
+        };
+        result.insert(name.clone(), change);
+    }
+
+    // Services only in old graph (removed)
+    for name in old.services.keys() {
+        if !new.services.contains_key(name) {
+            result.insert(name.clone(), ServiceChange::Removed);
+        }
+    }
+
+    result
+}
+
 impl ServiceGraph {
     pub fn validate(&self) -> Result<(), String> {
         // Check for cycles in dependsOn
@@ -181,6 +230,27 @@ fn parse_log_config(repo_path: &PathBuf) -> Result<Option<LogConfig>, String> {
     Ok(Some(config))
 }
 
+/// Parse the optional `stack.watch` attribute from the flake.
+pub fn parse_watch_config(repo_path: &PathBuf) -> Result<Option<WatchConfig>, String> {
+    let output = std::process::Command::new("nix")
+        .arg("eval")
+        .arg("--json")
+        .arg(".#stack.watch")
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("Failed to run nix eval for watch config: {}", e))?;
+
+    if !output.status.success() {
+        // Attribute not present — watch mode is disabled
+        return Ok(None);
+    }
+
+    let config: WatchConfig = serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("Failed to parse watch config: {}", e))?;
+
+    Ok(Some(config))
+}
+
 fn topo_sort(services: &HashMap<String, Service>) -> Result<Vec<String>, String> {
     let mut in_degree: HashMap<String, usize> = HashMap::new();
     let mut graph: HashMap<String, Vec<String>> = HashMap::new();
@@ -232,4 +302,96 @@ fn topo_sort(services: &HashMap<String, Service>) -> Result<Vec<String>, String>
     }
 
     Ok(order)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_graph(pairs: &[(&str, &str)]) -> ServiceGraph {
+        let mut services = HashMap::new();
+        for (name, cmd_str) in pairs {
+            services.insert(
+                name.to_string(),
+                Service {
+                    cmd: serde_json::json!(cmd_str),
+                    src: None,
+                    ports: None,
+                    depends_on: None,
+                    one_shot: None,
+                    restart: None,
+                },
+            );
+        }
+        let order: Vec<String> = pairs.iter().map(|(n, _)| n.to_string()).collect();
+        ServiceGraph { services, order }
+    }
+
+    #[test]
+    fn test_diff_added() {
+        let old = make_graph(&[("a", "echo 1")]);
+        let new = make_graph(&[("a", "echo 1"), ("b", "echo 2")]);
+        let diff = diff_graphs(&old, &new);
+        assert_eq!(diff.len(), 2);
+        assert_eq!(diff["a"], ServiceChange::Unchanged);
+        assert_eq!(diff["b"], ServiceChange::Added);
+    }
+
+    #[test]
+    fn test_diff_removed() {
+        let old = make_graph(&[("a", "echo 1"), ("b", "echo 2")]);
+        let new = make_graph(&[("a", "echo 1")]);
+        let diff = diff_graphs(&old, &new);
+        assert_eq!(diff.len(), 2);
+        assert_eq!(diff["a"], ServiceChange::Unchanged);
+        assert_eq!(diff["b"], ServiceChange::Removed);
+    }
+
+    #[test]
+    fn test_diff_changed_cmd() {
+        let old = make_graph(&[("a", "echo 1")]);
+        let new = make_graph(&[("a", "echo 2")]);
+        let diff = diff_graphs(&old, &new);
+        assert_eq!(diff.len(), 1);
+        assert_eq!(diff["a"], ServiceChange::Changed);
+    }
+
+    #[test]
+    fn test_diff_unchanged() {
+        let old = make_graph(&[("a", "echo 1"), ("b", "echo 2")]);
+        let new = make_graph(&[("a", "echo 1"), ("b", "echo 2")]);
+        let diff = diff_graphs(&old, &new);
+        assert_eq!(diff.len(), 2);
+        assert_eq!(diff["a"], ServiceChange::Unchanged);
+        assert_eq!(diff["b"], ServiceChange::Unchanged);
+    }
+
+    #[test]
+    fn test_diff_empty_vs_populated() {
+        let old = make_graph(&[]);
+        let new = make_graph(&[("a", "echo 1")]);
+        let diff = diff_graphs(&old, &new);
+        assert_eq!(diff.len(), 1);
+        assert_eq!(diff["a"], ServiceChange::Added);
+    }
+
+    #[test]
+    fn test_diff_populated_vs_empty() {
+        let old = make_graph(&[("a", "echo 1")]);
+        let new = make_graph(&[]);
+        let diff = diff_graphs(&old, &new);
+        assert_eq!(diff.len(), 1);
+        assert_eq!(diff["a"], ServiceChange::Removed);
+    }
+
+    #[test]
+    fn test_diff_add_remove_change() {
+        let old = make_graph(&[("a", "echo 1"), ("b", "echo 2")]);
+        let new = make_graph(&[("b", "echo 99"), ("c", "echo 3")]);
+        let diff = diff_graphs(&old, &new);
+        assert_eq!(diff.len(), 3);
+        assert_eq!(diff["a"], ServiceChange::Removed);
+        assert_eq!(diff["b"], ServiceChange::Changed);
+        assert_eq!(diff["c"], ServiceChange::Added);
+    }
 }

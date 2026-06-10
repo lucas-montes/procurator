@@ -16,10 +16,10 @@ use crate::stack::supervisor::{
 };
 
 /// How long to wait after SIGTERM before sending SIGKILL.
-const GRACEFUL_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const GRACEFUL_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct ProcessSupervisor<S: StackState> {
-    repo_root: PathBuf,
+    pub(crate) repo_root: PathBuf,
     state_repo: S,
     /// Optional sender for file+terminal logging. When `None`, no output routing.
     pub log_sender: Option<mpsc::Sender<LogLine>>,
@@ -249,6 +249,22 @@ impl<S: StackState> ProcessSupervisor<S> {
         )
         .await?;
         Ok(handles)
+    }
+
+    /// Persist the current handle map as running state.
+    pub(crate) fn persist_handles(
+        &self,
+        handles: &HashMap<String, ServiceHandle>,
+        stack_pid: u32,
+        started_at: &str,
+    ) -> Result<(), String> {
+        let running = flatten_handles(handles, stack_pid, started_at);
+        self.state_repo.save(&running)
+    }
+
+    /// Clear persisted state (used during shutdown).
+    pub(crate) fn clear_state(&self) -> Result<(), String> {
+        self.state_repo.clear()
     }
 }
 
