@@ -267,7 +267,7 @@ No CLI flags are added — watch configuration lives in the flake itself.
 
 ---
 
-- [ ] T05: **Wire watch mode into `cli.rs` via flake config** (status:todo)
+- [x] T05: **Wire watch mode into `cli.rs` via flake config** (status:done)
 
   - Task ID: T05
   - Goal: On `pcr stack start`, check `stack.watch` in the flake. If
@@ -281,7 +281,7 @@ No CLI flags are added — watch configuration lives in the flake itself.
            - Call `supervisor.spawn_all(&graph).await` to get handles.
            - Call `run_watch_loop(&supervisor, graph, handles, watch_cfg).await`.
         4. If `watch_cfg.enable` is false or absent → call
-           `start_impl` (current behaviour, unchanged).
+          `start_impl` (current behaviour, unchanged).
       - Print a line when entering watch mode:
         "Watch mode enabled — listening for source changes."
     - Out: No changes to the non-watch code path.
@@ -293,6 +293,10 @@ No CLI flags are added — watch configuration lives in the flake itself.
     cargo build -p cli 2>&1 | grep "^error"; echo "exit=$?"
     # Manual tests
     ```
+  - **Evidence:** `cargo build` zero errors, zero new warnings. Non-watch
+    smoke test: identical behavior to pre-watch-mode (all 4 services spawn,
+    SIGINT shutdown works).
+    **File changed:** `cli/pcr/stack/cli.rs`
 
 ---
 

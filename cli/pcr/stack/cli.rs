@@ -7,9 +7,10 @@ use tokio::sync::mpsc;
 use super::logging::{
     BothWriter, FileWriter, LogLine, LogWriter, TerminalWriter, color_for, writer_loop,
 };
-use super::parser::parse_flake_services;
+use super::parser::{parse_flake_services, parse_watch_config};
 use super::process::ProcessSupervisor;
 use super::supervisor::{FileStackState, ServiceSupervisor};
+use super::watch::run_watch_loop;
 
 #[derive(Debug, Subcommand)]
 /// Subcommands for `pcr stack`
@@ -42,6 +43,9 @@ impl StackArgs {
                 let (graph, log_config) =
                     parse_flake_services(&self.path).expect("unable to parse flake services");
 
+                let watch_cfg =
+                    parse_watch_config(&self.path).expect("unable to parse watch config");
+
                 let mut supervisor = start_supervisor(self.path.clone());
                 let mut _log_handle = None;
 
@@ -70,7 +74,19 @@ impl StackArgs {
                 supervisor.log_sender = Some(tx);
                 _log_handle = Some(tokio::spawn(writer_loop(rx, writer)));
 
-                supervisor.start_impl(&graph).await.expect("start failed");
+                // Decide: watch mode or one-shot start
+                if watch_cfg.as_ref().map(|w| w.enable).unwrap_or(false) {
+                    let watch_cfg = watch_cfg.unwrap(); // safe — checked above
+                    let handles = supervisor
+                        .spawn_all(&graph)
+                        .await
+                        .expect("spawn_all failed");
+                    run_watch_loop(&supervisor, graph, handles, watch_cfg)
+                        .await
+                        .expect("watch loop failed");
+                } else {
+                    supervisor.start_impl(&graph).await.expect("start failed");
+                }
 
                 // Drop supervisor to close our end of the log channel.
                 // The reader tasks will detect EOF from dead children, exit,
