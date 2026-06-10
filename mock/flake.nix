@@ -5,17 +5,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
   };
 
-  outputs = {
-    self,
-    nixpkgs,
-  }: let
-    system = "x86_64-linux";
-    pkgs = import nixpkgs {inherit system;};
-  in {
-    packages.${system}.client = pkgs.writeShellScriptBin "mock-client" ''
-      exec ${pkgs.python3}/bin/python3 ${./services/client.py} "client"
-    '';
-
+  outputs = { self, nixpkgs }: {
     stack = {
       watch.enable = true;
       logs = {
@@ -52,13 +42,20 @@
           dependsOn = ["migrate"];
         };
 
-          # ── long-running: Python client, packaged via Nix ──
-          # Build once: `nix build '.#packages.x86_64-linux.client'`
-          client = {
-            cmd = ["../result/bin/mock-client" "client"];
-            src = "./services";
-            dependsOn = ["server" "migrate"];
-          };
+        # ── long-running: Python client, runs directly from source ──
+        client = {
+          cmd = [
+            "nix"
+            "shell"
+            "nixpkgs#python3"
+            "--command"
+            "python3"
+            "client.py"
+            "client"
+          ];
+          src = "./services";
+          dependsOn = ["server" "migrate"];
+        };
       };
     };
   };
