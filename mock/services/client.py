@@ -8,7 +8,7 @@ def main():
     port = 8080
     name = sys.argv[1] if len(sys.argv) > 1 else "client"
 
-    print(f"[{name}] started (pid {__import__('os').getpid()})", flush=True)
+    print(f"started (pid {__import__('os').getpid()})", flush=True)
     counter = 0
     while True:
         counter += 1
@@ -16,14 +16,13 @@ def main():
             with socket.create_connection((host, port), timeout=3) as sock:
                 msg = f"request #{counter} from {name}\n"
                 sock.sendall(msg.encode())
-                print(f"[{name}] sent: {msg.strip()}", flush=True)
+                print(f"sent: {msg.strip()}", flush=True)
         except (ConnectionRefusedError, socket.timeout, OSError) as e:
-            print(f"[{name}] connection failed: {e}", flush=True)
+            print(f"connection failed: {e}", flush=True)
 
         time.sleep(5)
 
 
 if __name__ == "__main__":
     main()
-
 
