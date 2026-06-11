@@ -197,15 +197,14 @@ impl<S: StackState> ProcessSupervisor<S> {
         for svc_name in to_spawn {
             let svc = graph.services.get(svc_name).unwrap();
 
-            // Stop existing handle if replacing.
+            // Stop existing handle if replacing, then remove it so the
+            // spawn below actually runs.
             if replace {
-                if let Some(handle) = handles.get_mut(svc_name) {
+                if let Some(mut handle) = handles.remove(svc_name) {
                     handle.stop(GRACEFUL_TIMEOUT);
                 }
-            }
-
-            // Skip already-running services (only relevant when !replace).
-            if handles.contains_key(svc_name) {
+            } else if handles.contains_key(svc_name) {
+                // Skip already-running services when not replacing.
                 continue;
             }
 
