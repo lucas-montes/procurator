@@ -1,6 +1,6 @@
 use std::fmt;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::io::Write;
+use std::io::{self, Write};
 use std::marker::PhantomData;
 use std::path::PathBuf;
 
@@ -153,10 +153,6 @@ impl fmt::Display for LogLine<File> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// LogWriter trait
-// ---------------------------------------------------------------------------
-
 /// Sync trait for writing log lines. Runs inside a dedicated task,
 /// so blocking I/O is acceptable.
 pub trait LogWriter: Send {
@@ -164,27 +160,25 @@ pub trait LogWriter: Send {
     fn flush(&mut self) -> Result<(), String>;
 }
 
-// ---------------------------------------------------------------------------
-// TerminalWriter
-// ---------------------------------------------------------------------------
-
 /// Writes log lines to terminal with coloured service prefixes.
 #[derive(Debug, Default)]
 pub struct TerminalWriter;
 
 impl LogWriter for TerminalWriter {
     fn write(&mut self, lines: &[LogLine]) -> Result<(), String> {
+        let mut stdout = io::stdout().lock();
+        let mut stderr = io::stderr().lock();
         for line in lines {
             match line.stream {
-                LogStream::Stdout => println!("{}", line),
-                LogStream::Stderr => eprintln!("{}", line),
+                LogStream::Stdout => writeln!(stdout, "{}", line).unwrap(),
+                LogStream::Stderr => writeln!(stderr, "{}", line).unwrap(),
             }
         }
         Ok(())
     }
 
     fn flush(&mut self) -> Result<(), String> {
-        Ok(())
+        io::stdout().flush().map_err(|e| e.to_string())
     }
 }
 
