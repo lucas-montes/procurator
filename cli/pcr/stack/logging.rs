@@ -1,7 +1,7 @@
-use std::collections::HashMap;
 use std::fmt;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
+use std::marker::PhantomData;
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
@@ -49,14 +49,42 @@ pub fn color_for(name: &str) -> &'static str {
     COLORS[idx]
 }
 
-/// Format a log prefix like `[service_name]` with the service's color.
-pub fn colored_prefix(name: &str, color: &str) -> String {
-    format!("{}[{}]{}", color, name, RESET)
+/// A colored `[service_name]` prefix that implements `Display`.
+pub struct ColoredPrefix<'a> {
+    name: &'a str,
+    color: &'static str,
+}
+
+impl<'a> ColoredPrefix<'a> {
+    pub fn new(name: &'a str) -> Self {
+        Self {
+            name,
+            color: color_for(name),
+        }
+    }
+}
+
+impl fmt::Display for ColoredPrefix<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{color}[{name}]{reset}",
+            color = self.color,
+            name = self.name,
+            reset = RESET
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
 // LogLine
 // ---------------------------------------------------------------------------
+
+/// Marker for terminal (colored) display.
+pub struct Terminal;
+
+/// Marker for file (plain-text) display.
+pub struct File;
 
 /// Whether the log line came from stdout or stderr.
 #[derive(Debug, Clone)]
@@ -75,15 +103,44 @@ impl fmt::Display for LogStream {
 }
 
 /// A single log line from a service.
+///
+/// The type parameter `T` selects the `Display` implementation:
+/// - [`Terminal`] — coloured prefix via `color_for`
+/// - [`File`] — plain timestamped format
 #[derive(Debug, Clone)]
-pub struct LogLine {
+pub struct LogLine<T = Terminal> {
     pub service: String,
     pub stream: LogStream,
     pub text: String,
     pub timestamp: DateTime<Utc>,
+    _marker: PhantomData<T>,
 }
 
-impl fmt::Display for LogLine {
+impl LogLine {
+    pub fn new(service: String, stream: LogStream, text: String, timestamp: DateTime<Utc>) -> Self {
+        Self {
+            service,
+            stream,
+            text,
+            timestamp,
+            _marker: PhantomData,
+        }
+    }
+}
+
+// Terminal display — coloured prefix, no timestamp.
+impl fmt::Display for LogLine<Terminal> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let prefix = ColoredPrefix::new(&self.service);
+        match self.stream {
+            LogStream::Stdout => write!(f, "{} {}", prefix, self.text),
+            LogStream::Stderr => write!(f, "{} ERR {}", prefix, self.text),
+        }
+    }
+}
+
+// File display — plain, timestamped.
+impl fmt::Display for LogLine<File> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -111,29 +168,16 @@ pub trait LogWriter: Send {
 // TerminalWriter
 // ---------------------------------------------------------------------------
 
-/// Writes log lines to terminal with colored service prefixes.
-pub struct TerminalWriter {
-    colors: HashMap<String, String>,
-}
-
-impl TerminalWriter {
-    pub fn new(colors: HashMap<String, String>) -> Self {
-        Self { colors }
-    }
-}
+/// Writes log lines to terminal with coloured service prefixes.
+#[derive(Debug, Default)]
+pub struct TerminalWriter;
 
 impl LogWriter for TerminalWriter {
     fn write(&mut self, lines: &[LogLine]) -> Result<(), String> {
         for line in lines {
-            let color = self
-                .colors
-                .get(&line.service)
-                .map(|s| s.as_str())
-                .unwrap_or("");
-            let prefix = colored_prefix(&line.service, color);
             match line.stream {
-                LogStream::Stdout => println!("{} {}", prefix, line.text),
-                LogStream::Stderr => eprintln!("{} ERR {}", prefix, line.text),
+                LogStream::Stdout => println!("{}", line),
+                LogStream::Stderr => eprintln!("{}", line),
             }
         }
         Ok(())
@@ -186,14 +230,21 @@ impl LogWriter for FileWriter {
                 self.open_new()?;
             }
             if self.line_count >= self.max_lines {
-                // Rotate: close current, open next
                 self.current_file = None;
                 self.line_count = 0;
                 self.open_new()?;
             }
 
             let file = self.current_file.as_mut().unwrap();
-            writeln!(file, "{}", line).map_err(|e| format!("log write error: {}", e))?;
+            // Format as a LogLine<File> without the colour codes.
+            let file_line = LogLine::<File> {
+                service: line.service.clone(),
+                stream: line.stream.clone(),
+                text: line.text.clone(),
+                timestamp: line.timestamp,
+                _marker: PhantomData,
+            };
+            writeln!(file, "{}", file_line).map_err(|e| format!("log write error: {}", e))?;
             self.line_count += 1;
         }
         Ok(())
@@ -244,7 +295,6 @@ impl LogWriter for BothWriter {
 /// the configured `LogWriter`.
 pub async fn writer_loop(mut rx: mpsc::Receiver<LogLine>, mut writer: Box<dyn LogWriter>) {
     while let Some(line) = rx.recv().await {
-        // Batch: drain any other pending lines
         let mut batch = vec![line];
         while let Ok(line) = rx.try_recv() {
             batch.push(line);

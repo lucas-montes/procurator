@@ -8,7 +8,7 @@ use tokio::io::AsyncBufReadExt;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 
-use crate::stack::logging::{LogLine, LogStream, color_for, colored_prefix};
+use crate::stack::logging::{ColoredPrefix, LogLine, LogStream};
 use crate::stack::parser::{Service, ServiceGraph};
 use crate::stack::supervisor::{
     RunningService, RunningStack, ServiceHandle, ServiceStatus, ServiceSupervisor, StackState,
@@ -52,10 +52,6 @@ impl<S: StackState> ServiceSupervisor for ProcessSupervisor<S> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Spawn helpers
-// ---------------------------------------------------------------------------
-
 impl<S: StackState> ProcessSupervisor<S> {
     /// Spawn a single service and return a [`ServiceHandle`].
     ///
@@ -64,8 +60,7 @@ impl<S: StackState> ProcessSupervisor<S> {
     /// is propagated (the caller is responsible for cleaning up already-
     /// spawned services).
     async fn spawn_one(&self, name: &str, svc: &Service) -> Result<ServiceHandle, String> {
-        let color = color_for(name);
-        let prefix = colored_prefix(name, color);
+        let prefix = ColoredPrefix::new(name);
         let is_one_shot = svc.one_shot.unwrap_or(false);
 
         let (prog, args) = parse_cmd(&svc.cmd)?;
@@ -104,12 +99,12 @@ impl<S: StackState> ProcessSupervisor<S> {
                 while let Ok(Some(text)) = reader.next_line().await {
                     if let Some(ref tx) = tx {
                         let _ = tx
-                            .send(LogLine {
-                                service: name.clone(),
-                                stream: LogStream::Stdout,
+                            .send(LogLine::new(
+                                name.clone(),
+                                LogStream::Stdout,
                                 text,
-                                timestamp: Utc::now(),
-                            })
+                                Utc::now(),
+                            ))
                             .await;
                     }
                 }
@@ -125,12 +120,12 @@ impl<S: StackState> ProcessSupervisor<S> {
                 while let Ok(Some(text)) = reader.next_line().await {
                     if let Some(ref tx) = tx {
                         let _ = tx
-                            .send(LogLine {
-                                service: name.clone(),
-                                stream: LogStream::Stderr,
+                            .send(LogLine::new(
+                                name.clone(),
+                                LogStream::Stderr,
                                 text,
-                                timestamp: Utc::now(),
-                            })
+                                Utc::now(),
+                            ))
                             .await;
                     }
                 }

@@ -1,12 +1,9 @@
 use clap::{Args, Subcommand};
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use tokio::sync::mpsc;
 
-use super::logging::{
-    BothWriter, FileWriter, LogLine, LogWriter, TerminalWriter, color_for, writer_loop,
-};
+use super::logging::{BothWriter, FileWriter, LogLine, LogWriter, TerminalWriter, writer_loop};
 use super::parser::{ServiceGraph, parse_stack_config};
 use super::process::ProcessSupervisor;
 use super::supervisor::{FileStackState, ServiceSupervisor};
@@ -48,15 +45,8 @@ impl StackArgs {
                 let mut supervisor = start_supervisor(self.path.clone());
                 let mut _log_handle = None;
 
-                // Build colors map for all services
-                let colors: HashMap<String, String> = graph
-                    .order
-                    .iter()
-                    .map(|name| (name.clone(), color_for(name).to_string()))
-                    .collect();
-
                 // Set up terminal writer, optionally combined with file writer
-                let terminal = TerminalWriter::new(colors);
+                let terminal = TerminalWriter::default();
                 let writer: Box<dyn LogWriter> = if let Some(lc) = log_config {
                     let dir = if lc.dir.is_relative() {
                         self.path.join(&lc.dir)

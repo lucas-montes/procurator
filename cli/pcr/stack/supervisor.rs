@@ -6,7 +6,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use crate::stack::logging::{color_for, colored_prefix};
+use crate::stack::logging::ColoredPrefix;
 use crate::stack::parser::ServiceGraph;
 
 /// Serializable running state for a single service.
@@ -240,8 +240,7 @@ pub fn kill_pid(pid: u32, name: &str, timeout: Duration) {
         .map(|s| s.success())
         .unwrap_or(false);
     if ok {
-        let color = color_for(name);
-        println!("{} SIGTERM sent", colored_prefix(name, color));
+        println!("{} SIGTERM sent", ColoredPrefix::new(name));
     }
 
     // Phase 2: wait for process to die (polling)
@@ -259,8 +258,7 @@ pub fn kill_pid(pid: u32, name: &str, timeout: Duration) {
             .arg("-9")
             .arg(pid.to_string())
             .status();
-        let color = color_for(name);
-        eprintln!("{} force killed", colored_prefix(name, color));
+        eprintln!("{} force killed", ColoredPrefix::new(name));
     }
 }
 

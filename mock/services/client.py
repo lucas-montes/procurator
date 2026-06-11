@@ -20,6 +20,7 @@ def main():
         except (ConnectionRefusedError, socket.timeout, OSError) as e:
             print(f"connection failed: {e}", flush=True)
 
+        print("sleeping for 5 seconds", flush=True)
         time.sleep(5)
 
 

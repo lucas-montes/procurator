@@ -16,7 +16,7 @@ use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 
-use crate::stack::logging::{color_for, colored_prefix};
+use crate::stack::logging::ColoredPrefix;
 use crate::stack::parser::{
     ServiceChange, ServiceGraph, WatchConfig, diff_graphs, parse_stack_config,
 };
@@ -214,10 +214,9 @@ pub async fn run_watch_loop<S: StackState>(
                 });
 
                 for name in &skipped {
-                    let color = color_for(name);
                     println!(
                         "{} oneShot — source change ignored",
-                        colored_prefix(name, color)
+                        ColoredPrefix::new(name)
                     );
                 }
 
@@ -228,10 +227,9 @@ pub async fn run_watch_loop<S: StackState>(
                         .await?;
 
                     for name in &to_restart {
-                        let color = color_for(name);
                         println!(
                             "{} restarted by source change",
-                            colored_prefix(name, color)
+                            ColoredPrefix::new(name)
                         );
                     }
                 }
@@ -279,14 +277,13 @@ pub async fn run_watch_loop<S: StackState>(
                         .spawn_many(&changed, &new_graph, &mut handles, true, stack_pid, &started_at)
                         .await?;
                     for name in &changed {
-                        let color = color_for(name);
                         let is_one_shot = new_graph.services.get(name)
                             .map(|s| s.one_shot.unwrap_or(false))
                             .unwrap_or(false);
                         if is_one_shot {
-                            println!("{} oneShot cmd changed — ignored in watch mode", colored_prefix(name, color));
+                            println!("{} oneShot cmd changed — ignored in watch mode", ColoredPrefix::new(name));
                         } else {
-                            println!("{} restarted by flake change", colored_prefix(name, color));
+                            println!("{} restarted by flake change", ColoredPrefix::new(name));
                         }
                     }
                 }
@@ -301,8 +298,7 @@ pub async fn run_watch_loop<S: StackState>(
                         .spawn_many(&added, &new_graph, &mut handles, false, stack_pid, &started_at)
                         .await?;
                     for name in &added {
-                        let color = color_for(name);
-                        println!("{} added by flake change", colored_prefix(name, color));
+                        println!("{} added by flake change", ColoredPrefix::new(name));
                     }
                 }
 
@@ -314,8 +310,7 @@ pub async fn run_watch_loop<S: StackState>(
                 for name in &removed {
                     if let Some(mut h) = handles.remove(name) {
                         h.stop(GRACEFUL_TIMEOUT);
-                        let color = color_for(&h.name);
-                        println!("{} removed by flake change", colored_prefix(name, color));
+                        println!("{} removed by flake change", ColoredPrefix::new(name));
                     }
                 }
                 if !removed.is_empty() {
