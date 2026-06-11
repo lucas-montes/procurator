@@ -18,7 +18,7 @@ use tokio::sync::mpsc;
 
 use crate::stack::logging::{color_for, colored_prefix};
 use crate::stack::parser::{
-    ServiceChange, ServiceGraph, WatchConfig, diff_graphs, parse_flake_services,
+    ServiceChange, ServiceGraph, WatchConfig, diff_graphs, parse_stack_config,
 };
 use crate::stack::process::{GRACEFUL_TIMEOUT, ProcessSupervisor};
 use crate::stack::supervisor::{ServiceHandle, StackState};
@@ -252,10 +252,17 @@ pub async fn run_watch_loop<S: StackState>(
 
                 // Re-parse the flake.  If evaluation fails, warn and keep
                 // the current graph.
-                let (new_graph, _new_log_cfg) = match parse_flake_services(&supervisor.repo_root) {
-                    Ok(pair) => pair,
+                let (raw_services, _log_cfg, _watch_cfg) = match parse_stack_config(&supervisor.repo_root) {
+                    Ok(v) => v,
                     Err(e) => {
                         eprintln!("flake re-parse failed (keeping current graph): {}", e);
+                        continue;
+                    }
+                };
+                let new_graph = match ServiceGraph::from_services(raw_services) {
+                    Ok(g) => g,
+                    Err(e) => {
+                        eprintln!("flake re-parse graph invalid (keeping current graph): {}", e);
                         continue;
                     }
                 };

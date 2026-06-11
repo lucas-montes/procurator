@@ -25,6 +25,16 @@ pub struct ServiceGraph {
     pub order: Vec<String>, // topologically sorted service names
 }
 
+impl ServiceGraph {
+    /// Build a graph from a raw services map (sorts and validates).
+    pub fn from_services(services: HashMap<String, Service>) -> Result<Self, String> {
+        let order = topo_sort(&services)?;
+        let graph = Self { services, order };
+        graph.validate()?;
+        Ok(graph)
+    }
+}
+
 /// Global log configuration, parsed from `stack.logs` in the flake.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogConfig {
@@ -42,6 +52,16 @@ pub struct WatchConfig {
     /// Also watch `flake.nix` for service-level changes.
     #[serde(default)]
     pub watch_flake: bool,
+}
+
+/// All configuration under `stack` in the flake, parsed in a single eval.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StackConfig {
+    pub services: HashMap<String, Service>,
+    #[serde(default)]
+    pub logs: Option<LogConfig>,
+    #[serde(default)]
+    pub watch: Option<WatchConfig>,
 }
 
 /// Classification of a single service's change between two graph snapshots.
@@ -174,14 +194,23 @@ fn has_cycle(services: &HashMap<String, Service>) -> bool {
     false
 }
 
-pub fn parse_flake_services(
+/// Parse all config from `.#stack` in a single `nix eval --json` call.
+///
+/// Returns the raw services map and optional log/watch config.
+pub fn parse_stack_config(
     repo_path: &PathBuf,
-) -> Result<(ServiceGraph, Option<LogConfig>), String> {
-    // Run nix eval --json .#stack.services
+) -> Result<
+    (
+        HashMap<String, Service>,
+        Option<LogConfig>,
+        Option<WatchConfig>,
+    ),
+    String,
+> {
     let output = std::process::Command::new("nix")
         .arg("eval")
         .arg("--json")
-        .arg(".#stack.services")
+        .arg(".#stack")
         .current_dir(repo_path)
         .output()
         .map_err(|e| format!("Failed to run nix eval: {}", e))?;
@@ -191,64 +220,10 @@ pub fn parse_flake_services(
         return Err(format!("nix eval failed: {}", err));
     }
 
-    let json_str = String::from_utf8(output.stdout)
-        .map_err(|e| format!("Invalid UTF-8 in nix eval output: {}", e))?;
+    let raw: StackConfig = serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("Failed to parse nix eval output: {}", e))?;
 
-    let services: HashMap<String, Service> = serde_json::from_str(&json_str)
-        .map_err(|e| format!("Failed to parse services JSON: {}", e))?;
-
-    // Compute topological order
-    let order = topo_sort(&services)?;
-
-    let graph = ServiceGraph { services, order };
-    graph.validate()?;
-
-    // Try to parse optional log config from .#stack.logs
-    let log_config = parse_log_config(repo_path)?;
-
-    Ok((graph, log_config))
-}
-
-/// Parse the optional `stack.logs` attribute from the flake.
-fn parse_log_config(repo_path: &PathBuf) -> Result<Option<LogConfig>, String> {
-    let output = std::process::Command::new("nix")
-        .arg("eval")
-        .arg("--json")
-        .arg(".#stack.logs")
-        .current_dir(repo_path)
-        .output()
-        .map_err(|e| format!("Failed to run nix eval for logs: {}", e))?;
-
-    if !output.status.success() {
-        // Attribute not present — file logging is disabled
-        return Ok(None);
-    }
-
-    let config: LogConfig = serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("Failed to parse log config: {}", e))?;
-
-    Ok(Some(config))
-}
-
-/// Parse the optional `stack.watch` attribute from the flake.
-pub fn parse_watch_config(repo_path: &PathBuf) -> Result<Option<WatchConfig>, String> {
-    let output = std::process::Command::new("nix")
-        .arg("eval")
-        .arg("--json")
-        .arg(".#stack.watch")
-        .current_dir(repo_path)
-        .output()
-        .map_err(|e| format!("Failed to run nix eval for watch config: {}", e))?;
-
-    if !output.status.success() {
-        // Attribute not present — watch mode is disabled
-        return Ok(None);
-    }
-
-    let config: WatchConfig = serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("Failed to parse watch config: {}", e))?;
-
-    Ok(Some(config))
+    Ok((raw.services, raw.logs, raw.watch))
 }
 
 fn topo_sort(services: &HashMap<String, Service>) -> Result<Vec<String>, String> {

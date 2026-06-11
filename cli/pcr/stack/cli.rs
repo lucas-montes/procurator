@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 use super::logging::{
     BothWriter, FileWriter, LogLine, LogWriter, TerminalWriter, color_for, writer_loop,
 };
-use super::parser::{parse_flake_services, parse_watch_config};
+use super::parser::{ServiceGraph, parse_stack_config};
 use super::process::ProcessSupervisor;
 use super::supervisor::{FileStackState, ServiceSupervisor};
 use super::watch::run_watch_loop;
@@ -40,11 +40,10 @@ impl StackArgs {
 
         match self.command {
             StackCommands::Start => {
-                let (graph, log_config) =
-                    parse_flake_services(&self.path).expect("unable to parse flake services");
-
-                let watch_cfg =
-                    parse_watch_config(&self.path).expect("unable to parse watch config");
+                let (raw_services, log_config, watch_cfg) =
+                    parse_stack_config(&self.path).expect("unable to parse flake config");
+                let graph =
+                    ServiceGraph::from_services(raw_services).expect("invalid service graph");
 
                 let mut supervisor = start_supervisor(self.path.clone());
                 let mut _log_handle = None;
