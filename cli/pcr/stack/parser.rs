@@ -5,23 +5,39 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Service {
-    pub cmd: serde_json::Value,
+    cmd: serde_json::Value,
     #[serde(default)]
-    pub src: Option<String>,
+    src: Option<String>,
     #[serde(default)]
-    pub ports: Option<Vec<u16>>,
+    ports: Option<Vec<u16>>,
     #[serde(rename = "dependsOn", default)]
-    pub depends_on: Option<Vec<String>>,
+    depends_on: Option<Vec<String>>,
     #[serde(rename = "oneShot", default)]
-    pub one_shot: Option<bool>,
+    one_shot: Option<bool>,
     #[serde(default)]
-    pub restart: Option<String>,
+    restart: Option<String>,
+}
+
+impl Service {
+    pub fn cmd(&self) -> &serde_json::Value {
+        &self.cmd
+    }
+    pub fn src(&self) -> Option<&str> {
+        self.src.as_deref()
+    }
+    pub fn one_shot(&self) -> Option<bool> {
+        self.one_shot
+    }
+    /// The dependency list (unused externally but part of validation).
+    pub fn depends_on(&self) -> Option<&[String]> {
+        self.depends_on.as_deref()
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct ServiceGraph {
-    pub services: HashMap<String, Service>,
-    pub order: Vec<String>,
+    services: HashMap<String, Service>,
+    order: Vec<String>,
 }
 
 impl ServiceGraph {
@@ -31,31 +47,56 @@ impl ServiceGraph {
         graph.validate()?;
         Ok(graph)
     }
+
+    pub fn services(&self) -> &HashMap<String, Service> {
+        &self.services
+    }
+    pub fn order(&self) -> &[String] {
+        &self.order
+    }
 }
 
 /// Global log configuration, parsed from `stack.logs` in the flake.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogConfig {
-    pub dir: PathBuf,
-    pub max_lines: usize,
+    dir: PathBuf,
+    max_lines: usize,
+}
+
+impl LogConfig {
+    pub fn dir(&self) -> &PathBuf {
+        &self.dir
+    }
+    pub fn max_lines(&self) -> usize {
+        self.max_lines
+    }
 }
 
 /// Optional watch-mode configuration, parsed from `stack.watch` in the flake.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WatchConfig {
-    pub enable: bool,
+    enable: bool,
     #[serde(default)]
-    pub watch_flake: bool,
+    watch_flake: bool,
+}
+
+impl WatchConfig {
+    pub fn enable(&self) -> bool {
+        self.enable
+    }
+    pub fn watch_flake(&self) -> bool {
+        self.watch_flake
+    }
 }
 
 /// All configuration under `stack` in the flake, parsed in a single eval.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StackConfig {
-    pub services: HashMap<String, Service>,
+#[derive(Debug, Clone, Deserialize)]
+struct StackConfig {
+    services: HashMap<String, Service>,
     #[serde(default)]
-    pub logs: Option<LogConfig>,
+    logs: Option<LogConfig>,
     #[serde(default)]
-    pub watch: Option<WatchConfig>,
+    watch: Option<WatchConfig>,
 }
 
 /// Classification of a single service's change between two graph snapshots.

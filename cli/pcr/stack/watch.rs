@@ -164,14 +164,13 @@ pub async fn run_watch_loop<S: StackState>(
 
     // ── 1. Build path-to-service map ──────────────────────────────────────
     let mut path_to_services: HashMap<PathBuf, Vec<String>> = HashMap::new();
-    for (name, svc) in &graph.services {
-        if let Some(src) = &svc.src {
+    for (name, svc) in graph.services() {
+        if let Some(src) = svc.src() {
             let full_path = if PathBuf::from(src).is_absolute() {
                 PathBuf::from(src)
             } else {
                 supervisor.repo_root.join(src)
             };
-            // Canonicalize so that changes on symlinked or mounted paths match.
             let canonical = full_path.canonicalize().unwrap_or(full_path);
             path_to_services
                 .entry(canonical)
@@ -189,7 +188,7 @@ pub async fn run_watch_loop<S: StackState>(
         None
     };
 
-    let mut flake_rx = if watch_cfg.watch_flake {
+    let mut flake_rx = if watch_cfg.watch_flake() {
         let flake_path = supervisor.repo_root.join("flake.nix");
         if flake_path.exists() {
             Some(watch_file(supervisor.repo_root.clone()).await?)
@@ -247,7 +246,7 @@ pub async fn run_watch_loop<S: StackState>(
 
                 // Filter out oneShot services — they are never re-run.
                 let (to_restart, skipped): (Vec<_>, Vec<_>) = affected.iter().partition(|n| {
-                    !graph.services.get(*n).map(|s| s.one_shot.unwrap_or(false)).unwrap_or(true)
+                    !graph.services().get(*n).map(|s| s.one_shot().unwrap_or(false)).unwrap_or(true)
                 });
 
                 for name in &skipped {
@@ -314,8 +313,8 @@ pub async fn run_watch_loop<S: StackState>(
                         .spawn_many(&changed, &new_graph, &mut handles, true, stack_pid, &started_at)
                         .await?;
                     for name in &changed {
-                        let is_one_shot = new_graph.services.get(name)
-                            .map(|s| s.one_shot.unwrap_or(false))
+                        let is_one_shot = new_graph.services().get(name)
+                            .map(|s| s.one_shot().unwrap_or(false))
                             .unwrap_or(false);
                         if is_one_shot {
                             println!("{} oneShot cmd changed — ignored in watch mode", ColoredPrefix::new(name));

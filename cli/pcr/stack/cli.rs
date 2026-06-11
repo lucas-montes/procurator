@@ -48,13 +48,13 @@ impl StackArgs {
                 // Set up terminal writer, optionally combined with file writer
                 let terminal = TerminalWriter::default();
                 let writer: Box<dyn LogWriter> = if let Some(lc) = log_config {
-                    let dir = if lc.dir.is_relative() {
-                        self.path.join(&lc.dir)
+                    let dir = if lc.dir().is_relative() {
+                        self.path.join(lc.dir())
                     } else {
-                        lc.dir
+                        lc.dir().clone()
                     };
                     let file = FileWriter::new_file(&dir).expect("could not create log file");
-                    let filew = FileWriter::new(dir, lc.max_lines, file);
+                    let filew = FileWriter::new(dir, lc.max_lines(), file);
                     Box::new(BothWriter::new(terminal, filew))
                 } else {
                     Box::new(terminal)
@@ -65,7 +65,7 @@ impl StackArgs {
                 _log_handle = Some(tokio::spawn(writer_loop(rx, writer)));
 
                 // Decide: watch mode or one-shot start
-                if watch_cfg.as_ref().map(|w| w.enable).unwrap_or(false) {
+                if watch_cfg.as_ref().map(|w| w.enable()).unwrap_or(false) {
                     let watch_cfg = watch_cfg.unwrap(); // safe — checked above
                     let handles = supervisor
                         .spawn_all(&graph)

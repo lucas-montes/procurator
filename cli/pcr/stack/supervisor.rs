@@ -12,9 +12,30 @@ use crate::stack::parser::ServiceGraph;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunningService {
-    pub cmd: serde_json::Value,
-    pub pid: u32,
-    pub status: ServiceStatus,
+    cmd: serde_json::Value,
+    pid: u32,
+    status: ServiceStatus,
+}
+
+impl RunningService {
+    pub fn new(cmd: serde_json::Value, pid: u32, status: ServiceStatus) -> Self {
+        Self { cmd, pid, status }
+    }
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+    pub fn status(&self) -> &ServiceStatus {
+        &self.status
+    }
+    pub fn cmd(&self) -> &serde_json::Value {
+        &self.cmd
+    }
+    pub fn set_pid(&mut self, pid: u32) {
+        self.pid = pid;
+    }
+    pub fn set_status(&mut self, status: ServiceStatus) {
+        self.status = status;
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,20 +47,34 @@ pub enum ServiceStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunningStack {
-    pub version: u32,
-    pub stack_pid: u32,
-    pub started_at: String,
-    pub services: HashMap<String, RunningService>,
+    version: u32,
+    stack_pid: u32,
+    started_at: String,
+    services: HashMap<String, RunningService>,
+}
+
+impl RunningStack {
+    pub fn services(&self) -> &HashMap<String, RunningService> {
+        &self.services
+    }
 }
 
 pub struct ServiceHandle {
-    pub name: String,
-    pub running: RunningService,
+    name: String,
+    running: RunningService,
 }
 
 impl ServiceHandle {
-    pub fn is_alive(&self) -> bool {
-        is_pid_alive(self.running.pid)
+    pub fn new(name: String, running: RunningService) -> Self {
+        Self { name, running }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn running(&self) -> &RunningService {
+        &self.running
     }
 
     pub fn stop(&mut self, timeout: Duration) {
@@ -220,7 +255,7 @@ impl StackState for FileStackState {
             }
         })?;
 
-        let _ = fs::remove_dir(self.state_dir());
+        let _ = fs::remove_dir(self.state_dir()).map_err(SupervisorError::Io)?;
         Ok(())
     }
 }

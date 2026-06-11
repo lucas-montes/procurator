@@ -104,8 +104,8 @@ impl<S: StackState> ServiceSupervisor for ProcessSupervisor<S> {
 
     fn stop(&mut self) -> Result<(), SupervisorError> {
         let state = self.state_repo.load()?;
-        for (name, svc) in &state.services {
-            kill_pid(svc.pid, name, GRACEFUL_TIMEOUT);
+        for (name, svc) in state.services() {
+            kill_pid(svc.pid(), name, GRACEFUL_TIMEOUT);
         }
         self.state_repo.clear()
     }
@@ -118,12 +118,12 @@ impl<S: StackState> ServiceSupervisor for ProcessSupervisor<S> {
 impl<S: StackState> ProcessSupervisor<S> {
     async fn spawn_one(&self, name: &str, svc: &Service) -> Result<ServiceHandle, ProcessError> {
         let prefix = ColoredPrefix::new(name);
-        let is_one_shot = svc.one_shot.unwrap_or(false);
+        let is_one_shot = svc.one_shot().unwrap_or(false);
 
-        let (prog, args) = parse_cmd(&svc.cmd)?;
+        let (prog, args) = parse_cmd(svc.cmd())?;
 
         let mut work_dir = self.repo_root.clone();
-        if let Some(src) = &svc.src {
+        if let Some(src) = svc.src() {
             work_dir.push(src);
         }
 
@@ -187,11 +187,7 @@ impl<S: StackState> ProcessSupervisor<S> {
             });
         }
 
-        let mut running = RunningService {
-            cmd: svc.cmd.clone(),
-            pid,
-            status: ServiceStatus::Running,
-        };
+        let mut running = RunningService::new(svc.cmd().clone(), pid, ServiceStatus::Running);
 
         if is_one_shot {
             let exit_status = child
@@ -207,14 +203,11 @@ impl<S: StackState> ProcessSupervisor<S> {
             }
 
             println!("{} oneShot completed successfully", prefix);
-            running.status = ServiceStatus::Stopped;
-            running.pid = 0;
+            running.set_status(ServiceStatus::Stopped);
+            running.set_pid(0);
         }
 
-        Ok(ServiceHandle {
-            name: name.to_string(),
-            running,
-        })
+        Ok(ServiceHandle::new(name.to_string(), running))
     }
 
     pub async fn spawn_many(
@@ -227,14 +220,14 @@ impl<S: StackState> ProcessSupervisor<S> {
         started_at: &str,
     ) -> Result<(), ProcessError> {
         let to_spawn: Vec<&str> = graph
-            .order
+            .order()
             .iter()
             .filter(|n| names.contains(n))
             .map(|s| s.as_str())
             .collect();
 
         for svc_name in to_spawn {
-            let svc = graph.services.get(svc_name).unwrap();
+            let svc = graph.services().get(svc_name).unwrap();
 
             if replace {
                 if let Some(mut handle) = handles.remove(svc_name) {
@@ -271,7 +264,7 @@ impl<S: StackState> ProcessSupervisor<S> {
         let started_at = Utc::now().to_rfc3339();
         let mut handles = HashMap::new();
         self.spawn_many(
-            &graph.order,
+            &graph.order().to_vec(),
             graph,
             &mut handles,
             false,
@@ -315,7 +308,7 @@ impl<S: StackState> ProcessSupervisor<S> {
 
         let has_running = handles
             .values()
-            .any(|h| matches!(h.running.status, ServiceStatus::Running));
+            .any(|h| matches!(h.running().status(), ServiceStatus::Running));
         if !has_running {
             println!("All oneShot services completed. Stack exiting.");
             self.state_repo.clear().ok();
