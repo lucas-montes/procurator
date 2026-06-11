@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
@@ -12,16 +13,14 @@ use crate::stack::logging::{ColoredPrefix, LogLine, LogStream};
 use crate::stack::parser::{Service, ServiceGraph};
 use crate::stack::supervisor::{
     RunningService, RunningStack, ServiceHandle, ServiceStatus, ServiceSupervisor, StackState,
-    flatten_handles, kill_pid,
+    SupervisorError, flatten_handles, kill_pid,
 };
 
-/// How long to wait after SIGTERM before sending SIGKILL.
 pub(crate) const GRACEFUL_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct ProcessSupervisor<S: StackState> {
     pub(crate) repo_root: PathBuf,
     state_repo: S,
-    /// Optional sender for file+terminal logging. When `None`, no output routing.
     pub log_sender: Option<mpsc::Sender<LogLine>>,
 }
 
@@ -35,31 +34,89 @@ impl<S: StackState> ProcessSupervisor<S> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// ProcessError
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+pub enum ProcessError {
+    Io(std::io::Error),
+    Supervisor(SupervisorError),
+    Spawn(String),
+    NoPid(String),
+    Wait(String),
+    ExitStatus(String, Option<i32>),
+    Signal(String),
+    ParseCmd,
+}
+
+impl fmt::Display for ProcessError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessError::Io(e) => write!(f, "I/O error: {}", e),
+            ProcessError::Supervisor(e) => write!(f, "{}", e),
+            ProcessError::Spawn(msg) => write!(f, "{}", msg),
+            ProcessError::NoPid(msg) => write!(f, "{}", msg),
+            ProcessError::Wait(msg) => write!(f, "{}", msg),
+            ProcessError::ExitStatus(name, code) => {
+                write!(f, "oneShot service '{}' exited with code {:?}", name, code)
+            }
+            ProcessError::Signal(msg) => write!(f, "{}", msg),
+            ProcessError::ParseCmd => write!(f, "invalid cmd: expected string or array"),
+        }
+    }
+}
+
+impl std::error::Error for ProcessError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ProcessError::Io(e) => Some(e),
+            ProcessError::Supervisor(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for ProcessError {
+    fn from(e: std::io::Error) -> Self {
+        ProcessError::Io(e)
+    }
+}
+
+impl From<SupervisorError> for ProcessError {
+    fn from(e: SupervisorError) -> Self {
+        ProcessError::Supervisor(e)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ServiceSupervisor trait impl
+// ---------------------------------------------------------------------------
+
 impl<S: StackState> ServiceSupervisor for ProcessSupervisor<S> {
-    fn start(&mut self, graph: &ServiceGraph) -> Result<RunningStack, String> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| format!("failed to create tokio runtime: {}", e))?;
+    fn start(&mut self, graph: &ServiceGraph) -> Result<RunningStack, SupervisorError> {
+        let rt = tokio::runtime::Runtime::new().map_err(|e| {
+            SupervisorError::Process(format!("failed to create tokio runtime: {}", e))
+        })?;
         rt.block_on(self.start_impl(graph))
+            .map_err(|e| SupervisorError::Process(e.to_string()))
     }
 
-    fn stop(&mut self) -> Result<(), String> {
+    fn stop(&mut self) -> Result<(), SupervisorError> {
         let state = self.state_repo.load()?;
         for (name, svc) in &state.services {
             kill_pid(svc.pid, name, GRACEFUL_TIMEOUT);
         }
-        self.state_repo.clear()?;
-        Ok(())
+        self.state_repo.clear()
     }
 }
 
+// ---------------------------------------------------------------------------
+// Spawn methods
+// ---------------------------------------------------------------------------
+
 impl<S: StackState> ProcessSupervisor<S> {
-    /// Spawn a single service and return a [`ServiceHandle`].
-    ///
-    /// For oneShot services this awaits completion: on success the handle
-    /// is returned with `pid = 0` / `Status::Stopped`; on failure the error
-    /// is propagated (the caller is responsible for cleaning up already-
-    /// spawned services).
-    async fn spawn_one(&self, name: &str, svc: &Service) -> Result<ServiceHandle, String> {
+    async fn spawn_one(&self, name: &str, svc: &Service) -> Result<ServiceHandle, ProcessError> {
         let prefix = ColoredPrefix::new(name);
         let is_one_shot = svc.one_shot.unwrap_or(false);
 
@@ -80,17 +137,16 @@ impl<S: StackState> ProcessSupervisor<S> {
 
         let mut child = cmd
             .spawn()
-            .map_err(|e| format!("{} failed to spawn: {}", prefix, e))?;
+            .map_err(|e| ProcessError::Spawn(format!("{} failed to spawn: {}", prefix, e)))?;
 
-        let pid = child
-            .id()
-            .ok_or_else(|| format!("{} spawned but PID unavailable", prefix))?;
+        let pid = child.id().ok_or_else(|| {
+            ProcessError::NoPid(format!("{} spawned but PID unavailable", prefix))
+        })?;
 
         println!("{} started (pid {})", prefix, pid);
 
         let log_tx = self.log_sender.clone();
 
-        // Stream stdout → LogLine channel
         if let Some(stdout) = child.stdout.take() {
             let name = name.to_string();
             let mut reader = tokio::io::BufReader::new(stdout).lines();
@@ -111,7 +167,6 @@ impl<S: StackState> ProcessSupervisor<S> {
             });
         }
 
-        // Stream stderr → LogLine channel
         if let Some(stderr) = child.stderr.take() {
             let name = name.to_string();
             let mut reader = tokio::io::BufReader::new(stderr).lines();
@@ -138,18 +193,16 @@ impl<S: StackState> ProcessSupervisor<S> {
             status: ServiceStatus::Running,
         };
 
-        // For oneShot services, wait for completion
         if is_one_shot {
             let exit_status = child
                 .wait()
                 .await
-                .map_err(|e| format!("{} wait error: {}", prefix, e))?;
+                .map_err(|e| ProcessError::Wait(format!("{} wait error: {}", prefix, e)))?;
 
             if !exit_status.success() {
-                return Err(format!(
-                    "oneShot service '{}' exited with code {:?}",
-                    name,
-                    exit_status.code()
+                return Err(ProcessError::ExitStatus(
+                    name.to_string(),
+                    exit_status.code(),
                 ));
             }
 
@@ -164,13 +217,6 @@ impl<S: StackState> ProcessSupervisor<S> {
         })
     }
 
-    /// Spawn services by name, respecting the graph's topological order.
-    ///
-    /// - `names` is a subset of the service names in `graph`.
-    /// - `handles` is mutated in place: new handles are inserted, existing
-    ///   handles are left alone (unless `replace` is true, in which case
-    ///   the old handle is stopped first).
-    /// - State is persisted after each successful spawn.
     pub async fn spawn_many(
         &self,
         names: &[String],
@@ -179,9 +225,7 @@ impl<S: StackState> ProcessSupervisor<S> {
         replace: bool,
         stack_pid: u32,
         started_at: &str,
-    ) -> Result<(), String> {
-        // Preserve topological order: walk graph.order and pick only the
-        // requested names.
+    ) -> Result<(), ProcessError> {
         let to_spawn: Vec<&str> = graph
             .order
             .iter()
@@ -192,27 +236,21 @@ impl<S: StackState> ProcessSupervisor<S> {
         for svc_name in to_spawn {
             let svc = graph.services.get(svc_name).unwrap();
 
-            // Stop existing handle if replacing, then remove it so the
-            // spawn below actually runs.
             if replace {
                 if let Some(mut handle) = handles.remove(svc_name) {
                     handle.stop(GRACEFUL_TIMEOUT);
                 }
             } else if handles.contains_key(svc_name) {
-                // Skip already-running services when not replacing.
                 continue;
             }
 
             match self.spawn_one(svc_name, svc).await {
                 Ok(handle) => {
                     handles.insert(svc_name.to_string(), handle);
-                    // Persist after each successful spawn.
                     let running = flatten_handles(handles, stack_pid, started_at);
                     self.state_repo.save(&running)?;
                 }
                 Err(e) => {
-                    // oneShot or spawn failed — clean up already-spawned
-                    // services before propagating.
                     for h in handles.values_mut() {
                         h.stop(GRACEFUL_TIMEOUT);
                     }
@@ -225,11 +263,10 @@ impl<S: StackState> ProcessSupervisor<S> {
         Ok(())
     }
 
-    /// Spawn **all** services from the graph and return the handle map.
     pub async fn spawn_all(
         &self,
         graph: &ServiceGraph,
-    ) -> Result<HashMap<String, ServiceHandle>, String> {
+    ) -> Result<HashMap<String, ServiceHandle>, ProcessError> {
         let stack_pid = std::process::id();
         let started_at = Utc::now().to_rfc3339();
         let mut handles = HashMap::new();
@@ -245,42 +282,37 @@ impl<S: StackState> ProcessSupervisor<S> {
         Ok(handles)
     }
 
-    /// Persist the current handle map as running state.
     pub(crate) fn persist_handles(
         &self,
         handles: &HashMap<String, ServiceHandle>,
         stack_pid: u32,
         started_at: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), SupervisorError> {
         let running = flatten_handles(handles, stack_pid, started_at);
         self.state_repo.save(&running)
     }
 
-    /// Clear persisted state (used during shutdown).
-    pub(crate) fn clear_state(&self) -> Result<(), String> {
+    pub(crate) fn clear_state(&self) -> Result<(), SupervisorError> {
         self.state_repo.clear()
     }
 }
 
 // ---------------------------------------------------------------------------
-// start_impl — sync trait wrappers call into this
+// start_impl
 // ---------------------------------------------------------------------------
 
 impl<S: StackState> ProcessSupervisor<S> {
-    pub async fn start_impl(&self, graph: &ServiceGraph) -> Result<RunningStack, String> {
+    pub async fn start_impl(&self, graph: &ServiceGraph) -> Result<RunningStack, ProcessError> {
         let stack_pid = std::process::id();
         let started_at = Utc::now().to_rfc3339();
 
-        // ── Install signal handlers (must happen before spawning children) ──
-        let mut sigint =
-            signal(SignalKind::interrupt()).map_err(|e| format!("SIGINT handler: {}", e))?;
-        let mut sigterm =
-            signal(SignalKind::terminate()).map_err(|e| format!("SIGTERM handler: {}", e))?;
+        let mut sigint = signal(SignalKind::interrupt())
+            .map_err(|e| ProcessError::Signal(format!("SIGINT handler: {}", e)))?;
+        let mut sigterm = signal(SignalKind::terminate())
+            .map_err(|e| ProcessError::Signal(format!("SIGTERM handler: {}", e)))?;
 
-        // ── Spawn all children ──
         let mut handles = self.spawn_all(graph).await?;
 
-        // If all services are oneShot (already completed), exit immediately.
         let has_running = handles
             .values()
             .any(|h| matches!(h.running.status, ServiceStatus::Running));
@@ -292,7 +324,6 @@ impl<S: StackState> ProcessSupervisor<S> {
 
         println!("All services started. Press Ctrl-C to stop.");
 
-        // ── Wait for shutdown signal ──
         tokio::select! {
             _ = sigint.recv() => {
                 println!("\nSIGINT received, shutting down...");
@@ -302,7 +333,6 @@ impl<S: StackState> ProcessSupervisor<S> {
             }
         }
 
-        // ── Graceful shutdown using handles (they always have the latest PIDs) ──
         for h in handles.values_mut() {
             h.stop(GRACEFUL_TIMEOUT);
         }
@@ -317,8 +347,7 @@ impl<S: StackState> ProcessSupervisor<S> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Convert the JSON cmd value into (program, args).
-fn parse_cmd(cmd: &serde_json::Value) -> Result<(String, Vec<String>), String> {
+fn parse_cmd(cmd: &serde_json::Value) -> Result<(String, Vec<String>), ProcessError> {
     match cmd {
         serde_json::Value::String(s) => Ok(("sh".to_string(), vec!["-c".to_string(), s.clone()])),
         serde_json::Value::Array(arr) => {
@@ -333,6 +362,6 @@ fn parse_cmd(cmd: &serde_json::Value) -> Result<(String, Vec<String>), String> {
                 .collect();
             Ok((prog, args))
         }
-        _ => Err("invalid cmd: expected string or array".to_string()),
+        _ => Err(ProcessError::ParseCmd),
     }
 }

@@ -9,6 +9,7 @@
 //!   that powers hot-reload mode.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -20,14 +21,59 @@ use crate::stack::logging::ColoredPrefix;
 use crate::stack::parser::{
     ServiceChange, ServiceGraph, WatchConfig, diff_graphs, parse_stack_config,
 };
-use crate::stack::process::{GRACEFUL_TIMEOUT, ProcessSupervisor};
-use crate::stack::supervisor::{ServiceHandle, StackState};
+use crate::stack::process::{GRACEFUL_TIMEOUT, ProcessError, ProcessSupervisor};
+use crate::stack::supervisor::{ServiceHandle, StackState, SupervisorError};
+
+// ---------------------------------------------------------------------------
+// WatchError
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+pub enum WatchError {
+    Notify(String),
+    Supervisor(SupervisorError),
+    Process(ProcessError),
+    Signal(String),
+}
+
+impl fmt::Display for WatchError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WatchError::Notify(msg) => write!(f, "{}", msg),
+            WatchError::Supervisor(e) => write!(f, "{}", e),
+            WatchError::Process(e) => write!(f, "{}", e),
+            WatchError::Signal(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+impl std::error::Error for WatchError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            WatchError::Supervisor(e) => Some(e),
+            WatchError::Process(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<SupervisorError> for WatchError {
+    fn from(e: SupervisorError) -> Self {
+        WatchError::Supervisor(e)
+    }
+}
+
+impl From<ProcessError> for WatchError {
+    fn from(e: ProcessError) -> Self {
+        WatchError::Process(e)
+    }
+}
 
 /// A debounced notification that files changed in one or more watched directories.
 #[derive(Debug, Clone)]
 pub struct DebouncedEvent {
     /// Paths that changed since the last event.
-    pub paths: Vec<PathBuf>,
+    paths: Vec<PathBuf>,
 }
 
 /// Start watching `paths` recursively.
@@ -37,35 +83,32 @@ pub struct DebouncedEvent {
 /// events are filtered out to reduce noise.
 ///
 /// The watcher runs until the returned receiver is dropped.
-pub async fn watch_dirs(paths: Vec<PathBuf>) -> Result<mpsc::Receiver<DebouncedEvent>, String> {
-    // ── Raw notify channel (std mpsc, used by the watcher callback) ──
+pub async fn watch_dirs(paths: Vec<PathBuf>) -> Result<mpsc::Receiver<DebouncedEvent>, WatchError> {
     let (raw_tx, raw_rx) = std::sync::mpsc::channel::<notify::Result<Event>>();
 
     let mut watcher: RecommendedWatcher = notify::recommended_watcher(raw_tx)
-        .map_err(|e| format!("failed to create file watcher: {}", e))?;
+        .map_err(|e| WatchError::Notify(format!("failed to create file watcher: {}", e)))?;
 
     for path in &paths {
         watcher
             .watch(path, RecursiveMode::Recursive)
-            .map_err(|e| format!("failed to watch {:?}: {}", path, e))?;
+            .map_err(|e| WatchError::Notify(format!("failed to watch {:?}: {}", path, e)))?;
     }
 
-    // ── Bridge: blocking std::mpsc → async tokio::mpsc ──
     let (bridge_tx, bridge_rx) = mpsc::channel::<Event>(1024);
 
     tokio::task::spawn_blocking(move || {
         while let Ok(Ok(event)) = raw_rx.recv() {
             if bridge_tx.blocking_send(event).is_err() {
-                break; // receiver dropped
+                break;
             }
         }
     });
 
-    // ── Debounce task (fully async) ──
     let (debounced_tx, debounced_rx) = mpsc::channel::<DebouncedEvent>(16);
 
     tokio::spawn(async move {
-        let _watcher = watcher; // keep alive
+        let _watcher = watcher;
         debounce_loop(bridge_rx, debounced_tx).await;
     });
 
@@ -77,17 +120,16 @@ pub async fn watch_dirs(paths: Vec<PathBuf>) -> Result<mpsc::Receiver<DebouncedE
 /// Only events affecting files directly inside `dir` (not subdirectories) will
 /// be reported. The caller is responsible for filtering paths that match the
 /// target file name.
-pub async fn watch_file(dir: PathBuf) -> Result<mpsc::Receiver<DebouncedEvent>, String> {
+pub async fn watch_file(dir: PathBuf) -> Result<mpsc::Receiver<DebouncedEvent>, WatchError> {
     let (raw_tx, raw_rx) = std::sync::mpsc::channel::<notify::Result<Event>>();
 
     let mut watcher: RecommendedWatcher = notify::recommended_watcher(raw_tx)
-        .map_err(|e| format!("failed to create file watcher: {}", e))?;
+        .map_err(|e| WatchError::Notify(format!("failed to create file watcher: {}", e)))?;
 
     watcher
         .watch(&dir, RecursiveMode::NonRecursive)
-        .map_err(|e| format!("failed to watch {:?}: {}", dir, e))?;
+        .map_err(|e| WatchError::Notify(format!("failed to watch {:?}: {}", dir, e)))?;
 
-    // Bridge: blocking → async
     let (bridge_tx, bridge_rx) = mpsc::channel::<Event>(1024);
     tokio::task::spawn_blocking(move || {
         while let Ok(Ok(event)) = raw_rx.recv() {
@@ -97,7 +139,6 @@ pub async fn watch_file(dir: PathBuf) -> Result<mpsc::Receiver<DebouncedEvent>, 
         }
     });
 
-    // Debounce
     let (debounced_tx, debounced_rx) = mpsc::channel::<DebouncedEvent>(16);
     tokio::spawn(async move {
         let _watcher = watcher;
@@ -106,10 +147,6 @@ pub async fn watch_file(dir: PathBuf) -> Result<mpsc::Receiver<DebouncedEvent>, 
 
     Ok(debounced_rx)
 }
-
-// ---------------------------------------------------------------------------
-// Watch-mode lifecycle loop
-// ---------------------------------------------------------------------------
 
 /// Enter the foreground file-watch + signal loop.
 ///
@@ -121,7 +158,7 @@ pub async fn run_watch_loop<S: StackState>(
     mut graph: ServiceGraph,
     mut handles: HashMap<String, ServiceHandle>,
     watch_cfg: WatchConfig,
-) -> Result<(), String> {
+) -> Result<(), WatchError> {
     let stack_pid = std::process::id();
     let started_at = chrono::Utc::now().to_rfc3339();
 
@@ -164,10 +201,10 @@ pub async fn run_watch_loop<S: StackState>(
     };
 
     // ── 3. Install signal handlers ───────────────────────────────────────
-    let mut sigint =
-        signal(SignalKind::interrupt()).map_err(|e| format!("SIGINT handler: {}", e))?;
-    let mut sigterm =
-        signal(SignalKind::terminate()).map_err(|e| format!("SIGTERM handler: {}", e))?;
+    let mut sigint = signal(SignalKind::interrupt())
+        .map_err(|e| WatchError::Signal(format!("SIGINT handler: {}", e)))?;
+    let mut sigterm = signal(SignalKind::terminate())
+        .map_err(|e| WatchError::Signal(format!("SIGTERM handler: {}", e)))?;
 
     println!("Watch mode enabled — listening for source changes.");
 

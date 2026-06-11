@@ -1,33 +1,31 @@
 use serde::{Deserialize, Serialize};
-
 use std::collections::HashMap;
+use std::fmt;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Service {
-    pub cmd: serde_json::Value, // can be string or array
+    pub cmd: serde_json::Value,
     #[serde(default)]
     pub src: Option<String>,
     #[serde(default)]
     pub ports: Option<Vec<u16>>,
     #[serde(rename = "dependsOn", default)]
-    pub depends_on: Option<Vec<String>>, //NOTE: this should respect the order
+    pub depends_on: Option<Vec<String>>,
     #[serde(rename = "oneShot", default)]
     pub one_shot: Option<bool>,
     #[serde(default)]
-    // NOTE: instead of a periodic option, we could use a cron-like syntax
     pub restart: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ServiceGraph {
     pub services: HashMap<String, Service>,
-    pub order: Vec<String>, // topologically sorted service names
+    pub order: Vec<String>,
 }
 
 impl ServiceGraph {
-    /// Build a graph from a raw services map (sorts and validates).
-    pub fn from_services(services: HashMap<String, Service>) -> Result<Self, String> {
+    pub fn from_services(services: HashMap<String, Service>) -> Result<Self, ParserError> {
         let order = topo_sort(&services)?;
         let graph = Self { services, order };
         graph.validate()?;
@@ -38,18 +36,14 @@ impl ServiceGraph {
 /// Global log configuration, parsed from `stack.logs` in the flake.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogConfig {
-    /// Directory for log files (relative to --path, or absolute).
     pub dir: PathBuf,
-    /// Max total lines across all services before rotating to a new file.
     pub max_lines: usize,
 }
 
 /// Optional watch-mode configuration, parsed from `stack.watch` in the flake.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WatchConfig {
-    /// Enable hot-reload watch mode.
     pub enable: bool,
-    /// Also watch `flake.nix` for service-level changes.
     #[serde(default)]
     pub watch_flake: bool,
 }
@@ -67,23 +61,89 @@ pub struct StackConfig {
 /// Classification of a single service's change between two graph snapshots.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServiceChange {
-    /// Present in new graph but not in old.
     Added,
-    /// Present in old graph but not in new.
     Removed,
-    /// Present in both but `cmd` differs.
     Changed,
-    /// Present in both with identical `cmd`.
     Unchanged,
 }
 
-/// Diff two [`ServiceGraph`] snapshots and classify every service.
-///
-/// The comparison is based on the `cmd` field serialised as JSON.
+/// Errors produced by flake parsing and graph validation.
+#[derive(Debug)]
+pub enum ParserError {
+    /// `nix eval --json .#stack` failed.
+    NixEval { stderr: String },
+    /// JSON from nix eval could not be decoded.
+    JsonDecode(serde_json::Error),
+    /// I/O error running nix or reading the flake.
+    Io(std::io::Error),
+    /// Invalid `cmd` value in a service definition.
+    InvalidCmd,
+    /// Service dependency graph has a cycle.
+    CycleDetected,
+    /// A service declares port 0.
+    PortInvalid { service: String, port: u16 },
+    /// Two services use the same port.
+    PortDuplicate { port: u16 },
+    /// A service depends on a service that doesn't exist.
+    DependencyUnknown { service: String, dependency: String },
+    /// A non-oneShot service has no `cmd`.
+    MissingCmd(String),
+}
+
+impl fmt::Display for ParserError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ParserError::NixEval { stderr } => write!(f, "nix eval failed: {}", stderr),
+            ParserError::JsonDecode(e) => write!(f, "JSON parse error: {}", e),
+            ParserError::Io(e) => write!(f, "I/O error: {}", e),
+            ParserError::InvalidCmd => write!(f, "invalid cmd: expected string or array"),
+            ParserError::CycleDetected => write!(f, "cycle detected in dependsOn"),
+            ParserError::PortInvalid { service, port } => {
+                write!(f, "service {} has invalid port {}", service, port)
+            }
+            ParserError::PortDuplicate { port } => write!(f, "port {} is duplicated", port),
+            ParserError::DependencyUnknown {
+                service,
+                dependency,
+            } => {
+                write!(
+                    f,
+                    "service {} depends on unknown service {}",
+                    service, dependency
+                )
+            }
+            ParserError::MissingCmd(name) => {
+                write!(f, "service {} is missing a cmd", name)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ParserError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ParserError::JsonDecode(e) => Some(e),
+            ParserError::Io(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<serde_json::Error> for ParserError {
+    fn from(e: serde_json::Error) -> Self {
+        ParserError::JsonDecode(e)
+    }
+}
+
+impl From<std::io::Error> for ParserError {
+    fn from(e: std::io::Error) -> Self {
+        ParserError::Io(e)
+    }
+}
+
 pub fn diff_graphs(old: &ServiceGraph, new: &ServiceGraph) -> HashMap<String, ServiceChange> {
     let mut result = HashMap::new();
 
-    // Services in new graph
     for (name, svc) in &new.services {
         let change = match old.services.get(name) {
             None => ServiceChange::Added,
@@ -93,7 +153,6 @@ pub fn diff_graphs(old: &ServiceGraph, new: &ServiceGraph) -> HashMap<String, Se
         result.insert(name.clone(), change);
     }
 
-    // Services only in old graph (removed)
     for name in old.services.keys() {
         if !new.services.contains_key(name) {
             result.insert(name.clone(), ServiceChange::Removed);
@@ -104,45 +163,44 @@ pub fn diff_graphs(old: &ServiceGraph, new: &ServiceGraph) -> HashMap<String, Se
 }
 
 impl ServiceGraph {
-    pub fn validate(&self) -> Result<(), String> {
-        // Check for cycles in dependsOn
+    pub fn validate(&self) -> Result<(), ParserError> {
         if has_cycle(&self.services) {
-            return Err("Cycle detected in dependsOn".to_string());
+            return Err(ParserError::CycleDetected);
         }
 
-        // Check for unique ports
         let mut seen_ports = std::collections::HashSet::new();
         for (name, svc) in &self.services {
             if let Some(ports) = &svc.ports {
                 for port in ports {
                     if port.eq(&0) {
-                        return Err(format!("Service {} has invalid port {}", name, port));
+                        return Err(ParserError::PortInvalid {
+                            service: name.clone(),
+                            port: *port,
+                        });
                     }
                     if !seen_ports.insert(*port) {
-                        return Err(format!("Port {} is duplicated", port));
+                        return Err(ParserError::PortDuplicate { port: *port });
                     }
                 }
             }
         }
 
-        // Check that all dependsOn references exist
         for (name, svc) in &self.services {
             if let Some(deps) = &svc.depends_on {
                 for dep in deps {
                     if !self.services.contains_key(dep) {
-                        return Err(format!(
-                            "Service {} depends on unknown service {}",
-                            name, dep
-                        ));
+                        return Err(ParserError::DependencyUnknown {
+                            service: name.clone(),
+                            dependency: dep.clone(),
+                        });
                     }
                 }
             }
         }
 
-        // Check cmd is present for non-oneShot services
         for (name, svc) in &self.services {
             if !svc.one_shot.unwrap_or(false) && svc.cmd.is_null() {
-                return Err(format!("Service {} has no cmd", name));
+                return Err(ParserError::MissingCmd(name.clone()));
             }
         }
 
@@ -194,9 +252,6 @@ fn has_cycle(services: &HashMap<String, Service>) -> bool {
     false
 }
 
-/// Parse all config from `.#stack` in a single `nix eval --json` call.
-///
-/// Returns the raw services map and optional log/watch config.
 pub fn parse_stack_config(
     repo_path: &PathBuf,
 ) -> Result<
@@ -205,38 +260,33 @@ pub fn parse_stack_config(
         Option<LogConfig>,
         Option<WatchConfig>,
     ),
-    String,
+    ParserError,
 > {
     let output = std::process::Command::new("nix")
         .arg("eval")
         .arg("--json")
         .arg(".#stack")
         .current_dir(repo_path)
-        .output()
-        .map_err(|e| format!("Failed to run nix eval: {}", e))?;
+        .output()?;
 
     if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("nix eval failed: {}", err));
+        let err = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(ParserError::NixEval { stderr: err });
     }
 
-    let raw: StackConfig = serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("Failed to parse nix eval output: {}", e))?;
-
+    let raw: StackConfig = serde_json::from_slice(&output.stdout)?;
     Ok((raw.services, raw.logs, raw.watch))
 }
 
-fn topo_sort(services: &HashMap<String, Service>) -> Result<Vec<String>, String> {
+fn topo_sort(services: &HashMap<String, Service>) -> Result<Vec<String>, ParserError> {
     let mut in_degree: HashMap<String, usize> = HashMap::new();
     let mut graph: HashMap<String, Vec<String>> = HashMap::new();
 
-    // Initialize
     for name in services.keys() {
         in_degree.insert(name.clone(), 0);
         graph.insert(name.clone(), Vec::new());
     }
 
-    // Build graph
     for (name, svc) in services {
         if let Some(deps) = &svc.depends_on {
             for dep in deps {
@@ -248,7 +298,6 @@ fn topo_sort(services: &HashMap<String, Service>) -> Result<Vec<String>, String>
         }
     }
 
-    // Kahn's algorithm
     let mut queue: Vec<String> = in_degree
         .iter()
         .filter(|(_, degree)| **degree == 0)
@@ -273,7 +322,7 @@ fn topo_sort(services: &HashMap<String, Service>) -> Result<Vec<String>, String>
     }
 
     if order.len() != services.len() {
-        return Err("Cycle detected in service dependencies".to_string());
+        return Err(ParserError::CycleDetected);
     }
 
     Ok(order)

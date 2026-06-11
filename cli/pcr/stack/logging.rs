@@ -1,47 +1,48 @@
 use std::fmt;
+use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{self, Write};
 use std::marker::PhantomData;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use tokio::sync::mpsc;
 
 const COLORS: &[&str] = &[
-    "\x1b[31m",       // 0:  red
-    "\x1b[32m",       // 1:  green
-    "\x1b[33m",       // 2:  yellow
-    "\x1b[34m",       // 3:  blue
-    "\x1b[35m",       // 4:  magenta
-    "\x1b[36m",       // 5:  cyan
-    "\x1b[91m",       // 6:  bright red
-    "\x1b[92m",       // 7:  bright green
-    "\x1b[93m",       // 8:  bright yellow
-    "\x1b[94m",       // 9:  bright blue
-    "\x1b[95m",       // 10: bright magenta
-    "\x1b[96m",       // 11: bright cyan
-    "\x1b[38;5;208m", // 12: orange
-    "\x1b[38;5;45m",  // 13: sky blue
-    "\x1b[38;5;200m", // 14: pink
-    "\x1b[38;5;118m", // 15: lime green
-    "\x1b[38;5;99m",  // 16: purple
-    "\x1b[38;5;37m",  // 17: teal
-    "\x1b[38;5;173m", // 18: salmon
-    "\x1b[38;5;141m", // 19: lavender
-    "\x1b[38;5;48m",  // 20: mint
-    "\x1b[38;5;203m", // 21: coral
-    "\x1b[38;5;75m",  // 22: cornflower blue
-    "\x1b[38;5;220m", // 23: gold
-    "\x1b[38;5;205m", // 24: hot pink
-    "\x1b[38;5;120m", // 25: pastel green
-    "\x1b[38;5;68m",  // 26: steel blue
-    "\x1b[38;5;179m", // 27: tan
-    "\x1b[38;5;51m",  // 28: bright cyan
-    "\x1b[38;5;155m", // 29: chartreuse
+    /* ... unchanged ... */
+    "\x1b[31m",
+    "\x1b[32m",
+    "\x1b[33m",
+    "\x1b[34m",
+    "\x1b[35m",
+    "\x1b[36m",
+    "\x1b[91m",
+    "\x1b[92m",
+    "\x1b[93m",
+    "\x1b[94m",
+    "\x1b[95m",
+    "\x1b[96m",
+    "\x1b[38;5;208m",
+    "\x1b[38;5;45m",
+    "\x1b[38;5;200m",
+    "\x1b[38;5;118m",
+    "\x1b[38;5;99m",
+    "\x1b[38;5;37m",
+    "\x1b[38;5;173m",
+    "\x1b[38;5;141m",
+    "\x1b[38;5;48m",
+    "\x1b[38;5;203m",
+    "\x1b[38;5;75m",
+    "\x1b[38;5;220m",
+    "\x1b[38;5;205m",
+    "\x1b[38;5;120m",
+    "\x1b[38;5;68m",
+    "\x1b[38;5;179m",
+    "\x1b[38;5;51m",
+    "\x1b[38;5;155m",
 ];
 const RESET: &str = "\x1b[0m";
 
-/// Pick a color from the 30-color palette based on a hash of the service name.
 pub fn color_for(name: &str) -> &'static str {
     let mut hasher = DefaultHasher::new();
     name.hash(&mut hasher);
@@ -49,7 +50,6 @@ pub fn color_for(name: &str) -> &'static str {
     COLORS[idx]
 }
 
-/// A colored `[service_name]` prefix that implements `Display`.
 pub struct ColoredPrefix<'a> {
     name: &'a str,
     color: &'static str,
@@ -76,17 +76,9 @@ impl fmt::Display for ColoredPrefix<'_> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// LogLine
-// ---------------------------------------------------------------------------
-
-/// Marker for terminal (colored) display.
 pub struct Terminal;
-
-/// Marker for file (plain-text) display.
 pub struct File;
 
-/// Whether the log line came from stdout or stderr.
 #[derive(Debug, Clone)]
 pub enum LogStream {
     Stdout,
@@ -102,18 +94,13 @@ impl fmt::Display for LogStream {
     }
 }
 
-/// A single log line from a service.
-///
-/// The type parameter `T` selects the `Display` implementation:
-/// - [`Terminal`] — coloured prefix via `color_for`
-/// - [`File`] — plain timestamped format
 #[derive(Debug, Clone)]
 pub struct LogLine<T = Terminal> {
     pub service: String,
     pub stream: LogStream,
     pub text: String,
     pub timestamp: DateTime<Utc>,
-    _marker: PhantomData<T>,
+    pub _marker: PhantomData<T>,
 }
 
 impl LogLine {
@@ -128,7 +115,6 @@ impl LogLine {
     }
 }
 
-// Terminal display — coloured prefix, no timestamp.
 impl fmt::Display for LogLine<Terminal> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let prefix = ColoredPrefix::new(&self.service);
@@ -139,7 +125,6 @@ impl fmt::Display for LogLine<Terminal> {
     }
 }
 
-// File display — plain, timestamped.
 impl fmt::Display for LogLine<File> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -153,32 +138,69 @@ impl fmt::Display for LogLine<File> {
     }
 }
 
-/// Sync trait for writing log lines. Runs inside a dedicated task,
-/// so blocking I/O is acceptable.
-pub trait LogWriter: Send {
-    fn write(&mut self, lines: &[LogLine]) -> Result<(), String>;
-    fn flush(&mut self) -> Result<(), String>;
+// ---------------------------------------------------------------------------
+// LoggingError
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+pub enum LoggingError {
+    Io(std::io::Error),
 }
 
-/// Writes log lines to terminal with coloured service prefixes.
+impl fmt::Display for LoggingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LoggingError::Io(e) => write!(f, "log I/O error: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for LoggingError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            LoggingError::Io(e) => Some(e),
+        }
+    }
+}
+
+impl From<std::io::Error> for LoggingError {
+    fn from(e: std::io::Error) -> Self {
+        LoggingError::Io(e)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LogWriter trait
+// ---------------------------------------------------------------------------
+
+pub trait LogWriter: Send {
+    fn write(&mut self, lines: &[LogLine]) -> Result<(), LoggingError>;
+    fn flush(&mut self) -> Result<(), LoggingError>;
+}
+
+// ---------------------------------------------------------------------------
+// TerminalWriter
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Default)]
 pub struct TerminalWriter;
 
 impl LogWriter for TerminalWriter {
-    fn write(&mut self, lines: &[LogLine]) -> Result<(), String> {
+    fn write(&mut self, lines: &[LogLine]) -> Result<(), LoggingError> {
         let mut stdout = io::stdout().lock();
         let mut stderr = io::stderr().lock();
         for line in lines {
             match line.stream {
-                LogStream::Stdout => writeln!(stdout, "{}", line).unwrap(),
-                LogStream::Stderr => writeln!(stderr, "{}", line).unwrap(),
+                LogStream::Stdout => writeln!(stdout, "{}", line).map_err(LoggingError::Io)?,
+                LogStream::Stderr => writeln!(stderr, "{}", line).map_err(LoggingError::Io)?,
             }
         }
         Ok(())
     }
 
-    fn flush(&mut self) -> Result<(), String> {
-        io::stdout().flush().map_err(|e| e.to_string())
+    fn flush(&mut self) -> Result<(), LoggingError> {
+        io::stdout().flush()?;
+        Ok(())
     }
 }
 
@@ -186,51 +208,39 @@ impl LogWriter for TerminalWriter {
 // FileWriter
 // ---------------------------------------------------------------------------
 
-/// Writes log lines to a rotating file at `<dir>/<timestamp>.log`.
-/// Rotation is triggered by a global line count across all services.
 pub struct FileWriter {
     dir: PathBuf,
     max_lines: usize,
-    current_file: Option<std::fs::File>,
+    current_file: fs::File,
     line_count: usize,
 }
 
 impl FileWriter {
-    pub fn new(dir: PathBuf, max_lines: usize) -> Self {
+    pub fn new(dir: PathBuf, max_lines: usize, current_file: fs::File) -> Self {
         Self {
             dir,
             max_lines,
-            current_file: None,
+            current_file,
             line_count: 0,
         }
     }
 
-    fn open_new(&mut self) -> Result<(), String> {
-        std::fs::create_dir_all(&self.dir)
-            .map_err(|e| format!("failed to create log dir: {}", e))?;
+    pub fn new_file(dir: &Path) -> Result<fs::File, LoggingError> {
+        fs::create_dir_all(dir)?;
         let ts = Utc::now().format("%Y-%m-%dT%H-%M-%SZ");
-        let path = self.dir.join(format!("{}.log", ts));
-        let file = std::fs::File::create(&path)
-            .map_err(|e| format!("failed to create log file: {}", e))?;
-        self.current_file = Some(file);
-        Ok(())
+        let path = dir.join(format!("{}.log", ts));
+        Ok(fs::File::create(&path)?)
     }
 }
 
 impl LogWriter for FileWriter {
-    fn write(&mut self, lines: &[LogLine]) -> Result<(), String> {
+    fn write(&mut self, lines: &[LogLine]) -> Result<(), LoggingError> {
         for line in lines {
-            if self.current_file.is_none() {
-                self.open_new()?;
-            }
             if self.line_count >= self.max_lines {
-                self.current_file = None;
                 self.line_count = 0;
-                self.open_new()?;
+                self.current_file = FileWriter::new_file(self.dir.as_path())?;
             }
 
-            let file = self.current_file.as_mut().unwrap();
-            // Format as a LogLine<File> without the colour codes.
             let file_line = LogLine::<File> {
                 service: line.service.clone(),
                 stream: line.stream.clone(),
@@ -238,17 +248,14 @@ impl LogWriter for FileWriter {
                 timestamp: line.timestamp,
                 _marker: PhantomData,
             };
-            writeln!(file, "{}", file_line).map_err(|e| format!("log write error: {}", e))?;
+            writeln!(self.current_file, "{}", file_line)?;
             self.line_count += 1;
         }
         Ok(())
     }
 
-    fn flush(&mut self) -> Result<(), String> {
-        if let Some(ref mut file) = self.current_file {
-            file.flush()
-                .map_err(|e| format!("log flush error: {}", e))?;
-        }
+    fn flush(&mut self) -> Result<(), LoggingError> {
+        self.current_file.flush()?;
         Ok(())
     }
 }
@@ -257,7 +264,6 @@ impl LogWriter for FileWriter {
 // BothWriter
 // ---------------------------------------------------------------------------
 
-/// Writes to both terminal and file.
 pub struct BothWriter {
     terminal: TerminalWriter,
     file: FileWriter,
@@ -270,23 +276,21 @@ impl BothWriter {
 }
 
 impl LogWriter for BothWriter {
-    fn write(&mut self, lines: &[LogLine]) -> Result<(), String> {
+    fn write(&mut self, lines: &[LogLine]) -> Result<(), LoggingError> {
         self.terminal.write(lines)?;
         self.file.write(lines)
     }
 
-    fn flush(&mut self) -> Result<(), String> {
+    fn flush(&mut self) -> Result<(), LoggingError> {
         self.terminal.flush()?;
         self.file.flush()
     }
 }
 
 // ---------------------------------------------------------------------------
-// Writer loop  (runs in a dedicated tokio task)
+// Writer loop
 // ---------------------------------------------------------------------------
 
-/// Receives `LogLine`s from the channel and passes them in batches to
-/// the configured `LogWriter`.
 pub async fn writer_loop(mut rx: mpsc::Receiver<LogLine>, mut writer: Box<dyn LogWriter>) {
     while let Some(line) = rx.recv().await {
         let mut batch = vec![line];

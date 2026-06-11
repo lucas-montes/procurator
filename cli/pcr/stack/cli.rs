@@ -53,8 +53,9 @@ impl StackArgs {
                     } else {
                         lc.dir
                     };
-                    let file = FileWriter::new(dir, lc.max_lines);
-                    Box::new(BothWriter::new(terminal, file))
+                    let file = FileWriter::new_file(&dir).expect("could not create log file");
+                    let filew = FileWriter::new(dir, lc.max_lines, file);
+                    Box::new(BothWriter::new(terminal, filew))
                 } else {
                     Box::new(terminal)
                 };
