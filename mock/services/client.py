@@ -10,18 +10,25 @@ def main():
 
     print(f"started (pid {__import__('os').getpid()})", flush=True)
     counter = 0
-    while True:
-        counter += 1
-        try:
-            with socket.create_connection((host, port), timeout=3) as sock:
-                msg = f"request #{counter} from {name}\n"
-                sock.sendall(msg.encode())
-                print(f"sent: {msg.strip()}", flush=True)
-        except (ConnectionRefusedError, socket.timeout, OSError) as e:
-            print(f"connection failed: {e}", flush=True)
 
-        print("sleeping for 5 seconds", flush=True)
-        time.sleep(5)
+    # Keep a single persistent connection to avoid reconnect races
+    while True:
+        try:
+            sock = socket.create_connection((host, port), timeout=3)
+            break
+        except (ConnectionRefusedError, socket.timeout, OSError) as e:
+            print(f"waiting for server: {e}", flush=True)
+            time.sleep(1)
+
+    try:
+        while True:
+            counter += 1
+            msg = f"request #{counter} from {name}\n"
+            sock.sendall(msg.encode())
+            print(f"sent: request #{counter} from {name}", flush=True)
+            time.sleep(5)
+    finally:
+        sock.close()
 
 
 if __name__ == "__main__":

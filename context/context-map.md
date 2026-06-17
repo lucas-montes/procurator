@@ -42,7 +42,8 @@ Quick navigation for AI sessions working on Procurator.
 - `cache/` - Caching service
 
 ## Current Work
-- **Active:** None
+- **Active plan:** `plans/source-file-watch.md` (T01–T04 done, T05 pending)
+- **Active plan:** `plans/rust-log-env-var.md` (T01 done, T02 pending)
 - **Completed plan:** `plans/hot-reload-watch-mode.md` (T01–T06 done)
 - **Completed plan:** `plans/stack-refactor-implementation.md` (T01–T06 done, committed as 2d95d21)
 - **Completed plan:** `plans/stack-lifecycle-improvement.md` (T01–T08 done, committed as 67e600c)

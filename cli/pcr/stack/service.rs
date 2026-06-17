@@ -10,6 +10,7 @@ use tokio::{
 
 use crate::stack::config;
 use crate::stack::logging::{LogLine, LogStream};
+use crate::stack::watch::WatchEvent;
 
 #[derive(Debug)]
 pub enum Error {
@@ -267,14 +268,14 @@ impl RunningManifest {
 pub struct Supervisor {
     manifest: ServiceManifest,
     logs_tx: Sender<LogLine>,
-    watcher_rx: tokio::sync::mpsc::Receiver<ServiceManifest>,
+    watcher_rx: tokio::sync::mpsc::Receiver<WatchEvent>,
 }
 
 impl Supervisor {
     pub fn new(
         manifest: ServiceManifest,
         logs_tx: Sender<LogLine>,
-        watcher_rx: tokio::sync::mpsc::Receiver<ServiceManifest>,
+        watcher_rx: tokio::sync::mpsc::Receiver<WatchEvent>,
     ) -> Self {
         Self {
             manifest,
@@ -294,9 +295,34 @@ impl Supervisor {
                     tracing::info!("received SIGINT, shutting down");
                     break;
                 }
-                Some(new_manifest) = self.watcher_rx.recv() => {
-                    self.apply_manifest(&new_manifest, &mut running).await;
-                    self.manifest = new_manifest;
+                Some(event) = self.watcher_rx.recv() => {
+                    match event {
+                        WatchEvent::ConfigChanged(new_manifest) => {
+                            self.apply_manifest(&new_manifest, &mut running).await;
+                            self.manifest = new_manifest;
+                        }
+                        WatchEvent::SourceChanged(names) => {
+                            for name in &names {
+                                tracing::info!(name = %name, "restarted by source change");
+                                running.remove(name).await;
+                                if let Some(svc) = self.manifest.services.get(name) {
+                                    let name = name.clone();
+                                    match svc.clone().start(self.logs_tx.clone()) {
+                                        Ok(running_svc) => {
+                                            running.insert(name, running_svc);
+                                        }
+                                        Err(e) => {
+                                            tracing::error!(
+                                                name = %name,
+                                                error = %e,
+                                                "failed to restart service after source change"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
