@@ -25,6 +25,9 @@ impl Service {
     pub fn src(&self) -> Option<&str> {
         self.src.as_deref()
     }
+    pub fn restart(&self) -> Option<&str> {
+        self.restart.as_deref()
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -7,7 +7,6 @@ logs received data to stdout. Handles SIGTERM/SIGINT gracefully.
 
 import os
 import signal
-import socket
 import socketserver
 import sys
 

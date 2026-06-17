@@ -1,5 +1,11 @@
 use core::fmt;
-use std::{collections::HashMap, path::Path, path::PathBuf, process::Stdio};
+use std::{
+    collections::HashMap,
+    path::Path,
+    path::PathBuf,
+    process::{ExitStatus, Stdio},
+    time::Duration,
+};
 
 use chrono::Utc;
 use tokio::{
@@ -116,10 +122,30 @@ impl Service {
         Self(metadata)
     }
 
+    /// Access the parsed config (restart policy, cmd, etc.).
+    pub fn config(&self) -> &config::Service {
+        &self.0.config
+    }
+
     pub fn start(self, logger: Sender<LogLine>) -> Result<Service<Running>, Error> {
         let (prog, args) = parse_cmd(self.0.config.cmd())?;
 
-        let mut child = tokio::process::Command::new(&prog)
+        let mut cmd = tokio::process::Command::new(&prog);
+        cmd.kill_on_drop(true);
+
+        // On Linux, ask the kernel to SIGTERM the child if this parent dies
+        // (handles SIGKILL where drop doesn't run).
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::process::CommandExt;
+            // SAFETY: pre_exec runs in the child after fork, before exec.
+            // The closure is async-signal-safe (single prctl syscall, no heap).
+            unsafe {
+                cmd.as_std_mut().pre_exec(|| linux_pdeathsig::apply());
+            }
+        }
+
+        let mut child = cmd
             .args(&args)
             .current_dir(&self.0.working_dir)
             .stdout(Stdio::piped())
@@ -242,7 +268,9 @@ impl RunningManifest {
         for name in order.iter().rev() {
             if let Some(svc) = self.services.remove(name) {
                 tracing::info!(name = %name, "shutting down service");
-                let _ = svc.kill().await;
+                if let Err(e) = svc.kill().await {
+                    tracing::error!(name = %name, error = %e, "failed to kill service during shutdown");
+                }
             }
         }
     }
@@ -251,13 +279,35 @@ impl RunningManifest {
     pub async fn remove(&mut self, name: &str) {
         if let Some(svc) = self.services.remove(name) {
             tracing::info!(name = %name, "stopping service");
-            let _ = svc.kill().await;
+            if let Err(e) = svc.kill().await {
+                tracing::error!(name = %name, error = %e, "failed to kill service");
+            }
         }
     }
 
     /// Insert a running service.
     pub fn insert(&mut self, name: String, svc: Service<Running>) {
         self.services.insert(name, svc);
+    }
+
+    /// Poll every running service. Returns the names and exit statuses of
+    /// services that have exited. Removes them from the set.
+    pub fn check_health(&mut self) -> Vec<(String, ExitStatus)> {
+        let mut dead = Vec::new();
+        self.services.retain(|name, svc| {
+            match svc.0.handle.try_wait() {
+                Ok(Some(status)) => {
+                    dead.push((name.clone(), status));
+                    false // exited — remove
+                }
+                Ok(None) => true, // still alive
+                Err(e) => {
+                    tracing::warn!(name = %name, error = %e, "health check error, will retry");
+                    true // transient error — keep for now
+                }
+            }
+        });
+        dead
     }
 }
 
@@ -318,6 +368,31 @@ impl Supervisor {
                                                 "failed to restart service after source change"
                                             );
                                         }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                    let dead = running.check_health();
+                    for (name, status) in dead {
+                        tracing::warn!(name = %name, exit = %status, "service exited unexpectedly");
+                        // Check restart policy — only restart if explicitly configured.
+                        if let Some(svc) = self.manifest.services.get(&name) {
+                            if svc.config().restart() == Some("always") {
+                                tokio::time::sleep(Duration::from_secs(1)).await;
+                                match svc.clone().start(self.logs_tx.clone()) {
+                                    Ok(running_svc) => {
+                                        tracing::info!(name = %name, "service restarted");
+                                        running.insert(name, running_svc);
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(
+                                            name = %name,
+                                            error = %e,
+                                            "failed to restart service"
+                                        );
                                     }
                                 }
                             }
@@ -408,5 +483,41 @@ fn parse_cmd(cmd: &serde_json::Value) -> Result<(String, Vec<String>), Error> {
             Ok((prog, args))
         }
         _ => Err(Error::ParseCmd),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Linux parent-death signal (prctl)
+// ---------------------------------------------------------------------------
+
+/// Wrapper around `prctl(PR_SET_PDEATHSIG, SIGTERM)` — asks the kernel to
+/// deliver SIGTERM to this process when its parent dies. Used in a `pre_exec`
+/// hook so child processes are cleaned up even if the supervisor is SIGKILL'd.
+#[cfg(target_os = "linux")]
+mod linux_pdeathsig {
+    use std::io;
+
+    const PR_SET_PDEATHSIG: i32 = 1;
+    const SIGTERM: i32 = 15;
+
+    unsafe extern "C" {
+        fn prctl(option: i32, arg2: i64, arg3: i64, arg4: i64, arg5: i64) -> i32;
+    }
+
+    /// Call `prctl(PR_SET_PDEATHSIG, SIGTERM)`. Returns `Ok(())` on success,
+    /// `Err(io::Error)` if the syscall fails.
+    ///
+    /// # Safety
+    ///
+    /// `prctl` is async-signal-safe and safe to call in the `pre_exec` context
+    /// (single-threaded, no heap allocation). The raw FFI signature matches the
+    /// Linux kernel ABI for `prctl`.
+    pub fn apply() -> Result<(), io::Error> {
+        let ret = unsafe { prctl(PR_SET_PDEATHSIG, SIGTERM as i64, 0, 0, 0) };
+        if ret == -1 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
     }
 }

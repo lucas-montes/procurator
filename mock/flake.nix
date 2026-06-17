@@ -22,8 +22,8 @@
 
         # ── long-running: TCP listener on port 8080 ──
         server = {
-          cmd = ["nix" "run" "nixpkgs#python3" "--" "server.py"];
-          src = "./services/server.py";
+          cmd = ["nix" "run" "nixpkgs#python3" "--" "."];
+          src = "./services/server";
           ports = [8080];
           dependsOn = ["migrate"];
         };
@@ -45,8 +45,8 @@
 
         # ── long-running: Python client, runs via nixpkgs interpreter ──
         client = {
-          cmd = ["nix" "run" "nixpkgs#python3" "--" "client.py" "client"];
-          src = "./services/client.py";
+          cmd = ["nix" "run" "nixpkgs#python3" "--" "." "client"];
+          src = "./services/client";
           dependsOn = ["server" "migrate"];
         };
       };
