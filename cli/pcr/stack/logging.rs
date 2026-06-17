@@ -2,7 +2,6 @@ use std::fmt;
 use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{self, Write};
-use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -75,13 +74,6 @@ impl fmt::Display for ColoredPrefix<'_> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// LogLine
-// ---------------------------------------------------------------------------
-
-pub struct Terminal;
-pub struct File;
-
 #[derive(Debug, Clone)]
 pub enum LogStream {
     Stdout,
@@ -98,12 +90,11 @@ impl fmt::Display for LogStream {
 }
 
 #[derive(Debug, Clone)]
-pub struct LogLine<T = Terminal> {
+pub struct LogLine {
     pub service: String,
     pub stream: LogStream,
     pub text: String,
     pub timestamp: DateTime<Utc>,
-    _marker: PhantomData<T>,
 }
 
 impl LogLine {
@@ -113,22 +104,12 @@ impl LogLine {
             stream,
             text,
             timestamp,
-            _marker: PhantomData,
-        }
-    }
-
-    pub fn for_file(&self) -> LogLine<File> {
-        LogLine::<File> {
-            service: self.service.clone(),
-            stream: self.stream.clone(),
-            text: self.text.clone(),
-            timestamp: self.timestamp,
-            _marker: PhantomData,
         }
     }
 }
 
-impl fmt::Display for LogLine<Terminal> {
+/// Terminal-formatted display: colored prefix + text.
+impl fmt::Display for LogLine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let prefix = ColoredPrefix::new(&self.service);
         match self.stream {
@@ -138,22 +119,27 @@ impl fmt::Display for LogLine<Terminal> {
     }
 }
 
-impl fmt::Display for LogLine<File> {
+/// File-formatted display: timestamped structured log.
+pub struct FileLogLine(LogLine);
+
+impl From<LogLine> for FileLogLine {
+    fn from(line: LogLine) -> Self {
+        FileLogLine(line)
+    }
+}
+
+impl fmt::Display for FileLogLine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "[{}] [{}] {} {}",
-            self.timestamp.format("%Y-%m-%dT%H:%M:%S%.3fZ"),
-            self.service,
-            self.stream,
-            self.text,
+            self.0.timestamp.format("%Y-%m-%dT%H:%M:%S%.3fZ"),
+            self.0.service,
+            self.0.stream,
+            self.0.text,
         )
     }
 }
-
-// ---------------------------------------------------------------------------
-// LoggingError
-// ---------------------------------------------------------------------------
 
 #[derive(Debug)]
 pub enum LoggingError {
@@ -182,24 +168,23 @@ impl From<std::io::Error> for LoggingError {
     }
 }
 
-// ---------------------------------------------------------------------------
-// LogWriter trait
-// ---------------------------------------------------------------------------
-
-pub trait LogWriter: Send {
-    fn write(&mut self, lines: &[&LogLine]) -> Result<(), LoggingError>;
+pub trait LogWriter: Send + 'static {
+    fn write(&mut self, lines: &[LogLine]) -> Result<(), LoggingError>;
     fn flush(&mut self) -> Result<(), LoggingError>;
-}
 
-// ---------------------------------------------------------------------------
-// TerminalWriter
-// ---------------------------------------------------------------------------
+    fn spawn(self, size: usize, rx: mpsc::Receiver<LogLine>) -> tokio::task::JoinHandle<()>
+    where
+        Self: Sized,
+    {
+        tokio::spawn(writer_loop(size, rx, self))
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct TerminalWriter;
 
 impl LogWriter for TerminalWriter {
-    fn write(&mut self, lines: &[&LogLine]) -> Result<(), LoggingError> {
+    fn write(&mut self, lines: &[LogLine]) -> Result<(), LoggingError> {
         let mut stdout = io::stdout().lock();
         let mut stderr = io::stderr().lock();
         for line in lines {
@@ -216,10 +201,6 @@ impl LogWriter for TerminalWriter {
         Ok(())
     }
 }
-
-// ---------------------------------------------------------------------------
-// FileWriter
-// ---------------------------------------------------------------------------
 
 pub struct FileWriter {
     dir: PathBuf,
@@ -247,21 +228,14 @@ impl FileWriter {
 }
 
 impl LogWriter for FileWriter {
-    fn write(&mut self, lines: &[&LogLine]) -> Result<(), LoggingError> {
+    fn write(&mut self, lines: &[LogLine]) -> Result<(), LoggingError> {
         for line in lines {
             if self.line_count >= self.max_lines {
                 self.line_count = 0;
                 self.current_file = FileWriter::new_file(self.dir.as_path())?;
             }
-
-            writeln!(
-                self.current_file,
-                "[{}] [{}] {} {}",
-                line.timestamp.format("%Y-%m-%dT%H:%M:%S%.3fZ"),
-                line.service,
-                line.stream,
-                line.text,
-            )?;
+            let fl: FileLogLine = line.clone().into();
+            writeln!(self.current_file, "{}", fl)?;
             self.line_count += 1;
         }
         Ok(())
@@ -272,10 +246,6 @@ impl LogWriter for FileWriter {
         Ok(())
     }
 }
-
-// ---------------------------------------------------------------------------
-// BothWriter
-// ---------------------------------------------------------------------------
 
 pub struct BothWriter {
     terminal: TerminalWriter,
@@ -289,7 +259,7 @@ impl BothWriter {
 }
 
 impl LogWriter for BothWriter {
-    fn write(&mut self, lines: &[&LogLine]) -> Result<(), LoggingError> {
+    fn write(&mut self, lines: &[LogLine]) -> Result<(), LoggingError> {
         self.terminal.write(lines)?;
         self.file.write(lines)
     }
@@ -300,24 +270,15 @@ impl LogWriter for BothWriter {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Writer loop
-// ---------------------------------------------------------------------------
-
-pub async fn writer_loop(mut rx: mpsc::Receiver<LogLine>, mut writer: Box<dyn LogWriter>) {
-    while let Some(line) = rx.recv().await {
-        let mut batch: Vec<LogLine> = vec![line];
-        while let Ok(line) = rx.try_recv() {
-            batch.push(line);
+async fn writer_loop<W: LogWriter>(size: usize, mut rx: mpsc::Receiver<LogLine>, mut writer: W) {
+    let mut batch = Vec::with_capacity(size);
+    while rx.recv_many(&mut batch, size).await != 0 {
+        if let Err(e) = writer.write(&batch) {
+            tracing::error!(?e, "error writing log lines");
         }
-
-        let refs: Vec<&LogLine> = batch.iter().collect();
-        if let Err(e) = writer.write(&refs) {
-            eprintln!("logger error: {}", e);
+        batch.clear();
+        if let Err(e) = writer.flush() {
+            tracing::error!(?e, "error flushing log lines");
         }
-    }
-
-    if let Err(e) = writer.flush() {
-        eprintln!("logger flush error: {}", e);
     }
 }

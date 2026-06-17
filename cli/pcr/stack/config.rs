@@ -13,7 +13,7 @@ pub struct Service {
     #[serde(rename = "dependsOn", default)]
     depends_on: Option<Vec<String>>,
     #[serde(rename = "oneShot", default)]
-    one_shot: Option<bool>,
+    one_shot: bool,
     #[serde(default)]
     restart: Option<String>,
 }
@@ -24,13 +24,6 @@ impl Service {
     }
     pub fn src(&self) -> Option<&str> {
         self.src.as_deref()
-    }
-    pub fn one_shot(&self) -> Option<bool> {
-        self.one_shot
-    }
-    /// The dependency list (unused externally but part of validation).
-    pub fn depends_on(&self) -> Option<&[String]> {
-        self.depends_on.as_deref()
     }
 }
 
@@ -76,16 +69,11 @@ impl LogConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WatchConfig {
     enable: bool,
-    #[serde(default)]
-    watch_flake: bool,
 }
 
 impl WatchConfig {
-    pub fn enable(&self) -> bool {
+    pub fn enabled(&self) -> bool {
         self.enable
-    }
-    pub fn watch_flake(&self) -> bool {
-        self.watch_flake
     }
 }
 
@@ -117,8 +105,6 @@ pub enum ParserError {
     JsonDecode(serde_json::Error),
     /// I/O error running nix or reading the flake.
     Io(std::io::Error),
-    /// Invalid `cmd` value in a service definition.
-    InvalidCmd,
     /// Service dependency graph has a cycle.
     CycleDetected,
     /// A service declares port 0.
@@ -137,7 +123,6 @@ impl fmt::Display for ParserError {
             ParserError::NixEval { stderr } => write!(f, "nix eval failed: {}", stderr),
             ParserError::JsonDecode(e) => write!(f, "JSON parse error: {}", e),
             ParserError::Io(e) => write!(f, "I/O error: {}", e),
-            ParserError::InvalidCmd => write!(f, "invalid cmd: expected string or array"),
             ParserError::CycleDetected => write!(f, "cycle detected in dependsOn"),
             ParserError::PortInvalid { service, port } => {
                 write!(f, "service {} has invalid port {}", service, port)
@@ -182,6 +167,7 @@ impl From<std::io::Error> for ParserError {
     }
 }
 
+#[cfg(test)]
 pub fn diff_graphs(old: &ServiceGraph, new: &ServiceGraph) -> HashMap<String, ServiceChange> {
     let mut result = HashMap::new();
 
@@ -240,7 +226,7 @@ impl ServiceGraph {
         }
 
         for (name, svc) in &self.services {
-            if !svc.one_shot.unwrap_or(false) && svc.cmd.is_null() {
+            if !svc.one_shot && svc.cmd.is_null() {
                 return Err(ParserError::MissingCmd(name.clone()));
             }
         }
@@ -383,7 +369,7 @@ mod tests {
                     src: None,
                     ports: None,
                     depends_on: None,
-                    one_shot: None,
+                    one_shot: false,
                     restart: None,
                 },
             );

@@ -21,12 +21,11 @@ Quick navigation for AI sessions working on Procurator.
 - `cli/pcr/main.rs` - CLI entry point with clap derive
 - `cli/pcr/vcs/cli.rs` - VCS commands (project/repo/agent operations)
 - `cli/pcr/stack/` - Stack management commands
-  - `cli/pcr/stack/cli.rs` - CLI dispatch (start/stop)
-  - `cli/pcr/stack/parser.rs` - Flake service parsing + graph validation
-  - `cli/pcr/stack/process.rs` - Process lifecycle (spawn/kill)
-  - `cli/pcr/stack/supervisor.rs` - Port traits + state persistence
+  - `cli/pcr/stack/cli.rs` - CLI dispatch (start only)
+  - `cli/pcr/stack/config.rs` - Flake config types, parsing, validation
+  - `cli/pcr/stack/service.rs` - Type-state services, manifest, supervisor
   - `cli/pcr/stack/logging.rs` - Log writers (terminal, file, both)
-  - `cli/pcr/stack/watch.rs` - Debounced file watcher for hot-reload mode
+  - `cli/pcr/stack/watch.rs` - File watcher for hot-reload
 - `cli/pcr/agents/` - Agent workspace commands
 
 ### Git Utilities (`repo_outils/`)
@@ -43,6 +42,7 @@ Quick navigation for AI sessions working on Procurator.
 - `cache/` - Caching service
 
 ## Current Work
-- **Active plan**: `plans/hot-reload-watch-mode.md` (T01–T05 done, T06 validation pending)
-- **Completed plan**: `plans/stack-refactor-implementation.md` (T01–T06 done, committed as 2d95d21)
-- **Completed plan**: `plans/stack-lifecycle-improvement.md` (T01–T08 done, committed as 67e600c)
+- **Active:** None
+- **Completed plan:** `plans/hot-reload-watch-mode.md` (T01–T06 done)
+- **Completed plan:** `plans/stack-refactor-implementation.md` (T01–T06 done, committed as 2d95d21)
+- **Completed plan:** `plans/stack-lifecycle-improvement.md` (T01–T08 done, committed as 67e600c)

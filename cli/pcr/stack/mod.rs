@@ -1,8 +1,7 @@
 mod cli;
+mod config;
 mod logging;
-mod parser;
-mod process;
-mod supervisor;
+mod service;
 mod watch;
 
 pub use cli::StackArgs;
