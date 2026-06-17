@@ -273,6 +273,7 @@ impl LogWriter for BothWriter {
 async fn writer_loop<W: LogWriter>(size: usize, mut rx: mpsc::Receiver<LogLine>, mut writer: W) {
     let mut batch = Vec::with_capacity(size);
     while rx.recv_many(&mut batch, size).await != 0 {
+        batch.sort_by_key(|line| line.timestamp);
         if let Err(e) = writer.write(&batch) {
             tracing::error!(?e, "error writing log lines");
         }
