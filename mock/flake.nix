@@ -26,6 +26,12 @@
           src = "./services/server";
           ports = [8080];
           dependsOn = ["migrate"];
+          healthcheck = {
+            test = ["CMD-SHELL" "ss -tln | grep -q 8080 || exit 1"];
+            interval_secs = 10;
+            timeout_secs = 5;
+            retries = 2;
+          };
         };
 
         # ── long-running: simple log tail simulation ──

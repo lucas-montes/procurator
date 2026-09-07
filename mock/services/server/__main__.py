@@ -45,6 +45,7 @@ class ThreadedTCPServer(socketserver.ThreadingTCPServer):
 def main():
     host = sys.argv[1] if len(sys.argv) > 1 else "0.0.0.0"
     port = int(sys.argv[2]) if len(sys.argv) > 2 else 8080
+    print(f"started new server (pid {os.getpid()})", flush=True)
 
     server = ThreadedTCPServer((host, port), MockTCPHandler)
 

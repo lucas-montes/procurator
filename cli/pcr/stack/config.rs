@@ -3,6 +3,66 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
 
+/// Configuration for a service healthcheck, inspired by Docker Compose.
+///
+/// A service with a `healthcheck` will have its `test` command run periodically.
+/// During startup, dependents block until this check passes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthCheckConfig {
+    /// Test command — a string (routed through `sh -c`) or a non-empty array
+    /// of strings (direct exec). Must be present and non-empty.
+    test: serde_json::Value,
+    /// Seconds between healthcheck runs (default: 30).
+    #[serde(default = "default_healthcheck_interval")]
+    interval_secs: u64,
+    /// Seconds per healthcheck attempt before it is considered failed
+    /// (default: 10).
+    #[serde(default = "default_healthcheck_timeout")]
+    timeout_secs: u64,
+    /// Number of consecutive failures before the service is marked unhealthy
+    /// (default: 3).
+    #[serde(default = "default_healthcheck_retries")]
+    retries: u32,
+}
+
+impl HealthCheckConfig {
+    /// The test command to run.
+    #[must_use]
+    pub fn test(&self) -> &serde_json::Value {
+        &self.test
+    }
+
+    /// Interval between healthcheck runs in seconds.
+    #[must_use]
+    pub fn interval_secs(&self) -> u64 {
+        self.interval_secs
+    }
+
+    /// Timeout per attempt in seconds.
+    #[must_use]
+    pub fn timeout_secs(&self) -> u64 {
+        self.timeout_secs
+    }
+
+    /// Number of retries before marking unhealthy.
+    #[must_use]
+    pub fn retries(&self) -> u32 {
+        self.retries
+    }
+}
+
+const fn default_healthcheck_interval() -> u64 {
+    30
+}
+
+const fn default_healthcheck_timeout() -> u64 {
+    10
+}
+
+const fn default_healthcheck_retries() -> u32 {
+    3
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Service {
     cmd: serde_json::Value,
@@ -16,6 +76,8 @@ pub struct Service {
     one_shot: bool,
     #[serde(default)]
     restart: Option<String>,
+    #[serde(default)]
+    healthcheck: Option<HealthCheckConfig>,
 }
 
 impl Service {
@@ -27,6 +89,16 @@ impl Service {
     }
     pub fn restart(&self) -> Option<&str> {
         self.restart.as_deref()
+    }
+    /// Dependencies that must start before this service.
+    #[must_use]
+    pub fn depends_on(&self) -> Option<&[String]> {
+        self.depends_on.as_deref()
+    }
+    /// Optional healthcheck configuration.
+    #[must_use]
+    pub fn healthcheck(&self) -> Option<&HealthCheckConfig> {
+        self.healthcheck.as_ref()
     }
 }
 
@@ -118,6 +190,8 @@ pub enum ParserError {
     DependencyUnknown { service: String, dependency: String },
     /// A non-oneShot service has no `cmd`.
     MissingCmd(String),
+    /// A service has a healthcheck with an invalid `test` format.
+    InvalidHealthcheckTest { service: String, detail: String },
 }
 
 impl fmt::Display for ParserError {
@@ -143,6 +217,13 @@ impl fmt::Display for ParserError {
             }
             ParserError::MissingCmd(name) => {
                 write!(f, "service {} is missing a cmd", name)
+            }
+            ParserError::InvalidHealthcheckTest { service, detail } => {
+                write!(
+                    f,
+                    "service {} has an invalid healthcheck test: {}",
+                    service, detail
+                )
             }
         }
     }
@@ -170,6 +251,12 @@ impl From<std::io::Error> for ParserError {
     }
 }
 
+// NOTE: Duplicate of `ServiceManifest::diff()` in service.rs (line 221).
+// Both implement the same Added/Removed/Changed/Unchanged classification over
+// HashMap<String, Service>. The `ServiceManifest::diff()` variant is the
+// production version (used by Supervisor), while this test-only copy differs
+// slightly in iteration order (HashMap vs ordered). Consider refactoring
+// tests to use `ServiceManifest::diff()` directly and removing this.
 #[cfg(test)]
 pub fn diff_graphs(old: &ServiceGraph, new: &ServiceGraph) -> HashMap<String, ServiceChange> {
     let mut result = HashMap::new();
@@ -234,7 +321,45 @@ impl ServiceGraph {
             }
         }
 
+        // Validate healthcheck test fields
+        for (name, svc) in &self.services {
+            if let Some(hc) = &svc.healthcheck {
+                match &hc.test {
+                    serde_json::Value::String(_) => {} // OK — shell command
+                    serde_json::Value::Array(arr) => {
+                        if arr.is_empty() {
+                            return Err(ParserError::InvalidHealthcheckTest {
+                                service: name.clone(),
+                                detail: "test array must not be empty".to_string(),
+                            });
+                        }
+                    }
+                    other => {
+                        return Err(ParserError::InvalidHealthcheckTest {
+                            service: name.clone(),
+                            detail: format!(
+                                "expected string or array, got {}",
+                                other_type_name(other)
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+
         Ok(())
+    }
+}
+
+/// Return a human-readable name for a `serde_json::Value` variant.
+fn other_type_name(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "bool",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
     }
 }
 
@@ -374,6 +499,7 @@ mod tests {
                     depends_on: None,
                     one_shot: false,
                     restart: None,
+                    healthcheck: None,
                 },
             );
         }
@@ -447,5 +573,84 @@ mod tests {
         assert_eq!(diff["a"], ServiceChange::Removed);
         assert_eq!(diff["b"], ServiceChange::Changed);
         assert_eq!(diff["c"], ServiceChange::Added);
+    }
+
+    // ── Healthcheck validation ──────────────────────────────────────────
+
+    fn make_service_with_healthcheck(test: serde_json::Value) -> Service {
+        Service {
+            cmd: serde_json::json!("echo ok"),
+            src: None,
+            ports: None,
+            depends_on: None,
+            one_shot: false,
+            restart: None,
+            healthcheck: Some(HealthCheckConfig {
+                test,
+                interval_secs: 10,
+                timeout_secs: 5,
+                retries: 2,
+            }),
+        }
+    }
+
+    #[test]
+    fn test_healthcheck_valid_string() {
+        let mut services = HashMap::new();
+        services.insert(
+            "srv".to_string(),
+            make_service_with_healthcheck(serde_json::json!("curl -f http://localhost")),
+        );
+        let graph = ServiceGraph::from_services(services);
+        assert!(graph.is_ok());
+    }
+
+    #[test]
+    fn test_healthcheck_valid_array() {
+        let mut services = HashMap::new();
+        services.insert(
+            "srv".to_string(),
+            make_service_with_healthcheck(serde_json::json!([
+                "CMD",
+                "curl",
+                "-f",
+                "http://localhost"
+            ])),
+        );
+        let graph = ServiceGraph::from_services(services);
+        assert!(graph.is_ok());
+    }
+
+    #[test]
+    fn test_healthcheck_invalid_test_type() {
+        let mut services = HashMap::new();
+        services.insert(
+            "srv".to_string(),
+            make_service_with_healthcheck(serde_json::json!(42)),
+        );
+        let err = ServiceGraph::from_services(services).unwrap_err();
+        assert!(matches!(err, ParserError::InvalidHealthcheckTest { .. }));
+    }
+
+    #[test]
+    fn test_healthcheck_empty_array() {
+        let mut services = HashMap::new();
+        services.insert(
+            "srv".to_string(),
+            make_service_with_healthcheck(serde_json::json!([])),
+        );
+        let err = ServiceGraph::from_services(services).unwrap_err();
+        assert!(matches!(err, ParserError::InvalidHealthcheckTest { .. }));
+    }
+
+    #[test]
+    fn test_healthcheck_null_test() {
+        let mut services = HashMap::new();
+        services.insert(
+            "srv".to_string(),
+            make_service_with_healthcheck(serde_json::json!(null)),
+        );
+        let err = ServiceGraph::from_services(services).unwrap_err();
+        assert!(matches!(err, ParserError::InvalidHealthcheckTest { .. }));
     }
 }

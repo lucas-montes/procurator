@@ -11,7 +11,8 @@ Quick navigation for AI sessions working on Procurator.
 ## Domain-Specific Context
 - [vcs/](vcs/) - VCS/version control system (git porcelain)
 - [stack/](stack/) - Stack CLI module layout and behavior
-  - [stack/lifecycle.md](stack/lifecycle.md) — Service lifecycle monitoring and restart (T02–T03)
+  - [stack/lifecycle.md](stack/lifecycle.md) — Service lifecycle monitoring and restart
+  - [stack/healthcheck.md](stack/healthcheck.md) — Healthcheck system (schema + runner)
 - [plans/](plans/) - Implementation plans and task tracking
 - [specs/](specs/) - Technical specifications (e.g. Nix schema)
 - [tmp/](tmp/) - Session scratch space
@@ -24,7 +25,8 @@ Quick navigation for AI sessions working on Procurator.
 - `cli/pcr/stack/` - Stack management commands
   - `cli/pcr/stack/cli.rs` - CLI dispatch (start only)
   - `cli/pcr/stack/config.rs` - Flake config types, parsing, validation
-  - `cli/pcr/stack/service.rs` - Type-state services, manifest, supervisor
+  - `cli/pcr/stack/health.rs` - Healthcheck runner (parse_test, run_healthcheck)
+  - `cli/pcr/stack/service.rs` - Type-state services, manifest, supervisor, healthcheck integration
   - `cli/pcr/stack/logging.rs` - Log writers (terminal, file, both)
   - `cli/pcr/stack/watch.rs` - File watcher for hot-reload
 - `cli/pcr/agents/` - Agent workspace commands
@@ -43,8 +45,9 @@ Quick navigation for AI sessions working on Procurator.
 - `cache/` - Caching service
 
 ## Current Work
-- **Active plan:** `plans/orchestrator-lifecycle.md` (T01–T03 done, T04 pending)
-- **Active plan:** `plans/rust-log-env-var.md` (T01 done, T02 pending)
+- **Pending plan:** `plans/rust-log-env-var.md` (T01 done, T02 pending)
+- **Completed plan:** `plans/healthcheck.md` (T01–T05 done)
+- **Completed plan:** `plans/orchestrator-lifecycle.md` (T01–T04 done)
 - **Completed plan:** `plans/source-file-watch.md` (T01–T05 done)
 - **Completed plan:** `plans/hot-reload-watch-mode.md` (T01–T06 done)
 - **Completed plan:** `plans/stack-refactor-implementation.md` (T01–T06 done, committed as 2d95d21)

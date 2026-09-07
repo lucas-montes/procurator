@@ -67,7 +67,7 @@ Switch to `EnvFilter::try_from_default_env()` with fallback to `"info"`, so that
   # Should see no info-level logs, only errors (if any)
   ```
 
-- [ ] T02: Validation and context sync (status:todo)
+- [x] T02: Validation and context sync (status:done)
 
   **Task ID:** T02
   **Goal:** Final build pass, smoke test both RUST_LOG unset and set, update context.

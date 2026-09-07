@@ -4,6 +4,7 @@ use std::{
     path::Path,
     path::PathBuf,
     process::{ExitStatus, Stdio},
+    sync::Arc,
     time::Duration,
 };
 
@@ -15,6 +16,7 @@ use tokio::{
 };
 
 use crate::stack::config;
+use crate::stack::health::{HealthCheckError, run_healthcheck};
 use crate::stack::logging::{LogLine, LogStream};
 use crate::stack::watch::WatchEvent;
 
@@ -125,6 +127,12 @@ impl Service {
     /// Access the parsed config (restart policy, cmd, etc.).
     pub fn config(&self) -> &config::Service {
         &self.0.config
+    }
+
+    /// Working directory for this service (resolved from `src`).
+    #[must_use]
+    pub fn working_dir(&self) -> &Path {
+        &self.0.working_dir
     }
 
     pub fn start(self, logger: Sender<LogLine>) -> Result<Service<Running>, Error> {
@@ -239,6 +247,11 @@ impl ServiceManifest {
 
     /// Start every service in dependency order. Returns a RunningManifest
     /// that owns all child process handles.
+    ///
+    /// NOTE: Dead code — replaced by `Supervisor::start_services_with_healthchecks()`
+    /// (line ~501). This method does not support healthcheck blocking or the
+    /// `is_alive()` false-positive guard. Keep for reference until the migration
+    /// is confirmed stable, then remove.
     pub fn start_all(mut self, logs_tx: Sender<LogLine>) -> Result<RunningManifest, Error> {
         let mut services: HashMap<String, Service<Running>> = HashMap::new();
         for name in &self.order {
@@ -252,6 +265,12 @@ impl ServiceManifest {
     pub fn order(&self) -> &[String] {
         &self.order
     }
+
+    /// Look up a parsed service by name.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&Service<Parsed>> {
+        self.services.get(name)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +282,14 @@ pub struct RunningManifest {
 }
 
 impl RunningManifest {
+    /// Create an empty manifest.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            services: HashMap::new(),
+        }
+    }
+
     /// Kill all services in reverse dependency order.
     pub async fn kill_all(&mut self, order: &[String]) {
         for name in order.iter().rev() {
@@ -288,6 +315,14 @@ impl RunningManifest {
     /// Insert a running service.
     pub fn insert(&mut self, name: String, svc: Service<Running>) {
         self.services.insert(name, svc);
+    }
+
+    /// Check if a service is still running (process alive).
+    /// Returns `false` if the service is not in the manifest or has exited.
+    pub fn is_alive(&mut self, name: &str) -> bool {
+        self.services
+            .get_mut(name)
+            .map_or(false, |svc| matches!(svc.0.handle.try_wait(), Ok(None)))
     }
 
     /// Poll every running service. Returns the names and exit statuses of
@@ -319,6 +354,8 @@ pub struct Supervisor {
     manifest: ServiceManifest,
     logs_tx: Sender<LogLine>,
     watcher_rx: tokio::sync::mpsc::Receiver<WatchEvent>,
+    /// Per-service stop signals for background healthcheck loops.
+    healthcheck_stop: HashMap<String, Arc<tokio::sync::Notify>>,
 }
 
 impl Supervisor {
@@ -331,14 +368,32 @@ impl Supervisor {
             manifest,
             logs_tx,
             watcher_rx,
+            healthcheck_stop: HashMap::new(),
         }
     }
 
     /// Start all services from the initial manifest, then enter the event loop.
     /// On Ctrl-C, clean shutdown. On watcher signal, diff and restart.
     pub async fn run(mut self) -> Result<(), Error> {
-        let mut running = self.manifest.clone().start_all(self.logs_tx.clone())?;
+        // Phase 1: Start services with dependency healthcheck blocking.
+        // Wrap in a select! so Ctrl-C works even during blocking healthcheck waits.
+        let mut running = {
+            let startup = self.start_services_with_healthchecks();
+            tokio::select! {
+                result = startup => {
+                    result?
+                }
+                _ = tokio::signal::ctrl_c() => {
+                    tracing::info!("received SIGINT during startup, shutting down");
+                    return Ok(());
+                }
+            }
+        };
 
+        // Phase 2: Spawn periodic healthcheck loops for configured services.
+        self.spawn_periodic_healthchecks(&mut running);
+
+        // Phase 3: Event loop.
         loop {
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {
@@ -348,8 +403,41 @@ impl Supervisor {
                 Some(event) = self.watcher_rx.recv() => {
                     match event {
                         WatchEvent::ConfigChanged(new_manifest) => {
+                            // Stop healthcheck loops for services that are removed or changed.
+                            for name in self.manifest.order() {
+                                let change = match new_manifest.services.get(name) {
+                                    None => true,  // removed
+                                    Some(new_svc) => {
+                                        new_svc.config().cmd()
+                                            != self.manifest.get(name).unwrap().config().cmd()
+                                    }  // changed
+                                };
+                                if change {
+                                    if let Some(stop) = self.healthcheck_stop.remove(name) {
+                                        stop.notify_one();
+                                    }
+                                }
+                            }
                             self.apply_manifest(&new_manifest, &mut running).await;
                             self.manifest = new_manifest;
+                            // Start healthcheck loops for added/changed services.
+                            for name in self.manifest.order() {
+                                if !self.healthcheck_stop.contains_key(name) {
+                                    if let Some(svc) = self.manifest.get(name) {
+                                        if let Some(hc) = svc.config().healthcheck() {
+                                            let stop = Arc::new(tokio::sync::Notify::new());
+                                            spawn_healthcheck_loop(
+                                                name.clone(),
+                                                hc.clone(),
+                                                svc.working_dir().to_path_buf(),
+                                                self.logs_tx.clone(),
+                                                stop.clone(),
+                                            );
+                                            self.healthcheck_stop.insert(name.clone(), stop);
+                                        }
+                                    }
+                                }
+                            }
                         }
                         WatchEvent::SourceChanged(names) => {
                             for name in &names {
@@ -378,6 +466,10 @@ impl Supervisor {
                     let dead = running.check_health();
                     for (name, status) in dead {
                         tracing::warn!(name = %name, exit = %status, "service exited unexpectedly");
+                        // Stop healthcheck loop for this service.
+                        if let Some(stop) = self.healthcheck_stop.remove(&name) {
+                            stop.notify_one();
+                        }
                         // Check restart policy — only restart if explicitly configured.
                         if let Some(svc) = self.manifest.services.get(&name) {
                             if svc.config().restart() == Some("always") {
@@ -402,8 +494,83 @@ impl Supervisor {
             }
         }
 
+        // Stop all remaining healthcheck loops.
+        for (_, stop) in self.healthcheck_stop.drain() {
+            stop.notify_one();
+        }
         running.kill_all(self.manifest.order()).await;
         Ok(())
+    }
+
+    /// Start services in dependency order, blocking on dependency healthchecks.
+    async fn start_services_with_healthchecks(&self) -> Result<RunningManifest, Error> {
+        let mut running = RunningManifest::new();
+        for name in self.manifest.order() {
+            let svc = self.manifest.get(name).expect("service in manifest order");
+
+            // Wait for each dependency's healthcheck before starting.
+            if let Some(deps) = svc.config().depends_on() {
+                for dep_name in deps {
+                    if let Some(dep_svc) = self.manifest.get(dep_name) {
+                        if let Some(hc) = dep_svc.config().healthcheck() {
+                            tracing::info!(
+                                service = %name,
+                                dependency = %dep_name,
+                                "waiting for dependency healthcheck"
+                            );
+                            let dep_dir = dep_svc.working_dir().to_path_buf();
+                            let hc_passed = wait_for_dependency_health(dep_name, hc, &dep_dir)
+                                .await
+                                .is_ok();
+                            if hc_passed {
+                                // Healthcheck passed, but verify the service process is
+                                // still alive. A false positive occurs when a stale
+                                // process holds the port while the real service is dead.
+                                if !running.is_alive(dep_name) {
+                                    tracing::error!(
+                                        service = %name,
+                                        dependency = %dep_name,
+                                        "dependency healthcheck passed but process exited \
+                                         (possible false positive — stale port/handle \
+                                         from another process)"
+                                    );
+                                }
+                            } else {
+                                tracing::error!(
+                                    service = %name,
+                                    dependency = %dep_name,
+                                    "dependency healthcheck never passed, starting anyway"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            let running_svc = svc.clone().start(self.logs_tx.clone())?;
+            running.insert(name.clone(), running_svc);
+        }
+        Ok(running)
+    }
+
+    /// Spawn a background healthcheck loop for every service that has a
+    /// healthcheck configured. Each loop gets a `Notify` that can be used
+    /// to cancel it when the service exits or is removed.
+    fn spawn_periodic_healthchecks(&mut self, _running: &mut RunningManifest) {
+        for name in self.manifest.order() {
+            let svc = self.manifest.get(name).expect("service in manifest order");
+            if let Some(hc) = svc.config().healthcheck() {
+                let stop = Arc::new(tokio::sync::Notify::new());
+                spawn_healthcheck_loop(
+                    name.clone(),
+                    hc.clone(),
+                    svc.working_dir().to_path_buf(),
+                    self.logs_tx.clone(),
+                    stop.clone(),
+                );
+                self.healthcheck_stop.insert(name.clone(), stop);
+            }
+        }
     }
 
     async fn apply_manifest(&self, new_manifest: &ServiceManifest, running: &mut RunningManifest) {
@@ -467,6 +634,11 @@ fn spawn_logger(
     });
 }
 
+/// NOTE: Related to `parse_test()` in health.rs (line 50). Both extract
+/// `(prog, args)` from `&serde_json::Value` with identical string→`sh -c`
+/// and array→direct-exec logic. `parse_test` is a superset that adds
+/// `CMD-SHELL` and `CMD` prefix conventions for Docker Compose compatibility.
+/// Consider extracting a shared base parser if both continue to evolve.
 fn parse_cmd(cmd: &serde_json::Value) -> Result<(String, Vec<String>), Error> {
     match cmd {
         serde_json::Value::String(s) => Ok(("sh".to_string(), vec!["-c".to_string(), s.clone()])),
@@ -484,6 +656,102 @@ fn parse_cmd(cmd: &serde_json::Value) -> Result<(String, Vec<String>), Error> {
         }
         _ => Err(Error::ParseCmd),
     }
+}
+
+/// Poll a dependency's healthcheck up to `retries` times.
+///
+/// Each attempt is subject to `timeout_secs`. Sleeps `interval_secs` between
+/// attempts. Logs each attempt and returns `Ok(())` on the first passing check.
+async fn wait_for_dependency_health(
+    dep_name: &str,
+    config: &config::HealthCheckConfig,
+    working_dir: &Path,
+) -> Result<(), ()> {
+    let retries = config.retries();
+    for attempt in 1..=retries {
+        match run_healthcheck(config, working_dir).await {
+            Ok(()) => {
+                tracing::info!(name = %dep_name, "healthcheck: passed");
+                return Ok(());
+            }
+            Err(HealthCheckError::Timeout) => {
+                tracing::warn!(
+                    name = %dep_name,
+                    attempt,
+                    max_retries = retries,
+                    "healthcheck: timed out"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    name = %dep_name,
+                    attempt,
+                    max_retries = retries,
+                    error = %e,
+                    "healthcheck: failed"
+                );
+            }
+        }
+        if attempt < retries {
+            tokio::time::sleep(Duration::from_secs(config.interval_secs())).await;
+        }
+    }
+    tracing::error!(name = %dep_name, retries, "healthcheck: all retries exhausted");
+    Err(())
+}
+
+/// Spawn a background task that runs a periodic healthcheck for a service.
+///
+/// Logs state transitions (healthy→unhealthy, unhealthy→healthy) via the
+/// `LogLine` channel so they appear with the `[name]` prefix in output.
+/// The loop exits when `stop` is notified (service exited or removed).
+fn spawn_healthcheck_loop(
+    name: String,
+    config: config::HealthCheckConfig,
+    working_dir: PathBuf,
+    logs_tx: Sender<LogLine>,
+    stop: Arc<tokio::sync::Notify>,
+) {
+    tokio::spawn(async move {
+        let mut was_healthy = true; // assume healthy before first check
+        loop {
+            tokio::select! {
+                _ = stop.notified() => {
+                    return;
+                }
+                _ = tokio::time::sleep(Duration::from_secs(config.interval_secs())) => {}
+            }
+            let is_healthy = match run_healthcheck(&config, &working_dir).await {
+                Ok(()) => true,
+                Err(HealthCheckError::Spawn(_)) => {
+                    // Spawn errors (e.g. command not found) are fatal — stop the loop.
+                    tracing::error!(name = %name, "healthcheck command cannot be spawned, stopping");
+                    return;
+                }
+                _ => false,
+            };
+            if is_healthy && !was_healthy {
+                let _ = logs_tx
+                    .send(LogLine::new(
+                        name.clone(),
+                        LogStream::Stdout,
+                        "healthcheck: passed".into(),
+                        Utc::now(),
+                    ))
+                    .await;
+            } else if !is_healthy && was_healthy {
+                let _ = logs_tx
+                    .send(LogLine::new(
+                        name.clone(),
+                        LogStream::Stdout,
+                        "healthcheck: failed".into(),
+                        Utc::now(),
+                    ))
+                    .await;
+            }
+            was_healthy = is_healthy;
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------

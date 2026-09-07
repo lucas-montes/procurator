@@ -181,7 +181,7 @@ Watcher (watch.rs)                          Supervisor (service.rs)
   # Should see: "[client] restarted by source change"
   ```
 
-- [ ] T05: Validation and cleanup (status:todo)
+- [x] T05: Validation and cleanup (status:done)
 
   **Task ID:** T05
   **Goal:** Full build, tests, formatting, manual smoke test, sync context.

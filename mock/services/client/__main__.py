@@ -11,12 +11,11 @@ def main():
     print(f"started (pid {__import__('os').getpid()})", flush=True)
     counter = 0
 
-    print("Sleeping")
-    time.sleep(5)
-    name = f"{name}-new2"
+    name = f"{name}-new"
     # Keep a single persistent connection to avoid reconnect races
     while True:
         try:
+            print(f"connecting to {host}:{port}", flush=True)
             sock = socket.create_connection((host, port), timeout=3)
             break
         except (ConnectionRefusedError, socket.timeout, OSError) as e:
