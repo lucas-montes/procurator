@@ -32,6 +32,14 @@ with lib; let
       listenAddr       = cfg.listenAddr;
       masterAddr       = derivedMasterAddr;
       healthTickMillis = cfg.healthTickMillis;
+      proxy = {
+        publicListenAddr = cfg.proxyPublicListenAddr;
+        tlsCertPath = cfg.proxyTlsCertPath;
+        tlsKeyPath = cfg.proxyTlsKeyPath;
+        baseDomain = cfg.proxyBaseDomain;
+        jwtHs256Secret = cfg.proxyJwtHs256Secret;
+        upstreamRequestTimeoutMillis = cfg.proxyUpstreamRequestTimeoutMillis;
+      };
       vmm = {
         binaryPath    = cfg.cloudHypervisorBinaryPath;
         runtimeDir    = cfg.vmRuntimeDir;
@@ -66,6 +74,53 @@ in {
       default = defaults.healthTickMillis;
       example = 5000;
       description = "Interval in milliseconds between worker health ticks.";
+    };
+
+    proxyPublicListenAddr = mkOption {
+      type = types.str;
+      default = defaults.proxy.publicListenAddr;
+      example = "0.0.0.0:8443";
+      description = "Public HTTPS address and port for the worker VM proxy listener.";
+    };
+
+    proxyTlsCertPath = mkOption {
+      type = types.str;
+      default = defaults.proxy.tlsCertPath;
+      example = "/var/lib/procurator-worker/tls/server.crt";
+      description = "Absolute path to the TLS certificate PEM file for the proxy listener.";
+    };
+
+    proxyTlsKeyPath = mkOption {
+      type = types.str;
+      default = defaults.proxy.tlsKeyPath;
+      example = "/var/lib/procurator-worker/tls/server.key";
+      description = "Absolute path to the TLS private key PEM file for the proxy listener.";
+    };
+
+    proxyJwtHs256Secret = mkOption {
+      type = types.str;
+      default = defaults.proxy.jwtHs256Secret;
+      example = "super-secret";
+      description = "Shared HS256 secret used to validate incoming proxy JWT bearer tokens.";
+    };
+
+    proxyUpstreamRequestTimeoutMillis = mkOption {
+      type = types.ints.positive;
+      default = defaults.proxy.upstreamRequestTimeoutMillis;
+      example = 30000;
+      description = "Upstream request timeout for proxy requests in milliseconds.";
+    };
+
+    proxyBaseDomain = mkOption {
+      type = types.str;
+      default = defaults.proxy.baseDomain;
+      example = "vm.procurator.example";
+      description = ''
+        Base domain for subdomain-based VM proxy routing. The proxy extracts
+        the VM id from Host headers like `<vm-id>.<base_domain>` and forwards
+        requests to the matching VM upstream. Requires a wildcard TLS cert
+        covering `*.<base_domain>`.
+      '';
     };
 
     master = mkOption {

@@ -8,7 +8,7 @@ use std::fmt;
 pub enum Error {
     /// The requested VM does not exist in the manager's table
     NotFound(String),
-    /// The CloudHypervisor REST call failed
+    /// The `CloudHypervisor` REST call failed
     Hypervisor(String),
     /// The CH process failed to spawn or died unexpectedly
     ProcessFailed(String),

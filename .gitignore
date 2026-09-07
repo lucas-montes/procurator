@@ -14,3 +14,5 @@ repos/
 git-server/
 worker/tests/data/*
 context/tmp
+mock/logs
+__pycache__/

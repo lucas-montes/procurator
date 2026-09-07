@@ -14,7 +14,7 @@ pub enum Error {
     TapPersistenceFailed(std::io::Error),
     /// Errors coming from rtnetlink or other netlink operations. Stored as a string
     /// to avoid depending on rtnetlink's error types in the error API.
-    NetlinkError(String),
+    Netlink(String),
     /// Bridge/interface not found when resolving by name.
     BridgeNotFound(String),
 }
@@ -22,12 +22,12 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::TunFileUnavailable(e) => write!(f, "tun device open failed: {}", e),
-            Error::IfaceNameInvalid(s) => write!(f, "invalid interface name: {}", s),
-            Error::TapCreationFailed(e) => write!(f, "tap creation failed: {}", e),
-            Error::TapPersistenceFailed(e) => write!(f, "tap persistence failed: {}", e),
-            Error::NetlinkError(s) => write!(f, "netlink error: {}", s),
-            Error::BridgeNotFound(s) => write!(f, "bridge not found: {}", s),
+            Error::TunFileUnavailable(e) => write!(f, "tun device open failed: {e}"),
+            Error::IfaceNameInvalid(s) => write!(f, "invalid interface name: {s}"),
+            Error::TapCreationFailed(e) => write!(f, "tap creation failed: {e}"),
+            Error::TapPersistenceFailed(e) => write!(f, "tap persistence failed: {e}"),
+            Error::Netlink(s) => write!(f, "netlink error: {s}"),
+            Error::BridgeNotFound(s) => write!(f, "bridge not found: {s}"),
         }
     }
 }
@@ -58,7 +58,7 @@ impl FromStr for TapName {
 
         let mut name = [0; libc::IF_NAMESIZE];
         for (i, c) in s.bytes().enumerate() {
-            name[i] = c as libc::c_char;
+            name[i] = c.cast_signed();
         }
 
         Ok(Self(name))
@@ -71,9 +71,9 @@ impl std::fmt::Display for TapName {
             .0
             .iter()
             .take_while(|&&c| c != 0)
-            .map(|&c| c as u8 as char)
+            .map(|&c| c.cast_unsigned() as char)
             .collect::<String>();
-        write!(f, "{}", name)
+        write!(f, "{name}")
     }
 }
 
@@ -93,7 +93,7 @@ pub struct Tap<State = Initialized> {
 impl Tap<Persisted> {
     pub async fn delete(self) -> Result<(), Error> {
         let (connection, handle, _) =
-            rtnetlink::new_connection().map_err(|e| Error::NetlinkError(e.to_string()))?;
+            rtnetlink::new_connection().map_err(|e| Error::Netlink(e.to_string()))?;
         tokio::spawn(connection);
 
         let index = handle
@@ -103,7 +103,7 @@ impl Tap<Persisted> {
             .execute()
             .try_next()
             .await
-            .map_err(|e| Error::NetlinkError(e.to_string()))?
+            .map_err(|e| Error::Netlink(e.to_string()))?
             .ok_or_else(|| Error::BridgeNotFound(self.iface_name.to_string()))?
             .header
             .index;
@@ -113,7 +113,7 @@ impl Tap<Persisted> {
             .del(index)
             .execute()
             .await
-            .map_err(|e| Error::NetlinkError(e.to_string()))?;
+            .map_err(|e| Error::Netlink(e.to_string()))?;
 
         Ok(())
     }
@@ -122,7 +122,7 @@ impl Tap<Persisted> {
     pub async fn attach_to_bridge(self, bridge_name: String) -> Result<Self, Error> {
         // Establish netlink connection and find the bridge index.
         let (connection, handle, _) =
-            rtnetlink::new_connection().map_err(|e| Error::NetlinkError(e.to_string()))?;
+            rtnetlink::new_connection().map_err(|e| Error::Netlink(e.to_string()))?;
         tokio::spawn(connection);
 
         let bridge_index = handle
@@ -132,7 +132,7 @@ impl Tap<Persisted> {
             .execute()
             .try_next()
             .await
-            .map_err(|e| Error::NetlinkError(e.to_string()))?
+            .map_err(|e| Error::Netlink(e.to_string()))?
             .ok_or(Error::BridgeNotFound(bridge_name))
             .map(|l| l.header.index)?;
 
@@ -147,7 +147,7 @@ impl Tap<Persisted> {
             )
             .execute()
             .await
-            .map_err(|e| Error::NetlinkError(e.to_string()))?;
+            .map_err(|e| Error::Netlink(e.to_string()))?;
 
         Ok(self)
     }
@@ -161,6 +161,7 @@ impl<State> Tap<State> {
 
 impl Tap<Initialized> {
     /// Method that creaates a new TAP interface. We can optionally set a name for the interface, otherwise one will be created by the kernel.
+    #[allow(clippy::cast_possible_truncation)]
     pub fn new(iface_name: Option<&str>) -> Result<Self, Error> {
         let iface_name = iface_name
             .map(TapName::from_str)
@@ -191,12 +192,23 @@ impl Tap<Initialized> {
         //                    are silently dropped on some kernel/CH combinations
         //                    (cloud-hypervisor#6550). Mirrors the working dev
         //                    launcher: `ip tuntap add ... mode tap vnet_hdr`.
-        let flags = libc::IFF_TAP | libc::IFF_NO_PI | libc::IFF_TUN_EXCL | libc::IFF_VNET_HDR;
+        // `ifru_flags` is `c_short` (i16) on Linux but the combined flag set
+        // (e.g. IFF_TUN_EXCL = 0x8000) sets the sign bit, so a checked
+        // `i16::try_from` overflows. Build the mask as u16 (truncating each
+        // libc constant down from c_int, exactly as a C compiler would when
+        // assigning to a `short` field) and reinterpret the bit pattern as
+        // i16 via `cast_signed()`. The kernel reads the field as a 16-bit
+        // flag word, so the bit pattern is what matters, not the signed
+        // value.
+        let flags: u16 = (libc::IFF_TAP as u16)
+            | (libc::IFF_NO_PI as u16)
+            | (libc::IFF_TUN_EXCL as u16)
+            | (libc::IFF_VNET_HDR as u16);
 
         let mut req = libc::ifreq {
             ifr_name: iface_name.0,
             ifr_ifru: libc::__c_anonymous_ifr_ifru {
-                ifru_flags: flags as i16,
+                ifru_flags: flags.cast_signed(),
             },
         };
 
@@ -243,7 +255,13 @@ impl Tap<Initialized> {
     }
 }
 
-// NOTE: these tests can only be run with SUDO and linux probably
+// NOTE: these tests require CAP_NET_ADMIN / privileged access to create TAP
+// interfaces via ioctl on /dev/net/tun. They are ignored by default so that
+// `cargo test -p worker` passes in non-privileged environments (CI, local
+// dev). To run them explicitly, use:
+//
+//   cargo test -p worker --ignored ch::tap::tests
+//
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -262,6 +280,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires CAP_NET_ADMIN to open /dev/net/tun — run with: cargo test -p worker --ignored ch::tap::tests"]
     fn test_create_tap() {
         let tap1 = Tap::new(Some("tap1")).expect("Failed to create TAP interface with name");
 
@@ -275,6 +294,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires CAP_NET_ADMIN to open /dev/net/tun — run with: cargo test -p worker --ignored ch::tap::tests"]
     fn test_should_fail_because_same_name_used() {
         let tap = Tap::new(Some("tap2")).expect("Failed to create TAP interface");
 
@@ -284,7 +304,7 @@ mod tests {
             assert_eq!(err.to_string(), "Device or resource busy (os error 16)");
         } else {
             panic!("Expected error when creating TAP interface with duplicate name");
-        };
+        }
 
         assert_eq!(tap.iface_name.to_string(), "tap2");
     }

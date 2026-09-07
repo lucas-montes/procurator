@@ -16,7 +16,7 @@ use super::{client::Client, dtos::CreateVmSpecRef, handle::Handle, ip_allocator:
 /// The structure responsible to spin up vm managed with cloud hypervisor. We need the socket and the binary to be able to call and communicate
 /// with the child processes. We also need to have a bridge name to be able to attach the TAP interfaces to it. I don't really mind cloning it,
 /// even if maybe using an Arc would be better? Not, sure, some path we need to modify them to add the uuid to identify each vmm/vm, but not the
-/// binary path nor the bridge_name. Also instead of cloning them I should have a function that returns a hadnle, which whil hold the logic
+/// binary path nor the `bridge_name`. Also instead of cloning them I should have a function that returns a hadnle, which whil hold the logic
 /// to make the vm do stuff?
 #[derive(Debug, Clone)]
 pub struct Factory {
@@ -72,7 +72,7 @@ impl std::fmt::Display for Error {
             Error::InvalidPathUtf8 { field, path } => {
                 write!(f, "{field} contains non-UTF8 path: {path}")
             }
-            Error::Tap(e) => write!(f, "tap error: {}", e),
+            Error::Tap(e) => write!(f, "tap error: {e}"),
         }
     }
 }
@@ -173,9 +173,9 @@ impl VmFactory for Factory {
         // with the NixOS toplevel hash). `finalize_for_runtime` layers all
         // per-VM mutations on top in a single pass.
         let vm_config = spec.vm_config().finalize_for_runtime(
-            lease.ip(),
-            &self.bridge_gateway,
-            lease.mask(),
+            *lease.ip(),
+            self.bridge_gateway,
+            *lease.mask(),
             artifacts.writable_disk(),
             artifacts.serial_log(),
             NetConfigRef::new(&tap_name, lease.mac()),
@@ -432,7 +432,7 @@ async fn spawn_cloud_hypervisor(
 
     let pid = child.id().ok_or_else(||{
         error!( "spawned cloud-hypervisor process has no PID, it means that it finished, which shouldn't be the case");
-        VmError::ProcessFailed(format!("cloud-hypervisor process finished immediately after spawning"))
+        VmError::ProcessFailed("cloud-hypervisor process finished immediately after spawning".to_string())
         })?;
 
     // Wait for CH to create its API socket before returning. Without this, the

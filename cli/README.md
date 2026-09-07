@@ -33,3 +33,11 @@ Supported verbs:
 ## Status
 
 Scaffolded — `init` has an implementation, other commands are stubs. Test binaries are functional.
+
+## Stack
+
+To test it manually
+
+```bash
+cargo run -p cli --bin pcr -- vcs repo push --path .
+```

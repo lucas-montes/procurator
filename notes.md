@@ -8,6 +8,8 @@ The challenge would be, how to deploy a complex system with multiple parts? like
 For that we either need a clear docker-compose (or nix thing), docs that explain the other and that a clanker could follow, or to have a ProcFile/Makefile/process-compose that will spin up the whole.
 
 
+code quality: https://github.com/dekobon/big-code-analysis
+nix build farm : https://wiki.nixos.org/wiki/Distributed_build
 
 # PRocurator notes
 check this to create diagrams of the services (js lib)[https://svelteflow.dev/examples/misc/transitions]

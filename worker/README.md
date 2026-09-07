@@ -18,11 +18,13 @@ It creates the vms (in this case it spawns a process and creates a client to com
 
 
 ## TODO
+[ ] This is actually important, i need a graceful shutdown, so I can make a snapshot of the vms and resume if needed
 [ ] Need a better way to keep state and failures to clean up the directories
 [ ] The values for the rpcs to return stats probably should be abstract as well
 [ ] Have an interactive shell with some socket?
 [ ] Test better the overall system
 [ ] Test the snapshot + resume and the backup logic
+[ ] Maybe when running the `create` cli command we might want to specify if we want opencode up and running by default
 
 ## Run it
 
@@ -44,6 +46,7 @@ this allows me to declare the service `vmm` which configures the bridge and othe
   services.procurator = {
     vmm = {
       enable = true;
+      # This is my wifi card, you might have something different
       externalInterface = "wlp98s0";
     };
   };

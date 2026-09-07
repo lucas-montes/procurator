@@ -13,6 +13,17 @@ let
     listenAddr = "0.0.0.0:8080";
     masterAddr = "0.0.0.0:8081";
     healthTickMillis = 1000;
+    proxy = {
+      # `opencode serve --port 4096` is baked into the VM image (see
+      # nix/lib/diskVm.nix); the worker hard-codes 4096 too, so it is not
+      # exposed as a runtime knob.
+      publicListenAddr = "0.0.0.0:8443";
+      tlsCertPath = "/var/lib/procurator-worker/tls/server.crt";
+      tlsKeyPath = "/var/lib/procurator-worker/tls/server.key";
+      baseDomain = "vm.invalid";
+      jwtHs256Secret = "change-me";
+      upstreamRequestTimeoutMillis = 30000;
+    };
 
     # worker/src/ch/factory.rs
     vmm = {
@@ -37,13 +48,23 @@ let
     listenAddr ? defaults.listenAddr,
     masterAddr ? defaults.masterAddr,
     healthTickMillis ? defaults.healthTickMillis,
+    proxy ? {},
     vmm ? {},
   }: let
+    resolvedProxy = defaults.proxy // proxy;
     resolvedVmm = defaults.vmm // vmm;
   in {
-    listen_addr = listenAddr;
+    rpc_listen_addr = listenAddr;
     master_addr = masterAddr;
     health_tick_millis = healthTickMillis;
+    proxy = {
+      public_listen_addr = resolvedProxy.publicListenAddr;
+      tls_cert_path = resolvedProxy.tlsCertPath;
+      tls_key_path = resolvedProxy.tlsKeyPath;
+      base_domain = resolvedProxy.baseDomain;
+      jwt_hs256_secret = resolvedProxy.jwtHs256Secret;
+      upstream_request_timeout_millis = resolvedProxy.upstreamRequestTimeoutMillis;
+    };
     vmm = {
       binary_path = resolvedVmm.binaryPath;
       runtime_dir = resolvedVmm.runtimeDir;

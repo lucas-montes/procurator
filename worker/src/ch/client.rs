@@ -3,8 +3,11 @@
 
 use std::path::PathBuf;
 
-use hyper::Uri;
-use hyperlocal::{UnixClientExt, Uri as UnixUri};
+use bytes::Bytes;
+use http_body_util::{BodyExt, Full};
+use hyper::{Method, Request, Uri};
+use hyper_util::client::legacy::Client as HyperClient;
+use hyperlocal::{UnixClientExt, UnixConnector, Uri as UnixUri};
 
 use serde::{Serialize, de::DeserializeOwned};
 use tracing::{debug, info};
@@ -16,7 +19,7 @@ pub struct Client {
     /// Path to the unix socket for the cloud-hypervisor API
     socket_path: PathBuf,
     /// HTTP client configured for unix socket communication
-    client: hyper::Client<hyperlocal::UnixConnector>,
+    client: HyperClient<UnixConnector, Full<Bytes>>,
 }
 
 // Request structure used to serialize snapshot requests to the CH API.
@@ -28,7 +31,7 @@ struct SnapshotRequest<'a> {
 impl Client {
     /// Create a new Client VMM instance
     pub fn new(socket_path: impl Into<PathBuf>) -> Self {
-        let client = hyper::Client::unix();
+        let client: HyperClient<UnixConnector, Full<Bytes>> = HyperClient::unix();
 
         Self {
             socket_path: socket_path.into(),
@@ -54,7 +57,7 @@ impl Client {
 
         let uri = self.build_uri("/api/v1/vm.create");
         let resp =
-            request::<serde_json::Value>(uri, body, hyper::Method::PUT, &self.client).await?;
+            request::<serde_json::Value>(uri, Bytes::from(body), Method::PUT, &self.client).await?;
 
         info!(?resp, "vm.create succeeded");
         Ok(())
@@ -63,13 +66,8 @@ impl Client {
     pub async fn boot(&self) -> Result<(), Error> {
         debug!("vm.boot request");
         let uri = self.build_uri("/api/v1/vm.boot");
-        let resp = request::<serde_json::Value>(
-            uri,
-            hyper::Body::empty(),
-            hyper::Method::PUT,
-            &self.client,
-        )
-        .await?;
+        let resp =
+            request::<serde_json::Value>(uri, Bytes::new(), Method::PUT, &self.client).await?;
 
         info!(?resp, "vm.boot succeeded");
         Ok(())
@@ -77,13 +75,8 @@ impl Client {
 
     pub async fn delete(&self) -> Result<(), Error> {
         let uri = self.build_uri("/api/v1/vm.delete");
-        let resp = request::<serde_json::Value>(
-            uri,
-            hyper::Body::empty(),
-            hyper::Method::PUT,
-            &self.client,
-        )
-        .await?;
+        let resp =
+            request::<serde_json::Value>(uri, Bytes::new(), Method::PUT, &self.client).await?;
 
         info!(?resp, "vm.delete succeeded");
         Ok(())
@@ -92,13 +85,8 @@ impl Client {
     /// Pause the VM. Required before taking a snapshot or doing a consistent disk copy.
     pub async fn pause(&self) -> Result<(), Error> {
         let uri = self.build_uri("/api/v1/vm.pause");
-        let resp = request::<serde_json::Value>(
-            uri,
-            hyper::Body::empty(),
-            hyper::Method::PUT,
-            &self.client,
-        )
-        .await?;
+        let resp =
+            request::<serde_json::Value>(uri, Bytes::new(), Method::PUT, &self.client).await?;
 
         info!(?resp, "vm.pause succeeded");
         Ok(())
@@ -107,13 +95,8 @@ impl Client {
     /// Resume a previously paused VM.
     pub async fn resume(&self) -> Result<(), Error> {
         let uri = self.build_uri("/api/v1/vm.resume");
-        let resp = request::<serde_json::Value>(
-            uri,
-            hyper::Body::empty(),
-            hyper::Method::PUT,
-            &self.client,
-        )
-        .await?;
+        let resp =
+            request::<serde_json::Value>(uri, Bytes::new(), Method::PUT, &self.client).await?;
 
         info!(?resp, "vm.resume succeeded");
         Ok(())
@@ -131,7 +114,7 @@ impl Client {
 
         let uri = self.build_uri("/api/v1/vm.snapshot");
         let resp =
-            request::<serde_json::Value>(uri, body, hyper::Method::PUT, &self.client).await?;
+            request::<serde_json::Value>(uri, Bytes::from(body), Method::PUT, &self.client).await?;
 
         info!(?resp, "vm.snapshot succeeded");
         Ok(())
@@ -140,15 +123,15 @@ impl Client {
 
 async fn request<R: DeserializeOwned>(
     uri: Uri,
-    body: impl Into<hyper::Body>,
-    method: hyper::Method,
-    client: &hyper::Client<hyperlocal::UnixConnector>,
+    body: Bytes,
+    method: Method,
+    client: &HyperClient<UnixConnector, Full<Bytes>>,
 ) -> Result<R, Error> {
-    let req = hyper::Request::builder()
+    let req = Request::builder()
         .method(method)
         .uri(uri)
         .header("Content-Type", "application/json")
-        .body(body.into())
+        .body(Full::new(body))
         .map_err(|e| Error::Communication(e.to_string()))?;
 
     let resp = client
@@ -158,9 +141,12 @@ async fn request<R: DeserializeOwned>(
 
     let status = resp.status();
 
-    let bytes = hyper::body::to_bytes(resp.into_body())
+    let bytes = resp
+        .into_body()
+        .collect()
         .await
-        .map_err(|e| Error::Communication(e.to_string()))?;
+        .map_err(|e| Error::Communication(e.to_string()))?
+        .to_bytes();
 
     if !status.is_success() {
         let msg = String::from_utf8_lossy(&bytes);

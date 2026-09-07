@@ -177,7 +177,7 @@ fn execute_repo_push(args: RepoPushArgs) {
     }
 
     // Push Nix cache if configured
-    match repo_outils::nix::read_cache_url() {
+    match repo_outils::nix::read_cache_url(&path) {
         Ok(Some(url)) => {
             info!("Pushing Nix artifacts to cache: {}", url);
             match repo_outils::nix::push_all_to_cache(&url) {
