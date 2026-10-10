@@ -1,439 +1,202 @@
-// cache_service/src/nix_serve.rs
-use axum::{
-    Router,
-    body::Body,
-    extract::{Path, State},
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    routing::get,
-};
+//! Procurator Nix binary cache: full read/write with mTLS.
+//! Why: push-first flow needs `nix copy --to/--from https://cache` to just work.
+
+mod config;
+mod nix;
+mod routes;
+mod storage;
+mod tls;
+
+use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::process::Command;
-use tokio_util::io::ReaderStream;
 
-pub struct NixServeState {
-    store_dir: String,
-    secret_key: Option<String>,
-}
+use config::Config;
+use routes::{AppState, router};
+use storage::LocalDisk;
+use tls::{FilePki, TlsProvider as _, identity_from_leaf};
 
-impl NixServeState {
-    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let store_dir = std::env::var("NIX_STORE_DIR").unwrap_or_else(|_| "/nix/store".to_string());
-
-        tracing::info!("Using store directory: {}", store_dir);
-
-        let secret_key = std::env::var("NIX_SECRET_KEY_FILE")
-            .ok()
-            .and_then(|path| {
-                tracing::info!("Loading secret key from: {}", path);
-                std::fs::read_to_string(path).ok()
-            })
-            .map(|s| s.trim().to_string());
-
-        if secret_key.is_some() {
-            tracing::info!("Secret key loaded successfully");
-        } else {
-            tracing::warn!("No secret key configured - cache will not sign packages");
-        }
-
-        Ok(Self {
-            store_dir,
-            secret_key,
-        })
-    }
-}
-
-pub fn router() -> Router {
-    let state = NixServeState::new().expect("Failed to initialize nix-serve state");
-
-    Router::new()
-        .route("/nix-cache-info", get(nix_cache_info))
-        .route("/{hash_narinfo}", get(narinfo))
-        .route("/nar/{nar_file}", get(nar_handler))
-        .route("/log/{*store_path}", get(log))
-        .with_state(Arc::new(state))
-}
-
-async fn nix_cache_info(State(state): State<Arc<NixServeState>>) -> impl IntoResponse {
-    let response = format!(
-        "StoreDir: {}\nWantMassQuery: 1\nPriority: 30\n",
-        state.store_dir
-    );
-
-    Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "text/plain")
-        .body(Body::from(response))
-        .unwrap()
-}
-
-async fn narinfo(
-    State(state): State<Arc<NixServeState>>,
-    Path(hash_narinfo): Path<String>,
-) -> Result<Response, StatusCode> {
-    // Extract hash part from "hash.narinfo"
-    let hash_part = hash_narinfo
-        .strip_suffix(".narinfo")
-        .ok_or(StatusCode::BAD_REQUEST)?;
-
-    tracing::debug!("Requested narinfo for hash: {}", hash_part);
-
-    // Validate hash part (only lowercase hex)
-    if !hash_part
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-    {
-        tracing::warn!("Invalid hash part format: {}", hash_part);
-        return Err(StatusCode::BAD_REQUEST);
-    }
-
-    // Query store path from hash part
-    let output = Command::new("nix-store")
-        .args(["--query", "--hash"])
-        .arg(format!("{}/{}", state.store_dir, hash_part))
-        .output()
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to query nix-store: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
-    if !output.status.success() {
-        tracing::debug!("Store path not found for hash: {}", hash_part);
-        return Err(StatusCode::NOT_FOUND);
-    }
-
-    let store_path = format!("{}/{}", state.store_dir, hash_part);
-    tracing::debug!("Found store path: {}", store_path);
-
-    // Query path info
-    let path_info = query_path_info(&store_path).await.map_err(|e| {
-        tracing::error!("Failed to query path info: {}", e);
-        StatusCode::NOT_FOUND
-    })?;
-
-    // Extract sha256 hash from nar_hash (format: "sha256:base32hash")
-    let nar_hash_parts: Vec<&str> = path_info.nar_hash.split(':').collect();
-    if nar_hash_parts.len() != 2 || nar_hash_parts[0] != "sha256" {
-        tracing::error!("Invalid nar_hash format: {}", path_info.nar_hash);
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
-    }
-    let nar_hash2 = nar_hash_parts[1];
-
-    if nar_hash2.len() != 52 {
-        tracing::error!("Invalid nar_hash length: {}", nar_hash2.len());
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
-    }
-
-    // Build narinfo response
-    let mut response = format!(
-        "StorePath: {}\n\
-         URL: nar/{}-{}.nar\n\
-         Compression: none\n\
-         NarHash: {}\n\
-         NarSize: {}\n",
-        store_path, hash_part, nar_hash2, path_info.nar_hash, path_info.nar_size
-    );
-
-    // Add references
-    if !path_info.references.is_empty() {
-        let refs: Vec<String> = path_info.references.iter().map(|r| strip_path(r)).collect();
-        response.push_str(&format!("References: {}\n", refs.join(" ")));
-    }
-
-    // Add deriver
-    if let Some(deriver) = path_info.deriver {
-        response.push_str(&format!("Deriver: {}\n", strip_path(&deriver)));
-    }
-
-    // Add signature
-    if let Some(ref secret_key) = state.secret_key {
-        let fingerprint = fingerprint_path(
-            &store_path,
-            &path_info.nar_hash,
-            path_info.nar_size,
-            &path_info.references,
-        );
-        tracing::debug!("Fingerprint to sign: {}", fingerprint);
-        let signature = sign_string(secret_key, &fingerprint).map_err(|e| {
-            tracing::error!("Failed to sign: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-        tracing::debug!("Generated signature: {}", signature);
-        response.push_str(&format!("Sig: {}\n", signature));
-    } else if !path_info.signatures.is_empty() {
-        for sig in &path_info.signatures {
-            response.push_str(&format!("Sig: {}\n", sig));
-        }
-    }
-
-    tracing::info!("Serving narinfo for {}", hash_part);
-
-    Ok(Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "text/x-nix-narinfo")
-        .header("Content-Length", response.len())
-        .body(Body::from(response))
-        .unwrap())
-}
-
-// Combined handler for both new and legacy NAR formats
-async fn nar_handler(
-    State(state): State<Arc<NixServeState>>,
-    Path(nar_file): Path<String>,
-) -> Result<Response, StatusCode> {
-    tracing::debug!("NAR request for file: {}", nar_file);
-
-    // Parse filename: either "hash_part-nar_hash.nar" or "hash_part.nar" (legacy)
-    let filename = nar_file.strip_suffix(".nar").ok_or_else(|| {
-        tracing::warn!("Invalid NAR filename: {}", nar_file);
-        StatusCode::BAD_REQUEST
-    })?;
-
-    let (hash_part, expected_nar_hash) = if let Some(dash_pos) = filename.rfind('-') {
-        // New format: "hash_part-nar_hash.nar"
-        let hash_part = &filename[..dash_pos];
-        let nar_hash = &filename[dash_pos + 1..];
-        tracing::debug!("New format NAR: hash={}, nar_hash={}", hash_part, nar_hash);
-        (hash_part.to_string(), Some(nar_hash.to_string()))
-    } else {
-        // Legacy format: "hash_part.nar"
-        tracing::debug!("Legacy format NAR: hash={}", filename);
-        (filename.to_string(), None)
-    };
-
-    // Validate hash part
-    if !hash_part
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-    {
-        tracing::warn!("Invalid hash part: {}", hash_part);
-        return Err(StatusCode::BAD_REQUEST);
-    }
-
-    let store_path = format!("{}/{}", state.store_dir, hash_part);
-
-    // Query path info
-    let path_info = query_path_info(&store_path).await.map_err(|e| {
-        tracing::error!("Failed to query path info for {}: {}", store_path, e);
-        StatusCode::NOT_FOUND
-    })?;
-
-    // Verify NAR hash if provided (new format)
-    if let Some(expected) = expected_nar_hash {
-        if path_info.nar_hash != format!("sha256:{}", expected) {
-            tracing::warn!(
-                "NAR hash mismatch: expected sha256:{}, got {}",
-                expected,
-                path_info.nar_hash
-            );
-            return Err(StatusCode::NOT_FOUND);
-        }
-    }
-
-    tracing::info!("Streaming NAR for {}", store_path);
-
-    // Stream NAR file
-    let child = Command::new("nix")
-        .args([
-            "--extra-experimental-features",
-            "nix-command",
-            "store",
-            "dump-path",
-            "--",
-            &store_path,
-        ])
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            tracing::error!("Failed to spawn nix command: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
-    let stdout = child.stdout.ok_or_else(|| {
-        tracing::error!("Failed to capture stdout");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-    let stream = ReaderStream::new(stdout);
-    let body = Body::from_stream(stream);
-
-    Ok(Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "application/x-nix-archive")
-        .header("Content-Length", path_info.nar_size)
-        .body(body)
-        .unwrap())
-}
-
-async fn log(
-    State(state): State<Arc<NixServeState>>,
-    Path(store_path_suffix): Path<String>,
-) -> Result<Response, StatusCode> {
-    let store_path = format!("{}/{}", state.store_dir, store_path_suffix);
-    tracing::debug!("Requesting log for: {}", store_path);
-
-    let child = Command::new("nix")
-        .args([
-            "--extra-experimental-features",
-            "nix-command",
-            "log",
-            &store_path,
-        ])
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            tracing::error!("Failed to spawn nix log command: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
-    let stdout = child.stdout.ok_or_else(|| {
-        tracing::error!("Failed to capture stdout");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-    let stream = ReaderStream::new(stdout);
-    let body = Body::from_stream(stream);
-
-    Ok(Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "text/plain")
-        .body(body)
-        .unwrap())
-}
-
-// Helper structs and functions
-
+/// Concrete startup errors. Why: no `anyhow`, no `Box<dyn>`.
 #[derive(Debug)]
-struct PathInfo {
-    nar_hash: String,
-    nar_size: u64,
-    references: Vec<String>,
-    deriver: Option<String>,
-    signatures: Vec<String>,
+enum MainError {
+    /// CLI usage error (prints usage, exit code 2).
+    Usage(String),
+    /// Config invalid.
+    Config(config::ConfigError),
+    /// Storage init failed.
+    Storage(storage::StorageError),
+    /// TLS init failed.
+    Tls(tls::TlsError),
+    /// Listener bind failed.
+    Bind(String),
+    /// Serving failed.
+    Serve(String),
 }
 
-async fn query_path_info(store_path: &str) -> Result<PathInfo, Box<dyn std::error::Error>> {
-    tracing::debug!("Querying path info for: {}", store_path);
-
-    // Query using nix-store
-    let output = Command::new("nix-store")
-        .args([
-            "--query",
-            "--deriver",
-            "--hash",
-            "--size",
-            "--references",
-            store_path,
-        ])
-        .output()
-        .await?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::error!("nix-store query failed: {}", stderr);
-        return Err("Failed to query path info".into());
+impl std::fmt::Display for MainError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Usage(m) => write!(f, "{m}"),
+            Self::Config(e) => write!(f, "config: {e}"),
+            Self::Storage(e) => write!(f, "storage: {e}"),
+            Self::Tls(e) => write!(f, "tls: {e}"),
+            Self::Bind(m) => write!(f, "bind: {m}"),
+            Self::Serve(m) => write!(f, "serve: {m}"),
+        }
     }
-
-    let output_str = String::from_utf8(output.stdout)?;
-    let lines: Vec<&str> = output_str.lines().collect();
-
-    // Parse output (simplified - real implementation needs proper parsing)
-    let nar_hash = lines.get(0).unwrap_or(&"").to_string();
-    let nar_size: u64 = lines.get(1).unwrap_or(&"0").parse().unwrap_or(0);
-    let references: Vec<String> = lines.iter().skip(2).map(|s| s.to_string()).collect();
-
-    tracing::debug!(
-        "Path info: hash={}, size={}, refs={}",
-        nar_hash,
-        nar_size,
-        references.len()
-    );
-
-    // Query signatures
-    let sigs_output = Command::new("nix-store")
-        .args(["--query", "--sigs", store_path])
-        .output()
-        .await?;
-
-    let signatures: Vec<String> = if sigs_output.status.success() {
-        String::from_utf8(sigs_output.stdout)?
-            .lines()
-            .map(|s| s.to_string())
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    Ok(PathInfo {
-        nar_hash,
-        nar_size,
-        references,
-        deriver: None, // TODO: parse deriver
-        signatures,
-    })
 }
 
-fn strip_path(path: &str) -> String {
-    path.rsplit('/').next().unwrap_or(path).to_string()
-}
+impl std::error::Error for MainError {}
 
-fn fingerprint_path(
-    store_path: &str,
-    nar_hash: &str,
-    nar_size: u64,
-    references: &[String],
-) -> String {
-    // Format: "1;/nix/store/path;sha256:hash;size;ref1,ref2,..."
-    let refs = references.join(",");
-    format!("1;{};{};{};{}", store_path, nar_hash, nar_size, refs)
-}
-
-fn sign_string(secret_key: &str, message: &str) -> Result<String, Box<dyn std::error::Error>> {
-    use base64::{Engine as _, engine::general_purpose};
-    use ed25519_dalek::{Signer, SigningKey};
-
-    // Parse secret key (format: "keyname:base64key")
-    let parts: Vec<&str> = secret_key.split(':').collect();
-    if parts.len() != 2 {
-        return Err("Invalid secret key format".into());
+/// Resolve `--config <path>`. Why: CLI arg only — no env pointer, no fixed path.
+fn config_path() -> Result<PathBuf, MainError> {
+    const USAGE: &str = "usage: cache --config <path.toml>";
+    let mut args = std::env::args().skip(1);
+    match args.next().as_deref() {
+        Some("--config") => args
+            .next()
+            .map(PathBuf::from)
+            .ok_or_else(|| MainError::Usage(format!("{USAGE} (missing path after --config)"))),
+        Some(other) => Err(MainError::Usage(format!("{USAGE} (got {other:?})"))),
+        None => Err(MainError::Usage(USAGE.to_string())),
     }
-
-    let key_name = parts[0];
-    let key_bytes = general_purpose::STANDARD.decode(parts[1])?;
-
-    if key_bytes.len() != 32 {
-        return Err("Invalid key length".into());
-    }
-
-    let signing_key = SigningKey::from_bytes(&key_bytes.try_into().unwrap());
-    let signature = signing_key.sign(message.as_bytes());
-
-    let sig_b64 = general_purpose::STANDARD.encode(signature.to_bytes());
-
-    Ok(format!("{}:{}", key_name, sig_b64))
 }
 
-// Main server
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize tracing
+async fn main() -> Result<(), MainError> {
     tracing_subscriber::fmt()
         .with_target(false)
         .with_level(true)
         .init();
+    let path = match config_path() {
+        // Why: usage errors exit 2 with a one-line message, not a Debug dump.
+        Err(MainError::Usage(m)) => {
+            eprintln!("{m}");
+            std::process::exit(2);
+        }
+        Err(e) => return Err(e),
+        Ok(p) => p,
+    };
+    let config = Config::from_file(&path).map_err(MainError::Config)?;
+    tracing::info!(
+        addr = %config.addr,
+        storage = %config.storage_dir.display(),
+        mtls = config.mtls_enabled(),
+        "starting procurator cache"
+    );
+    // Why: static dispatch — match picks a concrete backend, no `dyn`.
+    let provider = config.tls.provider.clone();
+    if provider != "file" {
+        return Err(MainError::Tls(tls::TlsError::UnknownProvider(provider)));
+    }
+    let store = LocalDisk::create(config.storage_dir.clone(), config.max_size_bytes)
+        .map_err(MainError::Storage)?;
+    let state = AppState {
+        config: Arc::new(config),
+        store,
+    };
+    serve(state).await
+}
 
-    tracing::info!("Starting Procurator cache service");
+/// Serve plain HTTP or HTTPS+mTLS depending on config.
+async fn serve(state: AppState<LocalDisk>) -> Result<(), MainError> {
+    let addr: SocketAddr = state
+        .config
+        .addr
+        .parse()
+        .map_err(|e| MainError::Bind(format!("bad addr: {e}")))?;
+    let app = router(state.clone());
+    if !state.config.tls_enabled() {
+        tracing::warn!("TLS disabled — dev only, use mTLS in production");
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .map_err(|e| MainError::Bind(e.to_string()))?;
+        // Why: ConnectInfo feeds the loopback-bypass middleware (no TLS hook here).
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .map_err(|e| MainError::Serve(e.to_string()))?;
+        return Ok(());
+    }
+    // Why: manual accept loop (like worker proxy) gives us peer certs for authz.
+    let cert = state
+        .config
+        .tls
+        .cert_file
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("/nonexistent-cert.pem"));
+    let key = state
+        .config
+        .tls
+        .key_file
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("/nonexistent-key.pem"));
+    let pki = FilePki {
+        cert,
+        key,
+        client_ca: state.config.tls.client_ca_file.clone(),
+    };
+    let tls_cfg = pki.server_config().map_err(MainError::Tls)?;
+    // Why: validate rotation path at startup; failures abort instead of serving stale certs.
+    pki.reload().map_err(MainError::Tls)?;
+    serve_mtls(addr, tls_cfg, app).await
+}
 
-    let app = router();
+/// TLS accept loop that injects `PeerIdentity` per connection.
+/// Why: handlers authorize writes by client cert without parsing TLS themselves.
+async fn serve_mtls(
+    addr: SocketAddr,
+    tls_cfg: Arc<rustls::ServerConfig>,
+    app: axum::Router,
+) -> Result<(), MainError> {
+    use hyper_util::rt::{TokioExecutor, TokioIo};
+    use hyper_util::server::conn::auto::Builder;
+    use hyper_util::service::TowerToHyperService;
+    use tokio_rustls::TlsAcceptor;
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8081").await?;
-    tracing::info!("Cache service listening on http://0.0.0.0:8081");
-    tracing::info!("Endpoints:");
-    tracing::info!("  GET  /nix-cache-info");
-    tracing::info!("  GET  /:hash.narinfo");
-    tracing::info!("  GET  /nar/:file.nar");
-    tracing::info!("  GET  /log/*path");
-
-    axum::serve(listener, app).await?;
-
-    Ok(())
+    let acceptor = TlsAcceptor::from(tls_cfg);
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .map_err(|e| MainError::Bind(e.to_string()))?;
+    tracing::info!(%addr, "cache listening with mTLS");
+    loop {
+        let (stream, peer_addr) = listener
+            .accept()
+            .await
+            .map_err(|e| MainError::Serve(e.to_string()))?;
+        let acceptor = acceptor.clone();
+        let app = app.clone();
+        tokio::spawn(async move {
+            let Ok(tls_stream) = acceptor.accept(stream).await else {
+                tracing::warn!(%peer_addr, "TLS handshake failed");
+                return;
+            };
+            // Why: rustls already verified the chain; we only label the peer.
+            let mut identity = {
+                let (_io, conn) = tls_stream.get_ref();
+                let leaf = conn.peer_certificates().and_then(|chain| chain.first());
+                identity_from_leaf(leaf.map(std::convert::AsRef::as_ref))
+            };
+            identity.is_loopback = peer_addr.ip().is_loopback();
+            tracing::debug!(
+                %peer_addr,
+                cn = ?identity.common_name,
+                fp = %identity.fingerprint_hex,
+                "mTLS peer"
+            );
+            // Why: per-connection layer so all requests share this peer's identity.
+            let service = tower::ServiceBuilder::new()
+                .layer(axum::Extension(identity))
+                .service(app);
+            let service = TowerToHyperService::new(service);
+            if let Err(e) = Builder::new(TokioExecutor::new())
+                .serve_connection(TokioIo::new(tls_stream), service)
+                .await
+            {
+                tracing::warn!(%peer_addr, error = %e, "HTTPS connection failed");
+            }
+        });
+    }
 }

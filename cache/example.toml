@@ -1,0 +1,20 @@
+# Example cache config. Run: cargo run -p cache -- --config ./example.toml
+# All settings have defaults; only storage_dir needs overriding for non-root runs.
+addr = "127.0.0.1:8081"
+store_dir = "/nix/store"
+storage_dir = "/tmp/pcache"
+max_size = "50G"
+priority = 30
+sign_key_files = []
+
+[tls]
+provider = "file"
+# cert_file = "/run/secrets/cache-cert.pem"
+# key_file = "/run/secrets/cache-key.pem"
+# client_ca_file = "/run/secrets/cache-client-ca.pem"
+# writer_allowlist = ["ci-writer"]
+
+[access]
+reads_require_auth = false
+writes_require_auth = "auto" # auto | always | never
+loopback_bypass = true
