@@ -32,6 +32,9 @@ with lib; let
       listenAddr       = cfg.listenAddr;
       masterAddr       = derivedMasterAddr;
       healthTickMillis = cfg.healthTickMillis;
+      workerId         = cfg.workerId;
+      pollIntervalMillis = cfg.pollIntervalMillis;
+      heartbeatIntervalMillis = cfg.heartbeatIntervalMillis;
       proxy = {
         publicListenAddr = cfg.proxyPublicListenAddr;
         tlsCertPath = cfg.proxyTlsCertPath;
@@ -144,6 +147,32 @@ in {
       '';
     };
 
+    workerId = mkOption {
+      type = types.str;
+      default = "";
+      example = "worker-1";
+      description = ''
+        This worker's id. Must match a worker declared in the control
+        plane inventory (services.procurator.control-plane `workers`),
+        otherwise its heartbeats are ignored and its polls return empty
+        assignments. Usually the VM name from cluster.vms.
+      '';
+    };
+
+    pollIntervalMillis = mkOption {
+      type = types.ints.positive;
+      default = defaults.pollIntervalMillis;
+      example = 2000;
+      description = "Interval in milliseconds between assignment polls.";
+    };
+
+    heartbeatIntervalMillis = mkOption {
+      type = types.ints.positive;
+      default = defaults.heartbeatIntervalMillis;
+      example = 5000;
+      description = "Interval in milliseconds between heartbeat pushes.";
+    };
+
     user = mkOption {
       type = types.str;
       default = "procurator-worker";
@@ -229,6 +258,13 @@ in {
           services.procurator.worker: you must set either `master` or `masterAddr`.
           - Use `master` to reference a VM from `cluster.vms`.
           - Use `masterAddr` for a direct control-plane address.
+        '';
+      }
+      {
+        assertion = cfg.workerId != "";
+        message = ''
+          services.procurator.worker: you must set `workerId`.
+          It must match a worker declared in the control plane inventory.
         '';
       }
       {

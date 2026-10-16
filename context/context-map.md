@@ -9,6 +9,8 @@ Quick navigation for AI sessions working on Procurator.
 - [patterns.md](patterns.md) - Coding patterns and conventions (TODO)
 
 ## Domain-Specific Context
+- [control-plane/](control-plane/) - Control plane pull-assignment node state
+- [worker/](worker/) - Worker pull reconciliation + public proxy
 - [vcs/](vcs/) - VCS/version control system (git porcelain)
 - [stack/](stack/) - Stack CLI module layout and behavior
   - [stack/lifecycle.md](stack/lifecycle.md) — Service lifecycle monitoring and restart
@@ -46,6 +48,7 @@ Quick navigation for AI sessions working on Procurator.
 
 ## Current Work
 - **Pending plan:** `plans/rust-log-env-var.md` (T01 done, T02 pending)
+- **Completed plan:** `plans/control-plane-pull-assignments.md` (T01–T09 done; control-plane pull loop, worker poll/reconcile/heartbeat, Nix inventory, cross-crate e2e)
 - **Completed plan:** `plans/healthcheck.md` (T01–T05 done)
 - **Completed plan:** `plans/orchestrator-lifecycle.md` (T01–T04 done)
 - **Completed plan:** `plans/source-file-watch.md` (T01–T05 done)

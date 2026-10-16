@@ -13,6 +13,11 @@ let
     listenAddr = "0.0.0.0:8080";
     masterAddr = "0.0.0.0:8081";
     healthTickMillis = 1000;
+    # Single dev worker identity; NixOS deployments override per host.
+    # service.nix gains a proper option in plan T07.
+    workerId = "worker-1";
+    pollIntervalMillis = 2000;
+    heartbeatIntervalMillis = 5000;
     proxy = {
       # `opencode serve --port 4096` is baked into the VM image (see
       # nix/lib/diskVm.nix); the worker hard-codes 4096 too, so it is not
@@ -48,6 +53,9 @@ let
     listenAddr ? defaults.listenAddr,
     masterAddr ? defaults.masterAddr,
     healthTickMillis ? defaults.healthTickMillis,
+    workerId ? defaults.workerId,
+    pollIntervalMillis ? defaults.pollIntervalMillis,
+    heartbeatIntervalMillis ? defaults.heartbeatIntervalMillis,
     proxy ? {},
     vmm ? {},
   }: let
@@ -57,6 +65,9 @@ let
     rpc_listen_addr = listenAddr;
     master_addr = masterAddr;
     health_tick_millis = healthTickMillis;
+    worker_id = workerId;
+    poll_interval_millis = pollIntervalMillis;
+    heartbeat_interval_millis = heartbeatIntervalMillis;
     proxy = {
       public_listen_addr = resolvedProxy.publicListenAddr;
       tls_cert_path = resolvedProxy.tlsCertPath;

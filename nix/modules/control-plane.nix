@@ -12,9 +12,22 @@ let
     then map (vm: clusterCfg.${vm}.deployment.addr) cfg.peers
     else cfg.peersAddr;
 
+  # Derive deterministic worker inventory from cluster config.
+  # Each entry renders as { id, addr, labels } matching the Rust
+  # control_plane::config::WorkerEntry shape (addr/labels optional).
+  derivedWorkers =
+    if cfg.workers != []
+    then map (vm: {
+      id = vm;
+      addr = clusterCfg.${vm}.deployment.addr;
+      labels = clusterCfg.${vm}.labels;
+    }) cfg.workers
+    else cfg.workersAddr;
+
   configFile = pkgs.writeText "procurator-control-plane-config.json" (builtins.toJSON {
     hostname = cfg.hostname;
     addr = cfg.addr;
+    workers = derivedWorkers;
     role = {
       Master = {
         peers_addr = derivedPeers;
@@ -66,6 +79,45 @@ in {
       '';
     };
 
+    workers = mkOption {
+      type = types.listOf types.str;
+      default = [];
+      example = [ "worker-1" "worker-2" ];
+      description = ''
+        List of VM names from cluster.vms with role "worker" to manage.
+        Their deployment.addr and labels are used automatically.
+        Takes precedence over workersAddr if both are set.
+      '';
+    };
+
+    workersAddr = mkOption {
+      type = types.listOf (types.submodule {
+        options = {
+          id = mkOption {
+            type = types.str;
+            example = "worker-1";
+            description = "Worker id (matches the worker's worker_id).";
+          };
+          addr = mkOption {
+            type = types.str;
+            example = "192.168.1.11:8080";
+            description = "Informational worker address (unused in pull mode).";
+          };
+          labels = mkOption {
+            type = types.listOf types.str;
+            default = [];
+            description = "Scheduling labels (reserved for a later scheduler).";
+          };
+        };
+      });
+      default = [];
+      example = [ { id = "worker-1"; addr = "192.168.1.11:8080"; } ];
+      description = ''
+        Direct list of workers to manage.
+        Only used if workers is empty.
+      '';
+    };
+
     user = mkOption {
       type = types.str;
       default = "procurator-control-plane";
@@ -80,6 +132,13 @@ in {
   };
 
   config = mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = all (vm: builtins.hasAttr vm clusterCfg) cfg.workers;
+        message = "services.procurator.control-plane: `workers` contains names not found in `cluster.vms`.";
+      }
+    ];
+
     users.users.${cfg.user} = {
       isSystemUser = true;
       group = cfg.group;

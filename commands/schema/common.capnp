@@ -11,6 +11,13 @@ struct Result(Ok, Err) {
 
 struct VmSpec(BackendConfig) {
   spec @0 :BackendConfig;
+  # Stable logical identity for pull reconciliation (plan T09). Publishers
+  # must set a non-empty id; the control plane rejects blank ids loudly.
+  # Absent (pre-T09 data) reads as "".
+  id @1 :Text;
+  # Explicit target worker for v1 placement. The control plane rejects
+  # targets outside its declared inventory. Absent reads as "".
+  targetWorker @2 :Text;
 }
 
 # Running VM observed on a worker

@@ -22,6 +22,13 @@ impl<F: Factory> CreateCommand<F> {
     pub fn id(&self) -> &str {
         &self.id
     }
+
+    /// Splits the command into its handle and id so pull reconciliation
+    /// (T05) can re-key factory-built commands to desired keys. The
+    /// supervisor path is unaffected.
+    pub fn into_parts(self) -> (F::VmHandle, String) {
+        (self.handle, self.id)
+    }
 }
 
 pub enum Command<F: Factory> {

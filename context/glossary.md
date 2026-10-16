@@ -12,6 +12,11 @@
 ## Procurator-Specific Terms
 - **pcr**: Procurator CLI binary name
 - **VCS**: Version Control System - the git porcelain commands in `pcr vcs`
+- **Generation**: A monotonic number identifying one published desired state (commit + intent hash + VM specs); workers track the last generation they applied
+- **Heartbeat**: A worker's periodic `pushData` report (observed generation, running VMs, metrics) ingested by the control plane for liveness and convergence
+- **Convergence**: The state where every declared worker reports the active generation with a matching running set; reported as a percentage over declared workers
+- **Explicit placement**: v1 scheduling rule — every desired VM pins a target worker id; unknown targets are rejected, never silently dropped
+- **Desired state**: The control plane's per-generation VM assignments served to polling workers (vs observed state reported back via heartbeats)
 - **Project (pcr context)**: A multi-repo project managed by `pcr vcs project` commands
 - **Repo (pcr context)**: A single repository managed by `pcr vcs repo` commands
 - **Selective repos**: Using `--repos` flag to operate on specific submodules only

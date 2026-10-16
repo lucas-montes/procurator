@@ -34,5 +34,8 @@ serde.workspace = true
 serde_json.workspace = true
 jsonwebtoken = "9"
 
+[dev-dependencies]
+control_plane = { path = "../control_plane" }
+
 [lints]
 workspace = true
