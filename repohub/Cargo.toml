@@ -13,6 +13,7 @@ repo_outils.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
+toml = "0.8"
 
 [lints]
 workspace = true

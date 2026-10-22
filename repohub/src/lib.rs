@@ -1,4 +1,4 @@
-mod config;
+pub mod config;
 mod services;
 
 pub mod adapters;

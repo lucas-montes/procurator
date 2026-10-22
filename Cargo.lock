@@ -555,6 +555,7 @@ dependencies = [
  "sqlx",
  "tokio",
  "tokio-stream",
+ "toml",
  "tower-http",
  "tracing",
  "tracing-subscriber",
@@ -2295,6 +2296,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tokio",
+ "toml",
  "tracing",
  "tracing-subscriber",
 ]
