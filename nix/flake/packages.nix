@@ -69,4 +69,6 @@ in {
   ci_service = mkRustPackage "ci_service";
   worker = mkRustPackage "worker";
   cli = mkRustPackage "cli";
+  control_plane = mkRustPackage "control_plane";
+  repohub = mkRustPackage "repohub";
 }
