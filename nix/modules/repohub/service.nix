@@ -6,6 +6,15 @@
 }:
 with lib; let
   cfg = config.services.procurator.repohub;
+  tomlFormat = pkgs.formats.toml { };
+  # Why: single TOML file is the server's only config source (no env vars),
+  # mirroring `cache.nix`. Keys must match `repohub/src/config.rs`.
+  configFile = tomlFormat.generate "procurator-repohub.toml" {
+    database_url = cfg.databaseUrl;
+    bind_address = cfg.addr;
+    domain = cfg.domain;
+    repos_base_path = cfg.reposBasePath;
+  };
 in {
   options.services.procurator.repohub = {
     enable = mkEnableOption "Procurator Repohub git service";
@@ -21,13 +30,7 @@ in {
       type = types.str;
       default = "0.0.0.0:8083";
       example = "0.0.0.0:8083";
-      description = "Address and port for the repohub service to bind to.";
-    };
-
-    repositoriesDir = mkOption {
-      type = types.path;
-      default = "/var/lib/procurator-repohub/repos";
-      description = "Directory for storing git repositories.";
+      description = "Address and port for the repohub HTTP API to bind to.";
     };
 
     databaseUrl = mkOption {
@@ -37,11 +40,25 @@ in {
       description = "Database connection URL for the repohub service.";
     };
 
-    webhookUrl = mkOption {
-      type = types.nullOr types.str;
-      default = null;
-      example = "http://localhost:8082/webhook";
-      description = "URL to send webhook notifications (e.g., to CI service). If null, webhooks are disabled.";
+    domain = mkOption {
+      type = types.str;
+      default = "homelab";
+      description = ''
+        Domain used to render SSH URLs for repositories
+        (e.g. <user>@<domain>:<user>/<repo>.git).
+      '';
+    };
+
+    reposBasePath = mkOption {
+      type = types.str;
+      default = "/var/lib/git-server";
+      example = "/var/lib/git-server";
+      description = ''
+        Where bare git repositories are served from. Defaults to the
+        git-server root (services.procurator.gitServer.path). The service
+        user needs write access there to create repos (enabled automatically
+        when the local git server module is enabled).
+      '';
     };
 
     user = mkOption {
@@ -69,13 +86,17 @@ in {
       group = cfg.group;
       description = "Procurator repohub service user";
       home = "/var/lib/procurator-repohub";
+      # Why: the repository service creates/mutates bare repos under the
+      # git-server root, which is group-writable by `git`.
+      extraGroups = let
+        gitServerEnabled = config.services.procurator.gitServer.enable or false;
+      in (if gitServerEnabled then [ "git" ] else []);
     };
 
     users.groups.${cfg.group} = {};
 
     systemd.tmpfiles.rules = [
       "d /var/lib/procurator-repohub 0750 ${cfg.user} ${cfg.group} -"
-      "d ${cfg.repositoriesDir} 0750 ${cfg.user} ${cfg.group} -"
     ];
 
     systemd.services.procurator-repohub = {
@@ -83,21 +104,11 @@ in {
       wantedBy = ["multi-user.target"];
       after = ["network.target"];
 
-      environment =
-        {
-          REPOHUB_ADDR = cfg.addr;
-          REPOHUB_REPOS_DIR = cfg.repositoriesDir;
-          REPOHUB_DATABASE_URL = cfg.databaseUrl;
-        }
-        // optionalAttrs (cfg.webhookUrl != null) {
-          REPOHUB_WEBHOOK_URL = cfg.webhookUrl;
-        };
-
       serviceConfig = {
         Type = "simple";
         User = cfg.user;
         Group = cfg.group;
-        ExecStart = "${cfg.package}/bin/repohub ${concatStringsSep " " cfg.extraArgs}";
+        ExecStart = "${cfg.package}/bin/repohub --config ${configFile} ${concatStringsSep " " cfg.extraArgs}";
         Restart = "on-failure";
         RestartSec = "10s";
 
@@ -106,7 +117,7 @@ in {
         PrivateTmp = true;
         ProtectSystem = "strict";
         ProtectHome = true;
-        ReadWritePaths = ["/var/lib/procurator-repohub" cfg.repositoriesDir];
+        ReadWritePaths = ["/var/lib/procurator-repohub" cfg.reposBasePath];
         StateDirectory = "procurator-repohub";
       };
     };

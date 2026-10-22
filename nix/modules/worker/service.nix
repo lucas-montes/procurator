@@ -15,7 +15,7 @@ with lib; let
   # sync with the module options. We prefer the top-level directory name
   # under /run and /var/lib respectively.
   runtimeDirName =
-    let parts = builtins.splitString "/" cfg.vmRuntimeDir; in
+    let parts = splitString "/" cfg.vmRuntimeDir; in
     # parts = ["" "run" "procurator-worker" "vms" ...]
     builtins.elemAt parts 2;
 
@@ -60,9 +60,9 @@ in {
 
     package = mkOption {
       type = types.package;
-      default = pkgs.procurator;
-      defaultText = literalExpression "pkgs.procurator";
-      description = "The procurator package to use.";
+      default = pkgs.worker;
+      defaultText = literalExpression "pkgs.worker";
+      description = "The worker package to use.";
     };
 
     listenAddr = mkOption {
@@ -271,6 +271,25 @@ in {
         assertion = (cfg.master == null) || (builtins.hasAttr cfg.master clusterCfg);
         message = "services.procurator.worker: `master` is set but not found in `cluster.vms`.";
       }
+      {
+        # Why: the HS256 proxy secret ships in the world-readable config file
+        # under /nix/store; binding the proxy non-loopback with the default
+        # secret would let anyone mint fake VM proxy tokens.
+        # Parse host:port separately (builtins.match rejects escaped dots).
+        assertion =
+          let
+            host =
+              let m = builtins.match "(.*):([0-9]+)" cfg.proxyPublicListenAddr;
+              in if m == null then null else builtins.head m;
+          in
+          (host != null && (hasPrefix "127." host || host == "::1" || host == "[::1]"))
+          || cfg.proxyJwtHs256Secret != defaults.proxy.jwtHs256Secret;
+        message = ''
+          services.procurator.worker: proxyPublicListenAddr (${cfg.proxyPublicListenAddr})
+          is publicly exposed and proxyJwtHs256Secret is still the default.
+          Set a strong HS256 secret, or bind the proxy listener to loopback for testing.
+        '';
+      }
     ];
 
     users.users.${cfg.user} = {
@@ -302,7 +321,7 @@ in {
         # can open /dev/kvm and /dev/net/tun without root.
         SupplementaryGroups = [ "kvm" "netdev" ];
 
-        ExecStart = "${cfg.package}/bin/procurator ${configFile}";
+        ExecStart = "${cfg.package}/bin/worker ${configFile}";
         Restart = "on-failure";
         RestartSec = "10s";
 

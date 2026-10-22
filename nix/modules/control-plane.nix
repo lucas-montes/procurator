@@ -40,9 +40,9 @@ in {
 
     package = mkOption {
       type = types.package;
-      default = pkgs.procurator;
-      defaultText = literalExpression "pkgs.procurator";
-      description = "The procurator package to use.";
+      default = pkgs.control_plane;
+      defaultText = literalExpression "pkgs.control_plane";
+      description = "The control_plane package to use.";
     };
 
     hostname = mkOption {
@@ -99,7 +99,8 @@ in {
             description = "Worker id (matches the worker's worker_id).";
           };
           addr = mkOption {
-            type = types.str;
+            type = types.nullOr types.str;
+            default = null;
             example = "192.168.1.11:8080";
             description = "Informational worker address (unused in pull mode).";
           };
@@ -156,7 +157,7 @@ in {
         Type = "simple";
         User = cfg.user;
         Group = cfg.group;
-        ExecStart = "${cfg.package}/bin/procurator ${configFile}";
+        ExecStart = "${cfg.package}/bin/control_plane ${configFile}";
         Restart = "on-failure";
         RestartSec = "10s";
 

@@ -4,6 +4,17 @@ with lib;
 
 let
   cfg = config.services.procurator.ci;
+  tomlFormat = pkgs.formats.toml { };
+  # Why: single TOML file is the server's only config source (no env vars),
+  # mirroring `cache.nix`. Keys must match `ci_service/src/config.rs`.
+  configFile = tomlFormat.generate "procurator-ci.toml" {
+    database_url = cfg.databaseUrl;
+    bind_address = cfg.addr;
+    domain = cfg.domain;
+    repos_base_path = cfg.reposBasePath;
+    max_retries = cfg.maxRetries;
+    worker_poll_interval_ms = cfg.workerPollIntervalMillis;
+  };
 in {
   options.services.procurator.ci = {
     enable = mkEnableOption "Procurator CI/CD service";
@@ -19,7 +30,7 @@ in {
       type = types.str;
       default = "0.0.0.0:8082";
       example = "0.0.0.0:8082";
-      description = "Address and port for the CI service to bind to.";
+      description = "Address and port for the CI service HTTP API to bind to.";
     };
 
     databaseUrl = mkOption {
@@ -29,23 +40,33 @@ in {
       description = "Database connection URL for the CI service.";
     };
 
-    workDir = mkOption {
-      type = types.path;
-      default = "/var/lib/procurator-ci/builds";
-      description = "Working directory for build operations.";
+    domain = mkOption {
+      type = types.str;
+      default = "homelab";
+      description = "Domain used when rendering external links.";
     };
 
-    cacheUrl = mkOption {
-      type = types.nullOr types.str;
-      default = null;
-      example = "http://localhost:8081";
-      description = "URL of the binary cache service. If null, cache integration is disabled.";
+    reposBasePath = mkOption {
+      type = types.str;
+      default = "/var/lib/git-server";
+      example = "/var/lib/git-server";
+      description = ''
+        Where bare git repositories are served from (the git-server root, see
+        services.procurator.gitServer). Must exist and be readable by the
+        service user.
+      '';
     };
 
-    maxConcurrentBuilds = mkOption {
+    maxRetries = mkOption {
       type = types.int;
-      default = 4;
-      description = "Maximum number of concurrent build jobs.";
+      default = 3;
+      description = "Retry budget for failed build jobs.";
+    };
+
+    workerPollIntervalMillis = mkOption {
+      type = types.ints.positive;
+      default = 1000;
+      description = "Delay between internal build-queue polls, in milliseconds.";
     };
 
     user = mkOption {
@@ -79,7 +100,6 @@ in {
 
     systemd.tmpfiles.rules = [
       "d /var/lib/procurator-ci 0750 ${cfg.user} ${cfg.group} -"
-      "d ${cfg.workDir} 0750 ${cfg.user} ${cfg.group} -"
     ];
 
     systemd.services.procurator-ci = {
@@ -87,29 +107,21 @@ in {
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" ];
 
-      environment = {
-        CI_ADDR = cfg.addr;
-        CI_DATABASE_URL = cfg.databaseUrl;
-        CI_WORK_DIR = cfg.workDir;
-        CI_MAX_CONCURRENT_BUILDS = toString cfg.maxConcurrentBuilds;
-      } // optionalAttrs (cfg.cacheUrl != null) {
-        CI_CACHE_URL = cfg.cacheUrl;
-      };
-
       serviceConfig = {
         Type = "simple";
         User = cfg.user;
         Group = cfg.group;
-        ExecStart = "${cfg.package}/bin/ci_service ${concatStringsSep " " cfg.extraArgs}";
+        ExecStart = "${cfg.package}/bin/ci_service --config ${configFile} ${concatStringsSep " " cfg.extraArgs}";
         Restart = "on-failure";
         RestartSec = "10s";
 
-        # Security hardening
+        # Why: CI writes only its DB/state dir. The repos root is read-only
+        # (git-server owns it); protect everything else.
         NoNewPrivileges = true;
         PrivateTmp = true;
         ProtectSystem = "strict";
         ProtectHome = true;
-        ReadWritePaths = [ "/var/lib/procurator-ci" cfg.workDir ];
+        ReadWritePaths = [ "/var/lib/procurator-ci" ];
         StateDirectory = "procurator-ci";
       };
     };

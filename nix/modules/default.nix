@@ -15,6 +15,12 @@ in {
       description = "System user for procurator services";
     };
 
+    systemGroup = mkOption {
+      type = types.str;
+      default = "procurator";
+      description = "Primary group of the procurator service user";
+    };
+
     extraPackages = mkOption {
       type = types.listOf types.package;
       default = [];
@@ -37,11 +43,14 @@ in {
     # create service user and data dir used by submodules
     users.users."${cfg.systemUser}" = {
       isSystemUser = true;
+      group = cfg.systemGroup;
       createHome = false;
       description = "procurator service account";
       extraGroups = [ "network" ];
       shell = pkgs.runtimeShell;
     };
+
+    users.groups.${cfg.systemGroup} = {};
 
     environment.systemPackages = cfg.extraPackages;
 
