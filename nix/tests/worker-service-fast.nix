@@ -7,18 +7,18 @@
 #   4. Missing master/masterAddr fails assertions
 #
 # Run:
-#   nix eval --json -f ./nix/tests/worker-service-fast.nix
+#   nix eval --raw -f ./nix/tests/worker-service-fast.nix --apply "f: f {}"
 #
 # Returns true on success, throws on failure. Needs a nixpkgs on NIX_PATH
 # (only its pure `lib` is imported; no packages are evaluated or built).
 
+{ lib ? (import <nixpkgs/lib>), system ? "x86_64-linux" }:
 let
-  lib = import <nixpkgs/lib>;
 
   # Minimal pkgs stub: only what service.nix touches at eval time. writeText
   # returns the text itself so tests can parse the generated JSON; package
-  # paths stay inert strings (nothing is built). `procurator` is a fake
-  # inert derivation purely to satisfy `types.package` (never built: only its
+  # paths stay inert strings (nothing is built). `worker` is a fake inert
+  # derivation purely to satisfy `types.package` (never built: only its
   # out path is interpolated).
   pkgsStub = {
     writeText = _name: text: text;
@@ -26,11 +26,13 @@ let
     runtimeShell = "/bin/sh";
     coreutils = "/bin";
     cloud-hypervisor = "/bin";
-    procurator = derivation {
-      name = "procurator-stub";
+    worker = derivation {
+      name = "worker-stub";
       builder = "/bin/sh";
       args = [ "-c" ":" ];
-      system = builtins.currentSystem;
+      # builtins.currentSystem is forbidden by `nix flake check`; the stub
+      # is never built so a static system string is enough.
+      inherit system;
     };
     runtimeShellPackage = "/bin";
   };
@@ -85,7 +87,7 @@ let
   workerJson = evalResult:
     let
       execStart = evalResult.config.systemd.services.procurator-worker.serviceConfig.ExecStart;
-      prefix = "${pkgsStub.procurator}/bin/procurator ";
+      prefix = "${pkgsStub.worker}/bin/worker ";
       json = builtins.substring
         (builtins.stringLength prefix)
         (builtins.stringLength execStart)
@@ -107,6 +109,8 @@ let
       (!(builtins.tryEval expr).success);
 
   # ── 1. Explicit workerId/masterAddr/intervals reach the JSON ─────────
+  # The proxy listener is non-loopback by default, so a non-default JWT
+  # secret is required (assertion in service.nix).
   explicit = evalWorker
     {
       enable = true;
@@ -115,6 +119,7 @@ let
       masterAddr = "192.168.1.10:5000";
       pollIntervalMillis = 2500;
       heartbeatIntervalMillis = 7000;
+      proxyJwtHs256Secret = "test-secret-explicit";
     }
     { };
   explicitJson = workerJson explicit;
@@ -133,6 +138,7 @@ let
       enable = true;
       workerId = "worker-1";
       master = "control-plane-1";
+      proxyJwtHs256Secret = "test-secret-clustered";
     }
     {
       control-plane-1 = {
@@ -173,5 +179,28 @@ let
       }
       { }));
 
+  # ── 5. Default JWT secret rejected on public proxy bind ─────────────
+  defaultSecretPublic = assertThrows "default JWT secret on public bind"
+    (checkAssertions (evalWorker
+      {
+        enable = true;
+        workerId = "w1";
+        masterAddr = "192.168.1.10:5000";
+      }
+      { }));
+
+  # ── 6. Default JWT secret allowed on loopback proxy bind ────────────
+  loopbackOk = evalWorker
+    {
+      enable = true;
+      workerId = "w1";
+      masterAddr = "192.168.1.10:5000";
+      proxyPublicListenAddr = "127.0.0.1:8443";
+    }
+    { };
+  loopbackCheck = assert' "loopback proxy with default secret passes assertions"
+    (checkAssertions loopbackOk);
+
 in
 explicitFields && clusterRef && missingWorkerId && missingMaster
+&& defaultSecretPublic && loopbackCheck

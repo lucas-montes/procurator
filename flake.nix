@@ -11,6 +11,7 @@
 
   outputs =
     {
+      self,
       nixpkgs,
       rust-overlay,
       flake-utils,
@@ -18,7 +19,17 @@
       sce,
       ...
     }:
-    flake-utils.lib.eachDefaultSystem (
+    {
+      # Adds pkgs.cache, pkgs.ci_service, pkgs.worker, pkgs.cli,
+      # pkgs.control_plane and pkgs.repohub to a consumer's pkgs set so the
+      # NixOS modules' package defaults resolve out of the box.
+      overlays.default = final: _: import ./nix/flake/overlay.nix {
+        pkgs = final;
+        src = self;
+        inherit naersk;
+      };
+    }
+    // flake-utils.lib.eachDefaultSystem (
       system:
       let
         overlays = [ (import rust-overlay) ];
@@ -26,23 +37,9 @@
           inherit system overlays;
         };
 
-        workspaceRoot = pkgs.lib.cleanSourceWith {
+        workspaceRoot = import ./nix/flake/workspaceRoot.nix {
+          inherit pkgs;
           src = ./.;
-          filter =
-            path: _type:
-            let
-              root = toString ./.;
-              pathStr = toString path;
-              relPath = pkgs.lib.removePrefix "${root}/" pathStr;
-            in
-            !(
-              pkgs.lib.hasPrefix ".git/" relPath
-              || pkgs.lib.hasPrefix "target/" relPath
-              || pkgs.lib.hasPrefix ".direnv/" relPath
-              || pkgs.lib.hasPrefix "result/" relPath
-              || relPath == "result"
-              || pkgs.lib.hasPrefix "tmp/" relPath
-            );
         };
 
         rust-bin-custom = pkgs.rust-bin.stable.latest.default.override {
@@ -78,29 +75,69 @@
           sce = sce.packages.${system}.default;
         };
 
-        checks = {
-          rust-lints = pkgs.stdenv.mkDerivation {
-            name = "procurator-rust-lints";
-            src = workspaceRoot;
+        checks =
+          let
+            # Pure-eval module tests (see nix/tests/*-fast.nix): force the
+            # evaluation inside a check derivation, no builds, no VM.
+            fastTest = name: file:
+              pkgs.runCommand name {
+                result = toString (
+                  import file { lib = pkgs.lib; }
+                );
+              } "touch $out";
+          in
+          let
+            # Pure NixOS eval: all five services composed into one real
+            # system. Proves the modules wire their units/users/configs
+            # under real option semantics (no build, no VM).
+            services-system-eval =
+              let
+                overlaidPkgs = pkgs.extend (
+                  final: _: import ./nix/flake/overlay.nix {
+                    pkgs = final;
+                    src = ./.;
+                    inherit naersk;
+                  }
+                );
+              in
+              pkgs.runCommand "nixos-services-eval" {
+                result = import ./nix/tests/services-system-eval.nix {
+                  lib = nixpkgs.lib;
+                  pkgs = overlaidPkgs;
+                };
+              } "touch $out";
 
-            nativeBuildInputs = [
-              pkgs.rustPackages.cargo
-              pkgs.rustPackages.rustfmt
-              pkgs.rustPackages.clippy
-            ];
+            rust-lints = pkgs.stdenv.mkDerivation {
+              name = "procurator-rust-lints";
+              src = workspaceRoot;
 
-            buildPhase = ''
-              cd "$src"
-              cargo fmt --all -- --check
-              cargo clippy --all-targets --all-features -- -D warnings
-            '';
+              nativeBuildInputs = [
+                pkgs.rustPackages.cargo
+                pkgs.rustPackages.rustfmt
+                pkgs.rustPackages.clippy
+              ];
 
-            installPhase = ''
-              mkdir -p "$out"
-              touch "$out"/.ok
-            '';
+              buildPhase = ''
+                cd "$src"
+                cargo fmt --all -- --check
+                cargo clippy --all-targets --all-features -- -D warnings
+              '';
+
+              installPhase = ''
+                mkdir -p "$out"
+                touch "$out"/.ok
+              '';
+            };
+          in
+          {
+            inherit rust-lints services-system-eval;
+
+            nixos-worker-fast = fastTest "nixos-worker-fast" ./nix/tests/worker-service-fast.nix;
+            nixos-cache-fast = fastTest "nixos-cache-fast" ./nix/tests/cache-fast.nix;
+            nixos-ci-service-fast = fastTest "nixos-ci-service-fast" ./nix/tests/ci-service-fast.nix;
+            nixos-repohub-fast = fastTest "nixos-repohub-fast" ./nix/tests/repohub-fast.nix;
+            nixos-control-plane-fast = fastTest "nixos-control-plane-fast" ./nix/tests/control-plane-fast.nix;
           };
-        };
       }
     );
 }

@@ -33,7 +33,9 @@ let
     drv: description:
     (flake-utils.lib.mkApp { inherit drv; })
     // {
-      inherit description;
+      # nix ≥2.32 accepts `meta` on apps; a bare `description` attribute
+      # makes `nix flake check` fail.
+      meta = { inherit description; };
     };
 
   # Mints a HS256 JWT bound to `$VM_ID` and a secret read from
