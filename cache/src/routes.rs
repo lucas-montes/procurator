@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio_util::io::ReaderStream;
 
 use crate::config::Config;
@@ -58,6 +59,7 @@ where
         .route("/log/{*path}", get(get_log::<S>))
         // Why: labels loopback peers for the bypass; skips when mTLS already did.
         .layer(middleware::from_fn(peer_loopback_mw))
+        .layer(middleware::from_fn(trace_request))
         .with_state(state)
 }
 
@@ -81,21 +83,134 @@ fn peer_of(peer: Option<Extension<PeerIdentity>>) -> PeerIdentity {
     peer.map_or_else(PeerIdentity::anonymous, |Extension(p)| p)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RequestTrace {
+    request_id: String,
+    method: String,
+    path: String,
+    peer_cn: Option<String>,
+    peer_fingerprint: Option<String>,
+    verified: bool,
+    loopback: bool,
+}
+
+fn request_id<B>(req: &Request<B>) -> String {
+    req.headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| !v.trim().is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| uuid::Uuid::now_v7().simple().to_string())
+}
+
+fn request_trace<B>(req: &Request<B>) -> RequestTrace {
+    let peer = req
+        .extensions()
+        .get::<PeerIdentity>()
+        .cloned()
+        .unwrap_or_else(PeerIdentity::anonymous);
+    let peer_fingerprint = (!peer.fingerprint_hex.is_empty()).then(|| peer.fingerprint_hex.clone());
+    let request_id = req
+        .extensions()
+        .get::<String>()
+        .cloned()
+        .unwrap_or_else(|| request_id(req));
+    RequestTrace {
+        request_id,
+        method: req.method().to_string(),
+        path: req.uri().path().to_string(),
+        peer_cn: peer.common_name.clone(),
+        peer_fingerprint,
+        verified: peer.verified,
+        loopback: peer.is_loopback,
+    }
+}
+
+async fn trace_request(mut req: Request, next: Next) -> Response {
+    let request_id = request_id(&req);
+    req.extensions_mut().insert(request_id.clone());
+    let trace = request_trace(&req);
+    let start = Instant::now();
+    let request_size = req
+        .headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
+    let response = next.run(req).await;
+    let elapsed_ms = start.elapsed().as_millis() as u64;
+    let status = response.status();
+    let response_size = response
+        .headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
+    tracing::info!(
+        request_id = %trace.request_id,
+        method = %trace.method,
+        path = %trace.path,
+        status = %status,
+        elapsed_ms,
+        request_bytes = request_size,
+        response_bytes = response_size,
+        peer_cn = trace.peer_cn.as_deref(),
+        peer_fp = trace.peer_fingerprint.as_deref(),
+        verified = trace.verified,
+        loopback = trace.loopback,
+        "request completed"
+    );
+    response
+}
+
 /// Writes need a verified client unless open; loopback bypass covers co-located CI.
 /// Why: open PUT on a public bind is refused at startup, so open here is safe.
 fn require_writer(config: &Config, peer: &PeerIdentity) -> Result<(), StatusCode> {
     if config.writes_open() {
+        tracing::debug!(
+            peer_cn = peer.common_name.as_deref(),
+            verified = peer.verified,
+            loopback = peer.is_loopback,
+            "write auth allowed: public writes enabled"
+        );
         return Ok(());
     }
     if config.access.loopback_bypass && peer.is_loopback {
+        tracing::debug!(
+            peer_cn = peer.common_name.as_deref(),
+            verified = peer.verified,
+            loopback = peer.is_loopback,
+            "write auth allowed: loopback bypass"
+        );
         return Ok(());
     }
     if !peer.verified {
+        tracing::warn!(
+            peer_cn = peer.common_name.as_deref(),
+            verified = peer.verified,
+            loopback = peer.is_loopback,
+            "write auth denied: peer not verified"
+        );
         return Err(StatusCode::UNAUTHORIZED);
     }
     if peer.matches_allowlist(&config.tls.writer_allowlist) {
+        tracing::debug!(
+            peer_cn = peer.common_name.as_deref(),
+            peer_fp = peer.fingerprint_hex.as_str(),
+            verified = peer.verified,
+            loopback = peer.is_loopback,
+            "write auth allowed: allowlist match"
+        );
         Ok(())
     } else {
+        tracing::warn!(
+            peer_cn = peer.common_name.as_deref(),
+            peer_fp = peer.fingerprint_hex.as_str(),
+            verified = peer.verified,
+            loopback = peer.is_loopback,
+            allowed = ?config.tls.writer_allowlist,
+            "write auth denied: no allowlist match"
+        );
         Err(StatusCode::FORBIDDEN)
     }
 }
@@ -103,14 +218,39 @@ fn require_writer(config: &Config, peer: &PeerIdentity) -> Result<(), StatusCode
 /// Reads need a verified client only in private mode; loopback bypass applies too.
 fn require_reader(config: &Config, peer: &PeerIdentity) -> Result<(), StatusCode> {
     if !config.access.reads_require_auth {
+        tracing::debug!(
+            peer_cn = peer.common_name.as_deref(),
+            verified = peer.verified,
+            loopback = peer.is_loopback,
+            "read auth allowed: public reads"
+        );
         return Ok(());
     }
     if config.access.loopback_bypass && peer.is_loopback {
+        tracing::debug!(
+            peer_cn = peer.common_name.as_deref(),
+            verified = peer.verified,
+            loopback = peer.is_loopback,
+            "read auth allowed: loopback bypass"
+        );
         return Ok(());
     }
     if peer.verified {
+        tracing::debug!(
+            peer_cn = peer.common_name.as_deref(),
+            peer_fp = peer.fingerprint_hex.as_str(),
+            verified = peer.verified,
+            loopback = peer.is_loopback,
+            "read auth allowed: verified client"
+        );
         return Ok(());
     }
+    tracing::warn!(
+        peer_cn = peer.common_name.as_deref(),
+        verified = peer.verified,
+        loopback = peer.is_loopback,
+        "read auth denied: client not verified"
+    );
     Err(StatusCode::UNAUTHORIZED)
 }
 
@@ -118,6 +258,7 @@ async fn nix_cache_info<S>(State(state): State<AppState<S>>) -> impl IntoRespons
 where
     S: StorageBackend + Send + Sync,
 {
+    tracing::info!(route = "/nix-cache-info", store_dir = %state.config.store_dir, priority = %state.config.priority, "serving nix-cache-info");
     // Why: `WantMassQuery: 1` is true — we implement `POST /` mass-query below.
     let body = format!(
         "StoreDir: {}\nWantMassQuery: 1\nPriority: {}\n",
@@ -135,10 +276,17 @@ where
     S: StorageBackend + Send + Sync,
     S::Error: std::fmt::Display + Send + Sync,
 {
+    tracing::info!(route = "/healthz", "health check");
     let usage = state.store.usage_bytes().await.map_err(|e| e.to_string());
     match usage {
-        Ok(used) => format!("ok usage_bytes={used}").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        Ok(used) => {
+            tracing::info!(usage_bytes = used, "cache health ok");
+            format!("ok usage_bytes={used}").into_response()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "cache health failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, e).into_response()
+        }
     }
 }
 
@@ -157,6 +305,14 @@ where
     require_reader(&state.config, &peer)?;
     let hash = hash.strip_suffix(".narinfo").unwrap_or(&hash);
     validate_hash(hash).map_err(|_| StatusCode::BAD_REQUEST)?;
+    tracing::info!(
+        route = "/{narinfo}",
+        hash = %hash,
+        peer_cn = peer.common_name.as_deref(),
+        peer_fp = peer.fingerprint_hex.as_str(),
+        verified = peer.verified,
+        "fetching narinfo"
+    );
     let body = narinfo_for_hash(&state, hash).await?;
     Ok(narinfo_response(&body))
 }
@@ -250,6 +406,14 @@ where
     require_writer(&state.config, &peer)?;
     let hash = hash.strip_suffix(".narinfo").unwrap_or(&hash);
     check_hash(hash).map_err(|_| StatusCode::BAD_REQUEST)?;
+    tracing::info!(
+        route = "/{narinfo}",
+        hash = %hash,
+        body_len = body.len(),
+        peer_cn = peer.common_name.as_deref(),
+        peer_fp = peer.fingerprint_hex.as_str(),
+        "uploading narinfo"
+    );
     if body.len() > 1_048_576 {
         return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
@@ -297,6 +461,7 @@ where
 {
     let peer = peer_of(peer);
     require_reader(&state.config, &peer)?;
+    tracing::info!(route = "/nar/{file}", file = %file, peer_cn = peer.common_name.as_deref(), "fetching nar");
     if let Ok(Some((size, path))) = state.store.get_nar(&file).await {
         // Why: uploaded NARs stream from disk; no Nix subprocess needed.
         let stream = tokio::fs::File::open(&path)
@@ -356,6 +521,7 @@ where
 {
     let peer = peer_of(peer);
     require_writer(&state.config, &peer)?;
+    tracing::info!(route = "/nar/{file}", file = %file, body_len = body.len(), peer_cn = peer.common_name.as_deref(), "uploading nar");
     if body.len() > 2_147_483_648 {
         return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
@@ -387,6 +553,7 @@ where
     let peer = peer_of(peer);
     require_reader(&state.config, &peer)?;
     let _ = query;
+    tracing::info!(route = "/mass-query", peer_cn = peer.common_name.as_deref(), body_len = body.len(), "mass query start");
     // Why: accept both `{"storePaths":[...]}` and `{"paths":[...]}` shapes.
     let json: serde_json::Value =
         serde_json::from_str(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -432,6 +599,7 @@ where
 {
     let peer = peer_of(peer);
     require_reader(&state.config, &peer)?;
+    tracing::info!(route = "/log/{path}", store_path = %path, peer_cn = peer.common_name.as_deref(), "fetching nix log");
     // Why: build logs help CI debugging; streams `nix log` output.
     let store_path = format!("{}/{}", state.config.store_dir, path);
     let mut child = tokio::process::Command::new("nix")

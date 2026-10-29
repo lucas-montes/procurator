@@ -65,8 +65,15 @@ fn config_path() -> Result<PathBuf, MainError> {
 #[tokio::main]
 async fn main() -> Result<(), MainError> {
     tracing_subscriber::fmt()
+        // .json()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
         .with_target(false)
+        // .with_current_span(false)
         .with_level(true)
+        // .without_time()
         .init();
     let path = match config_path() {
         // Why: usage errors exit 2 with a one-line message, not a Debug dump.

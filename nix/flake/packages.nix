@@ -1,10 +1,9 @@
 {
   pkgs,
   workspaceRoot,
-  naersk ? null,
-}:
-let
-  naerskLib = if naersk != null then pkgs.callPackage naersk {} else null;
+  naersk,
+}: let
+  naerskLib = pkgs.callPackage naersk {};
 
   mkRustPackage = cargoDir: let
     cargoPath = "${workspaceRoot}/${cargoDir}/Cargo.toml";
@@ -12,58 +11,32 @@ let
     pname = cargoToml.package.name;
     inherit (cargoToml.package) version;
   in
-    if naerskLib != null then
-      naerskLib.buildPackage {
-        inherit pname version;
-        src = workspaceRoot;
+    naerskLib.buildPackage {
+      inherit pname version;
+      src = workspaceRoot;
 
-        cargoBuildOptions = opts:
-          opts
-          ++ [
-            "-p"
-            pname
-          ];
-
-        cargoTestOptions = opts:
-          opts
-          ++ [
-            "-p"
-            pname
-          ];
-
-        nativeBuildInputs = [
-          pkgs.pkg-config
-          pkgs.capnproto
-        ];
-
-        buildInputs = [pkgs.openssl];
-        doCheck = false;
-      }
-    else
-      pkgs.rustPlatform.buildRustPackage {
-        inherit pname version;
-        src = workspaceRoot;
-
-        cargoLock = {
-          lockFile = "${workspaceRoot}/Cargo.lock";
-        };
-
-        cargoBuildFlags = [
-          "-p"
-          pname
-        ];
-        cargoInstallFlags = [
+      cargoBuildOptions = opts:
+        opts
+        ++ [
           "-p"
           pname
         ];
 
-        nativeBuildInputs = [
-          pkgs.pkg-config
-          pkgs.capnproto
+      cargoTestOptions = opts:
+        opts
+        ++ [
+          "-p"
+          pname
         ];
-        buildInputs = [pkgs.openssl];
-        doCheck = false;
-      };
+
+      nativeBuildInputs = [
+        pkgs.pkg-config
+        pkgs.capnproto
+      ];
+
+      buildInputs = [pkgs.openssl];
+      doCheck = false;
+    };
 in {
   cache = mkRustPackage "cache";
   ci_service = mkRustPackage "ci_service";
