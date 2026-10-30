@@ -1,19 +1,19 @@
 {
   "total_steps": 128,
   "started_at": {
-    "secs_since_epoch": 1767425355,
-    "nanos_since_epoch": 573718647
+    "secs_since_epoch": 1793392723,
+    "nanos_since_epoch": 722861171
   },
   "completed_at": {
-    "secs_since_epoch": 1767425355,
-    "nanos_since_epoch": 578052170
+    "secs_since_epoch": 1793392723,
+    "nanos_since_epoch": 724927544
   },
   "timeline": [
     {
       "text": "checking derivation packages.x86_64-linux.default",
       "duration": {
         "secs": 0,
-        "nanos": 2784939
+        "nanos": 1219239
       },
       "children": []
     },
@@ -21,7 +21,7 @@
       "text": "checking derivation packages.x86_64-linux.helper",
       "duration": {
         "secs": 0,
-        "nanos": 27608
+        "nanos": 12583
       },
       "children": []
     },
@@ -29,7 +29,7 @@
       "text": "checking flake output 'packages'",
       "duration": {
         "secs": 0,
-        "nanos": 2840714
+        "nanos": 1249305
       },
       "children": []
     },
@@ -37,7 +37,7 @@
       "text": "checking derivation checks.x86_64-linux.basic-test",
       "duration": {
         "secs": 0,
-        "nanos": 29125
+        "nanos": 11661
       },
       "children": []
     },
@@ -45,7 +45,7 @@
       "text": "checking derivation checks.x86_64-linux.format-check",
       "duration": {
         "secs": 0,
-        "nanos": 31847
+        "nanos": 11822
       },
       "children": []
     },
@@ -53,7 +53,7 @@
       "text": "checking derivation checks.x86_64-linux.slow-test",
       "duration": {
         "secs": 0,
-        "nanos": 27624
+        "nanos": 11822
       },
       "children": []
     },
@@ -61,7 +61,7 @@
       "text": "checking flake output 'checks'",
       "duration": {
         "secs": 0,
-        "nanos": 131658
+        "nanos": 52227
       },
       "children": []
     },
@@ -69,7 +69,7 @@
       "text": "checking app 'apps.x86_64-linux.default'",
       "duration": {
         "secs": 0,
-        "nanos": 52022
+        "nanos": 24726
       },
       "children": []
     },
@@ -77,7 +77,7 @@
       "text": "checking flake output 'apps'",
       "duration": {
         "secs": 0,
-        "nanos": 75892
+        "nanos": 35065
       },
       "children": []
     },
@@ -85,7 +85,7 @@
       "text": "checking derivation devShells.x86_64-linux.default",
       "duration": {
         "secs": 0,
-        "nanos": 321946
+        "nanos": 120966
       },
       "children": []
     },
@@ -93,7 +93,7 @@
       "text": "checking flake output 'devShells'",
       "duration": {
         "secs": 0,
-        "nanos": 351450
+        "nanos": 131516
       },
       "children": []
     },
@@ -101,7 +101,7 @@
       "text": "evaluating flake",
       "duration": {
         "secs": 0,
-        "nanos": 3476068
+        "nanos": 1513399
       },
       "children": []
     },
@@ -109,7 +109,7 @@
       "text": "running 3 flake checks",
       "duration": {
         "secs": 0,
-        "nanos": 334664
+        "nanos": 229719
       },
       "children": []
     }

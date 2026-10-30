@@ -1,0 +1,7 @@
+# Local dev config for running ci_service from `pcr stack start`
+database_url = "sqlite:///tmp/procurator-ci.db"
+bind_address = "127.0.0.1:8082"
+domain = "localhost"
+repos_base_path = "/tmp/procurator-git"
+max_retries = 3
+worker_poll_interval_ms = 1000

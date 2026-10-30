@@ -3,134 +3,425 @@ import type { Hooks, Plugin } from "@opencode-ai/plugin";
 
 type OpenCodeEvent = Parameters<NonNullable<Hooks["event"]>>[0]["event"];
 
-const REQUIRED_EVENTS = new Set(["session.diff"]);
+const SCE_INSTALL_URL =
+	"https://sce.crocoder.dev/docs/getting-started#install-cli";
+const TOOL_NAME = "opencode" as const;
+
+const REQUIRED_EVENTS: Set<OpenCodeEvent["type"]> = new Set([
+	"message.updated",
+	"message.part.updated",
+	"session.created",
+	"session.updated",
+]);
 
 const ALL_CAPTURED_EVENTS = REQUIRED_EVENTS;
 
 type TraceInput = {
-  event?: OpenCodeEvent;
+	event?: OpenCodeEvent;
 };
 
 type DiffTracePayload = {
-  sessionID: string;
-  diff: string;
-  time: number;
+	sessionID: string;
+	diff: string;
+	time: number;
+	model_id: string;
 };
 
+type ConversationTraceMessageUpdatedItem = {
+	type: "message";
+	session_id: string;
+	message_id: string;
+	role: EventMessageUpdated["properties"]["info"]["role"];
+	generated_at_unix_ms: number;
+};
+
+type ConversationTraceMessagePartUpdatedItem = {
+	type: "message.part";
+	session_id: string;
+	message_id: string;
+	part_type: "text" | "reasoning" | "patch" | "question";
+	text: unknown;
+	generated_at_unix_ms: number;
+};
+
+type ConversationTraceItem =
+	| ConversationTraceMessageUpdatedItem
+	| ConversationTraceMessagePartUpdatedItem;
+
+type ConversationTracePayload = {
+	tool_name: typeof TOOL_NAME;
+	payloads: ConversationTraceItem[];
+};
+
+type QuestionToolAnswer = {
+	question: string;
+	answer: string;
+};
+
+const QUESTION_TOOL_ANSWER_SEPARATOR = ", ";
+
+type EventMessageUpdated = Extract<
+	NonNullable<TraceInput["event"]>,
+	{ type: "message.updated" }
+>;
+
+type EventMessagePartUpdated = Extract<
+	NonNullable<TraceInput["event"]>,
+	{ type: "message.part.updated" }
+>;
+
+type EventMessagePart = EventMessagePartUpdated["properties"]["part"];
+type EventMessageToolPart = Extract<EventMessagePart, { type: "tool" }>;
+type EventAllowedPart =
+	| Extract<EventMessagePart, { type: "text" }>
+	| Extract<EventMessagePart, { type: "reasoning" }>;
+
+function extractDiffEntries(
+	eventInfo: EventMessageUpdated["properties"]["info"],
+) {
+	if (typeof eventInfo.summary === "object") {
+		return eventInfo.summary.diffs;
+	}
+	return undefined;
+}
+
 function extractDiffTracePayload(
-  input: TraceInput,
+	event: EventMessageUpdated,
 ): DiffTracePayload | undefined {
-  const event = input.event;
-  if (event === undefined || event.type !== "session.diff") {
-    return undefined;
-  }
+	const eventInfo = event.properties.info;
+	// Only capture user messages (filter out assistant, system, etc.)
+	if (eventInfo.role !== "user") {
+		return undefined;
+	}
 
-  const properties = event.properties;
-  if (typeof properties !== "object" || properties === null) {
-    return undefined;
-  }
+	const diffEntries = extractDiffEntries(eventInfo);
 
-  const propertiesObj = properties as Record<string, unknown>;
+	if (!diffEntries || diffEntries.length === 0) {
+		return undefined;
+	}
 
-  const sessionID =
-    typeof propertiesObj.sessionID === "string" &&
-    propertiesObj.sessionID.trim().length > 0
-      ? propertiesObj.sessionID
-      : "unknown";
+	const patches: string[] = [];
+	for (const entry of diffEntries) {
+		if ("patch" in entry && typeof entry.patch === "string") {
+			patches.push(entry.patch);
+		}
+	}
 
-  const diffEntries = propertiesObj.diff;
-  if (!Array.isArray(diffEntries) || diffEntries.length === 0) {
-    return undefined;
-  }
+	if (patches.length === 0) {
+		return undefined;
+	}
 
-  const patches: string[] = [];
-  for (const entry of diffEntries) {
-    if (typeof entry !== "object" || entry === null) {
-      continue;
-    }
-    const entryObj = entry as Record<string, unknown>;
-    const patch =
-      typeof entryObj.patch === "string"
-        ? entryObj.patch
-        : typeof entryObj.diff === "string"
-          ? entryObj.diff
-          : undefined;
-    if (patch !== undefined && patch.trim().length > 0) {
-      patches.push(patch);
-    }
-  }
-
-  if (patches.length === 0) {
-    return undefined;
-  }
-
-  return {
-    sessionID,
-    diff: patches.join("\n"),
-    time: Date.now(),
-  };
+	return {
+		sessionID: eventInfo.sessionID,
+		diff: patches.join("\n"),
+		time: Date.now(),
+		model_id: `${eventInfo.model.providerID}/${eventInfo.model.modelID}`,
+	};
 }
 
-function shouldCaptureEvent(eventType: string): boolean {
-  return ALL_CAPTURED_EVENTS.has(eventType);
+function shouldCaptureEvent(eventType: OpenCodeEvent["type"]): boolean {
+	return ALL_CAPTURED_EVENTS.has(eventType);
 }
 
-async function buildTrace(repoRoot: string, input: TraceInput): Promise<void> {
-  const diffTracePayload = extractDiffTracePayload(input);
+function extractQuestionToolAnswers(
+	eventPart: EventMessageToolPart,
+): QuestionToolAnswer[] | undefined {
+	const state = eventPart.state;
 
-  if (diffTracePayload === undefined) {
-    return;
-  }
+	if (state.status !== "completed") {
+		return undefined;
+	}
 
-  await runDiffTraceHook(repoRoot, diffTracePayload);
+	const questions =
+		"questions" in state.input && Array.isArray(state.input.questions)
+			? state.input.questions
+			: [];
+	const answers =
+		"answers" in state.metadata && Array.isArray(state.metadata.answers)
+			? state.metadata.answers
+			: [];
+
+	if (questions.length === 0 || questions.length !== answers.length) {
+		return undefined;
+	}
+
+	const result: QuestionToolAnswer[] = [];
+
+	questions.forEach((q, index) => {
+		const question =
+			"question" in q && typeof q.question === "string" ? q.question : "";
+		if (question) {
+			const answer = Array.isArray(answers[index]) ? answers[index] : [];
+			result.push({
+				question,
+				answer: answer.join(QUESTION_TOOL_ANSWER_SEPARATOR),
+			});
+		}
+	});
+
+	return result;
+}
+
+function buildConversationTracePayload(
+	event: EventMessageUpdated,
+): ConversationTracePayload {
+	const eventInfo = event.properties.info;
+
+	return {
+		tool_name: TOOL_NAME,
+		payloads: [
+			{
+				type: "message",
+				session_id: eventInfo.sessionID,
+				message_id: eventInfo.id,
+				role: eventInfo.role,
+				generated_at_unix_ms: Date.now(),
+			},
+		],
+	};
+}
+
+export function buildMessagePartConversationTracePayload(
+	eventPart: EventAllowedPart,
+): ConversationTracePayload {
+	return {
+		tool_name: TOOL_NAME,
+		payloads: [
+			{
+				type: "message.part",
+				session_id: eventPart.sessionID,
+				message_id: eventPart.messageID,
+				part_type: eventPart.type,
+				text: "text" in eventPart ? eventPart.text : "",
+				generated_at_unix_ms: Date.now(),
+			},
+		],
+	};
+}
+
+function buildQuestionToolConversationTracePayload(
+	eventPart: EventMessageToolPart,
+): ConversationTracePayload | undefined {
+	const pairedAnswers = extractQuestionToolAnswers(eventPart);
+
+	if (pairedAnswers === undefined) {
+		return undefined;
+	}
+
+	return {
+		tool_name: TOOL_NAME,
+		payloads: [
+			{
+				type: "message.part",
+				session_id: eventPart.sessionID,
+				message_id: eventPart.messageID,
+				part_type: "question",
+				text: JSON.stringify(pairedAnswers),
+				generated_at_unix_ms: Date.now(),
+			},
+		],
+	};
+}
+
+function buildPatchConversationTracePayload(
+	event: EventMessageUpdated,
+): ConversationTracePayload | undefined {
+	const eventInfo = event.properties.info;
+	const diffEntries = extractDiffEntries(eventInfo);
+
+	if (!diffEntries || diffEntries.length === 0) {
+		return undefined;
+	}
+
+	const patchMessageId = `${eventInfo.id}-patch`;
+	const payloads: ConversationTraceItem[] = [];
+
+	payloads.push({
+		type: "message",
+		session_id: eventInfo.sessionID,
+		message_id: patchMessageId,
+		role: eventInfo.role,
+		generated_at_unix_ms: Date.now(),
+	});
+
+	for (const entry of diffEntries) {
+		if ("patch" in entry && typeof entry.patch === "string") {
+			payloads.push({
+				type: "message.part",
+				session_id: eventInfo.sessionID,
+				message_id: patchMessageId,
+				part_type: "patch",
+				text: entry.patch,
+				generated_at_unix_ms: Date.now(),
+			});
+		}
+	}
+
+	return { payloads };
+}
+
+export async function recordConversationTrace(
+	repoRoot: string,
+	event: EventMessageUpdated | EventMessagePartUpdated,
+): Promise<void> {
+	if (
+		event.type === "message.part.updated" &&
+		event.properties.part.type === "tool" &&
+		event.properties.part.tool === "question"
+	) {
+		const questionToolPayload = buildQuestionToolConversationTracePayload(
+			event.properties.part,
+		);
+		if (questionToolPayload !== undefined) {
+			await runConversationTraceHook(repoRoot, questionToolPayload);
+			return;
+		}
+	}
+
+	if (
+		event.type === "message.part.updated" &&
+		(event.properties.part.type === "reasoning" ||
+			event.properties.part.type === "text") &&
+		event.properties.part.text
+	) {
+		await runConversationTraceHook(
+			repoRoot,
+			buildMessagePartConversationTracePayload(event.properties.part),
+		);
+		return;
+	}
+
+	if (event.type === "message.updated") {
+		const patchPayload = buildPatchConversationTracePayload(event);
+
+		if (patchPayload !== undefined) {
+			await runConversationTraceHook(repoRoot, patchPayload);
+			return;
+		}
+
+		await runConversationTraceHook(
+			repoRoot,
+			buildConversationTracePayload(event),
+		);
+	}
+}
+
+async function buildTrace(
+	repoRoot: string,
+	event: EventMessageUpdated,
+	clientVersion: string | null,
+): Promise<void> {
+	const diffTracePayload = extractDiffTracePayload(event);
+
+	if (diffTracePayload === undefined) {
+		return;
+	}
+
+	await runDiffTraceHook(repoRoot, {
+		...diffTracePayload,
+		tool_name: TOOL_NAME,
+		tool_version: clientVersion,
+	});
 }
 
 async function runDiffTraceHook(
-  repoRoot: string,
-  payload: DiffTracePayload,
+	repoRoot: string,
+	payload: DiffTracePayload & {
+		tool_name: string;
+		tool_version: string | null;
+	},
 ): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn("sce", ["hooks", "diff-trace"], {
-      cwd: repoRoot,
-      stdio: ["pipe", "ignore", "inherit"],
-    });
+	await new Promise<void>((resolve) => {
+		const child = spawn("sce", ["hooks", "diff-trace"], {
+			cwd: repoRoot,
+			// Fail-open: stderr is ignored so that sce intake errors
+			// (connection refused, timeout, etc.) do not leak into the
+			// OpenCode TUI. Resolve unconditionally on any outcome.
+			stdio: ["pipe", "ignore", "ignore"],
+		});
 
-    child.on("error", reject);
+		child.on("error", (err: NodeJS.ErrnoException) => {
+			if (err.code === "ENOENT") {
+				console.warn(`sce CLI not found. Install it from ${SCE_INSTALL_URL}`);
+			}
+			resolve();
+		});
+		child.on("close", () => resolve());
 
-    child.on("close", (code, signal) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
+		child.stdin.end(`${JSON.stringify(payload)}\n`);
+	});
+}
 
-      const reason =
-        signal === null ? `exit code ${String(code)}` : `signal ${signal}`;
-      reject(
-        new Error(`Command 'sce hooks diff-trace' failed with ${reason}.`),
-      );
-    });
+async function runConversationTraceHook(
+	repoRoot: string,
+	payload: ConversationTracePayload,
+): Promise<void> {
+	await new Promise<void>((resolve) => {
+		const child = spawn("sce", ["hooks", "conversation-trace"], {
+			cwd: repoRoot,
+			// Fail-open: stderr is ignored so that sce intake errors
+			// (connection refused, timeout, etc.) do not leak into the
+			// OpenCode TUI. Resolve unconditionally on any outcome.
+			stdio: ["pipe", "ignore", "ignore"],
+		});
 
-    child.stdin.end(`${JSON.stringify(payload)}\n`);
-  });
+		child.on("error", (err: NodeJS.ErrnoException) => {
+			if (err.code === "ENOENT") {
+				console.warn(`sce CLI not found. Install it from ${SCE_INSTALL_URL}`);
+			}
+			resolve();
+		});
+		child.on("close", () => resolve());
+
+		child.stdin.end(`${JSON.stringify(payload)}\n`);
+	});
 }
 
 export const SceAgentTracePlugin: Plugin = async ({ directory, worktree }) => {
-  const repoRoot = worktree ?? directory ?? process.cwd();
+	const repoRoot = worktree ?? directory ?? process.cwd();
+	const clientVersionsBySessionId: Map<string, string> = new Map();
+	const processedDiffsMessageIds: Set<string> = new Set();
 
-  return {
-    event: async (input) => {
-      const eventType =
-        typeof input.event === "object" &&
-        input.event !== null &&
-        typeof input.event.type === "string"
-          ? input.event.type
-          : undefined;
+	return {
+		event: async (input) => {
+			if (!shouldCaptureEvent(input.event.type)) {
+				return;
+			}
 
-      if (eventType === undefined || !shouldCaptureEvent(eventType)) {
-        return;
-      }
+			if (
+				input.event.type === "session.created" ||
+				input.event.type === "session.updated"
+			) {
+				clientVersionsBySessionId.set(
+					input.event.properties.info.id,
+					input.event.properties.info.version,
+				);
+			}
 
-      await buildTrace(repoRoot, input);
-    },
-  };
+			if (input.event.type === "message.updated") {
+				const eventInfo = input.event.properties.info;
+				const diffEntries = extractDiffEntries(eventInfo);
+				const hasDiffs = diffEntries !== undefined && diffEntries.length > 0;
+
+				if (hasDiffs) {
+					const dedupKey = `${eventInfo.sessionID}:${eventInfo.id}`;
+					if (processedDiffsMessageIds.has(dedupKey)) {
+						return;
+					}
+					processedDiffsMessageIds.add(dedupKey);
+				}
+
+				const clientVersion =
+					clientVersionsBySessionId.get(
+						input.event.properties.info.sessionID,
+					) || null;
+				await recordConversationTrace(repoRoot, input.event);
+				await buildTrace(repoRoot, input.event, clientVersion);
+			}
+
+			if (input.event.type === "message.part.updated") {
+				await recordConversationTrace(repoRoot, input.event);
+			}
+		},
+	};
 };

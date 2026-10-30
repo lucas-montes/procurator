@@ -5,7 +5,7 @@ tools:
   - search/codebase
   - search
   - search/searchResults
-  - usages
+  - search/usages
   - changes
   - githubRepo
   - fetch

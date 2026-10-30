@@ -9,7 +9,6 @@ The primary user-facing command-line tool (`pcr`). Provides four top-level comma
 | `init` | Set up a workspace from a `flake.nix` |
 | `stack` | Manage local dev stack (up/down/stop/start/restart) |
 | `repo` | Clone, push, pull repositories |
-| `inspect` | TUI-based cluster inspection (planned, via ratatui) |
 
 Also ships the `pcr-worker-test` binary for manually exercising worker RPC calls.
 

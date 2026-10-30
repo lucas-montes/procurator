@@ -95,6 +95,10 @@ let
     exec ${cli}/bin/pcr-worker-test --addr ${workerAddr} "$@"
   '';
 
+  pcr-wrapper = pkgs.writeShellScriptBin "procurator-pcr" ''
+    exec ${cli}/bin/pcr "$@"
+  '';
+
   # ── worker-token ───────────────────────────────────────────────────────
   # Print a HS256 JWT for the given VM id, bound to a single VM with a
   # 10-minute expiry. Send it via `Authorization: Bearer <token>` or via
@@ -242,6 +246,8 @@ let
 in
 {
   apps = {
+    pcr = mkAppWithDescription pcr-wrapper
+      "Run the Procurator CLI (pcr) from the current workspace build";
     worker = mkAppWithDescription worker-wrapper
       "Run the Procurator worker daemon (auto-generates dev TLS cert)";
     worker-test = mkAppWithDescription worker-test-wrapper
