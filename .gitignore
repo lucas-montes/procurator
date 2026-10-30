@@ -16,3 +16,4 @@ worker/tests/data/*
 context/tmp
 mock/logs
 __pycache__/
+.procurator/logs

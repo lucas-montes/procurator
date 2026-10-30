@@ -28,6 +28,60 @@
         src = self;
         inherit naersk;
       };
+
+      stack = {
+        logs = {
+          dir = "./.procurator/logs";
+          max_lines = 5000;
+        };
+
+        watch = {
+          enable = false;
+        };
+
+        services = {
+          cache = {
+            cmd = "cargo run -p cache -- --config ./cache/example.toml";
+            src = ".";
+            ports = [ 8081 ];
+            restart = "always";
+            healthcheck = {
+              test = "curl -fsS http://127.0.0.1:8081/healthz >/dev/null";
+              interval_secs = 5;
+              timeout_secs = 3;
+              retries = 8;
+            };
+          };
+
+          ci_service = {
+            cmd = "cargo run -p ci_service -- --config ./ci_service/example.toml";
+            src = ".";
+            ports = [ 8082 ];
+            dependsOn = [ "cache" ];
+            restart = "always";
+            healthcheck = {
+              test = "curl -fsS http://127.0.0.1:8082/health >/dev/null";
+              interval_secs = 5;
+              timeout_secs = 3;
+              retries = 8;
+            };
+          };
+
+          repohub = {
+            cmd = "cargo run -p repohub -- --config ./repohub/example.toml";
+            src = ".";
+            ports = [ 8083 ];
+            dependsOn = [ "ci_service" ];
+            restart = "always";
+            healthcheck = {
+              test = "curl -fsS http://127.0.0.1:8083/ >/dev/null";
+              interval_secs = 5;
+              timeout_secs = 3;
+              retries = 8;
+            };
+          };
+        };
+      };
     }
     // flake-utils.lib.eachDefaultSystem (
       system:
