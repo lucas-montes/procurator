@@ -9,14 +9,6 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::{agents::AgentsArgs, stack::StackArgs, vcs::VcsArgs};
 
-#[derive(Debug)]
-enum Error {
-    FileMissing,
-    RequestFailed(String),
-    InvalidCommand(String),
-    MissingArgument(String),
-    IoError(std::io::Error),
-}
 
 /// Procurator CLI
 #[derive(Debug, Parser)]

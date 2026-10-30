@@ -17,7 +17,7 @@
             <div style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px;">
                 <h2>Flake Metadata</h2>
 
-                {% if let Some(desc) = metadata.description %}
+                {% if let Some(desc) = metadata.description() %}
                 <div style="margin-bottom: 15px;">
                     <strong>Description:</strong>
                     <p style="margin: 5px 0 0 0; color: #586069;">{{ desc }}</p>
@@ -25,11 +25,11 @@
                 {% endif %}
             </div>
 
-            {% if !metadata.packages.is_empty() %}
+            {% if !metadata.packages().is_empty() %}
             <div style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px;">
-                <h2>Packages ({{ metadata.packages.len() }})</h2>
+                <h2>Packages ({{ metadata.packages().len() }})</h2>
                 <ul style="list-style: none; padding: 0;">
-                    {% for package in metadata.packages %}
+                    {% for package in metadata.packages() %}
                     <li style="padding: 8px; border-bottom: 1px solid #e1e4e8;">
                         <code style="color: #0366d6; font-family: monospace;">{{ package }}</code>
                     </li>
@@ -38,11 +38,11 @@
             </div>
             {% endif %}
 
-            {% if !metadata.apps.is_empty() %}
+            {% if !metadata.apps().is_empty() %}
             <div style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px;">
-                <h2>Apps ({{ metadata.apps.len() }})</h2>
+                <h2>Apps ({{ metadata.apps().len() }})</h2>
                 <ul style="list-style: none; padding: 0;">
-                    {% for app in metadata.apps %}
+                    {% for app in metadata.apps() %}
                     <li style="padding: 8px; border-bottom: 1px solid #e1e4e8;">
                         <code style="color: #0366d6; font-family: monospace;">{{ app }}</code>
                     </li>
@@ -51,11 +51,11 @@
             </div>
             {% endif %}
 
-            {% if !metadata.checks.is_empty() %}
+            {% if !metadata.checks().is_empty() %}
             <div style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px;">
-                <h2>Checks ({{ metadata.checks.len() }})</h2>
+                <h2>Checks ({{ metadata.checks().len() }})</h2>
                 <ul style="list-style: none; padding: 0;">
-                    {% for check in metadata.checks %}
+                    {% for check in metadata.checks() %}
                     <li style="padding: 8px; border-bottom: 1px solid #e1e4e8;">
                         <code style="color: #0366d6; font-family: monospace;">{{ check }}</code>
                     </li>
@@ -64,11 +64,11 @@
             </div>
             {% endif %}
 
-            {% if !metadata.dev_shells.is_empty() %}
+            {% if !metadata.dev_shells().is_empty() %}
             <div style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px;">
-                <h2>Development Shells ({{ metadata.dev_shells.len() }})</h2>
+                <h2>Development Shells ({{ metadata.dev_shells().len() }})</h2>
                 <ul style="list-style: none; padding: 0;">
-                    {% for shell in metadata.dev_shells %}
+                    {% for shell in metadata.dev_shells() %}
                     <li style="padding: 8px; border-bottom: 1px solid #e1e4e8;">
                         <code style="color: #0366d6; font-family: monospace;">{{ shell }}</code>
                     </li>

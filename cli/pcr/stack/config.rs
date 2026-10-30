@@ -91,12 +91,10 @@ impl Service {
         self.restart.as_deref()
     }
     /// Dependencies that must start before this service.
-    #[must_use]
     pub fn depends_on(&self) -> Option<&[String]> {
         self.depends_on.as_deref()
     }
     /// Optional healthcheck configuration.
-    #[must_use]
     pub fn healthcheck(&self) -> Option<&HealthCheckConfig> {
         self.healthcheck.as_ref()
     }
@@ -456,24 +454,23 @@ fn topo_sort(services: &HashMap<String, Service>) -> Result<Vec<String>, ParserE
     let mut queue: Vec<String> = in_degree
         .iter()
         .filter(|(_, degree)| **degree == 0)
-        .map(|(name, _)| name.clone())
+        .map(|(name, _)| name.to_owned())
         .collect();
 
     let mut order = Vec::new();
 
     while let Some(node) = queue.pop() {
-        order.push(node.clone());
-
         if let Some(neighbors) = graph.get(&node) {
             for neighbor in neighbors {
                 if let Some(degree) = in_degree.get_mut(neighbor) {
                     *degree -= 1;
                     if *degree == 0 {
-                        queue.push(neighbor.clone());
+                        queue.push(neighbor.to_owned());
                     }
                 }
             }
         }
+        order.push(node);
     }
 
     if order.len() != services.len() {

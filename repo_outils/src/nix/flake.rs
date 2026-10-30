@@ -23,21 +23,6 @@ use crate::git::RepoPath;
 #[serde(rename_all = "camelCase")]
 struct NixFlakeMetadataOutput {
     description: Option<String>,
-    path: Option<String>,
-    url: Option<String>,
-    original_url: Option<String>,
-    resolved_url: Option<String>,
-    last_modified: Option<i64>,
-    fingerprint: Option<String>,
-    dirty_revision: Option<String>,
-    locks: Option<NixFlakeLocks>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct NixFlakeLocks {
-    version: Option<i64>,
-    root: Option<String>,
-    nodes: Option<HashMap<String, serde_json::Value>>,
 }
 
 /// Output structure from `nix flake show --json`
@@ -53,10 +38,6 @@ struct NixFlakeShowOutput {
     dev_shells: HashMap<String, HashMap<String, NixDerivationInfo>>,
     #[serde(default, rename = "nixosModules")]
     nixos_modules: HashMap<String, NixModuleInfo>,
-    #[serde(default, rename = "nixosConfigurations")]
-    nixos_configurations: HashMap<String, serde_json::Value>,
-    #[serde(default)]
-    infrastructure: Option<HashMap<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -91,28 +72,28 @@ struct NixModuleInfo {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Infrastructure {
     #[serde(default)]
-    pub machines: HashMap<String, Machine>,
+    machines: HashMap<String, Machine>,
     #[serde(default)]
-    pub services: HashMap<String, Service>,
+    services: HashMap<String, Service>,
     #[serde(default)]
-    pub cd: ContinuousDelivery,
+    cd: ContinuousDelivery,
     #[serde(default)]
-    pub rollback: RollbackConfig,
+    rollback: RollbackConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Machine {
-    pub cpu: f64,
-    pub memory: MemorySpec,
+    cpu: f64,
+    memory: MemorySpec,
     #[serde(default)]
-    pub roles: Vec<String>,
+    roles: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemorySpec {
-    pub amount: f64,
+    amount: f64,
     #[serde(default = "default_unit")]
-    pub unit: String,
+    unit: String,
 }
 
 fn default_unit() -> String {
@@ -123,28 +104,28 @@ fn default_unit() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Service {
     #[serde(rename = "sourceInfo")]
-    pub source_info: ServiceSourceInfo,
+    source_info: ServiceSourceInfo,
     #[serde(default)]
-    pub environments: HashMap<String, Environment>,
+    environments: HashMap<String, Environment>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceSourceInfo {
     #[serde(rename = "type")]
-    pub source_type: String, // "package", "flake", or "url"
-    pub url: Option<String>,
-    pub rev: Option<String>,
-    pub output: String,
+    source_type: String, // "package", "flake", or "url"
+    url: Option<String>,
+    rev: Option<String>,
+    output: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Environment {
-    pub cpu: f64,
-    pub memory: MemorySpec,
+    cpu: f64,
+    memory: MemorySpec,
     #[serde(default = "default_replicas")]
-    pub replicas: i32,
+    replicas: i32,
     #[serde(rename = "healthCheck")]
-    pub health_check: Option<String>,
+    health_check: Option<String>,
 }
 
 fn default_replicas() -> i32 {
@@ -154,67 +135,85 @@ fn default_replicas() -> i32 {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ContinuousDelivery {
     #[serde(default)]
-    pub tests: bool,
+    tests: bool,
     #[serde(default)]
-    pub build: bool,
+    build: bool,
     #[serde(default)]
-    pub dst: bool,
+    dst: bool,
     #[serde(default)]
-    pub staging: bool,
+    staging: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RollbackConfig {
     #[serde(default)]
-    pub enabled: bool,
-    pub threshold: Option<RollbackThreshold>,
-    pub notification: Option<NotificationConfig>,
+    enabled: bool,
+    threshold: Option<RollbackThreshold>,
+    notification: Option<NotificationConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RollbackThreshold {
-    pub cpu: Option<f64>,
-    pub memory: Option<MemorySpec>,
-    pub latency: Option<LatencyThreshold>,
+    cpu: Option<f64>,
+    memory: Option<MemorySpec>,
+    latency: Option<LatencyThreshold>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LatencyThreshold {
-    pub p99: Option<String>,
-    pub p90: Option<String>,
-    pub p50: Option<String>,
+    p99: Option<String>,
+    p90: Option<String>,
+    p50: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NotificationConfig {
-    pub enabled: bool,
-    pub email: Option<EmailConfig>,
-    pub slack: Option<SlackConfig>,
+    enabled: bool,
+    email: Option<EmailConfig>,
+    slack: Option<SlackConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmailConfig {
-    pub subject: String,
-    pub body: String,
-    pub recipients: Vec<String>,
+    subject: String,
+    body: String,
+    recipients: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SlackConfig {
-    pub channel: String,
-    pub message: String,
+    channel: String,
+    message: String,
     #[serde(rename = "webhookUrl")]
-    pub webhook_url: String,
+    webhook_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlakeMetadata {
-    pub description: Option<String>,
-    pub packages: Vec<String>,
-    pub checks: Vec<String>,
-    pub apps: Vec<String>,
-    pub dev_shells: Vec<String>,
-    pub nixos_modules: Vec<String>,
+    description: Option<String>,
+    packages: Vec<String>,
+    checks: Vec<String>,
+    apps: Vec<String>,
+    dev_shells: Vec<String>,
+    nixos_modules: Vec<String>,
+}
+
+impl FlakeMetadata {
+    pub fn description(&self) -> Option<&String> {
+        self.description.as_ref()
+    }
+    pub fn packages(&self) -> &Vec<String> {
+        &self.packages
+    }
+    pub fn checks(&self) -> &Vec<String> {
+        &self.checks
+    }
+    pub fn apps(&self) -> &Vec<String> {
+        &self.apps
+    }
+    pub fn dev_shells(&self) -> &Vec<String> {
+        &self.dev_shells}
+
 }
 
 #[derive(Debug)]

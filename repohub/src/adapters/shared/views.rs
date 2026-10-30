@@ -65,7 +65,7 @@ pub struct NotImplementedTemplate {
 #[derive(Template)]
 #[template(path = "flake.html")]
 pub struct FlakeTemplate {
-    pub username: String,
+    username: String,
     pub project_name: String,
     pub repo_name: String,
     pub flake_metadata: Option<FlakeMetadata>,

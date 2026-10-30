@@ -69,20 +69,11 @@ impl From<config::ParserError> for Error {
 // Service type states
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone)]
 pub struct Parsed {
     name: String,
     config: config::Service,
     working_dir: PathBuf,
-}
-
-impl Clone for Parsed {
-    fn clone(&self) -> Self {
-        Self {
-            name: self.name.clone(),
-            config: self.config.clone(),
-            working_dir: self.working_dir.clone(),
-        }
-    }
 }
 
 pub struct Running {
@@ -130,7 +121,6 @@ impl Service {
     }
 
     /// Working directory for this service (resolved from `src`).
-    #[must_use]
     pub fn working_dir(&self) -> &Path {
         &self.0.working_dir
     }

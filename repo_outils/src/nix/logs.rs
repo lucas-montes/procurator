@@ -2,11 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::num::NonZeroU64;
-use std::ops::Not;
 use std::time::{Duration, SystemTime};
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
-use tracing::{info, warn};
+use tokio::io::AsyncBufReadExt;
+use tracing::warn;
 
 #[derive(Debug)]
 pub enum Error {
@@ -224,63 +222,12 @@ pub struct Summary {
     timeline: Vec<TimelineStep>,
 }
 
-impl Summary {
-    pub fn total_steps(&self) -> usize {
-        self.total_steps
-    }
-
-    pub fn duration(&self) -> Duration {
-        self.started_at
-            .duration_since(self.completed_at)
-            .unwrap_or_default()
-    }
-    pub fn timeline(&self) -> &[TimelineStep] {
-        &self.timeline
-    }
-}
-
 /// A step in the build timeline
 #[derive(Serialize, Debug, Clone)]
 pub struct TimelineStep {
     text: String,
     duration: Duration,
     children: Vec<TimelineStep>,
-}
-
-impl TimelineStep {
-    pub fn text(&self) -> &str {
-        &self.text
-    }
-
-    pub fn duration(&self) -> Duration {
-        self.duration
-    }
-
-    pub fn children(&self) -> &[TimelineStep] {
-        &self.children
-    }
-}
-
-/// Build hierarchical timeline from finished steps
-fn build_timeline(
-    finished_steps: &[FinishedStep],
-    steps_by_id: &HashMap<EntryId, &FinishedStep>,
-) -> Vec<TimelineStep> {
-    // Find root steps (level 3 with no parent or parent not in map)
-    let root_steps: Vec<&FinishedStep> = finished_steps
-        .iter()
-        .filter(|step| {
-            step.level == 3
-                && step
-                    .parent
-                    .map_or(true, |pid| !steps_by_id.contains_key(&pid))
-        })
-        .collect();
-
-    root_steps
-        .into_iter()
-        .map(|step| build_step_tree(step, finished_steps, steps_by_id))
-        .collect()
 }
 
 /// Recursively build a step tree
@@ -367,7 +314,18 @@ impl Parser for State {
             .collect();
 
         // Build timeline tree (only level 3 steps)
-        let timeline = build_timeline(&self.finished_steps, &steps_by_id);
+        // Build hierarchical timeline from finished steps
+        let timeline = self
+            .finished_steps
+            .iter()
+            .filter(|step| {
+                step.level == 3
+                    && step
+                        .parent
+                        .map_or(true, |pid| !steps_by_id.contains_key(&pid))
+            })
+            .map(|step| build_step_tree(step, &self.finished_steps, &steps_by_id))
+            .collect();
 
         Summary {
             total_steps: self.finished_steps.len(),

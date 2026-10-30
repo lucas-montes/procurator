@@ -1,0 +1,5 @@
+# Local dev config for running repohub from `pcr stack start`
+database_url = "sqlite:///tmp/procurator-repohub.db"
+bind_address = "127.0.0.1:8083"
+domain = "localhost"
+repos_base_path = "/tmp/procurator-git"
