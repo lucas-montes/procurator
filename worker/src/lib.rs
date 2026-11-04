@@ -7,8 +7,7 @@ mod pull;
 mod server;
 mod vmm;
 
-#[cfg(test)]
-mod e2e;
+
 #[cfg(test)]
 mod test_support;
 

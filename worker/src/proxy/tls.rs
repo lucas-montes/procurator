@@ -43,13 +43,13 @@ pub async fn serve_tls_proxy<F: Factory>(
     let runtime_settings = ProxyRuntimeSettings::from_timeout_millis(
         proxy_config.upstream_request_timeout_millis.get(),
     );
-    let state = Arc::new(ProxyState {
+    let state = Arc::new(ProxyState::new(
         registry,
         client,
-        jwt_hs256_secret: proxy_config.jwt_hs256_secret.clone(),
-        base_domain: proxy_config.base_domain.clone(),
+        proxy_config.jwt_hs256_secret,
+        proxy_config.base_domain,
         runtime_settings,
-    });
+    ));
     let app = Router::new()
         .route("/__pcr/auth", get(auth_bootstrap::<F>))
         .route("/__pcr/logout", post(auth_logout::<F>))

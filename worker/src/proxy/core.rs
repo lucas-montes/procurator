@@ -47,19 +47,36 @@ struct ProxyJwtClaims {
     exp: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct VmProxyRoute {
     vm_id: String,
     upstream_path_and_query: String,
 }
 
-#[derive(Clone)]
 pub struct ProxyState<F: Factory> {
-    pub registry: Registry<F, Reader>,
-    pub client: Client<HttpConnector, Body>,
-    pub jwt_hs256_secret: String,
-    pub base_domain: String,
-    pub runtime_settings: ProxyRuntimeSettings,
+    registry: Registry<F, Reader>,
+    client: Client<HttpConnector, Body>,
+    jwt_hs256_secret: String,
+    base_domain: String,
+    runtime_settings: ProxyRuntimeSettings,
+}
+
+impl<F: Factory> ProxyState<F> {
+    pub fn new(
+        registry: Registry<F, Reader>,
+        client: Client<HttpConnector, Body>,
+        jwt_hs256_secret: String,
+        base_domain: String,
+        runtime_settings: ProxyRuntimeSettings,
+    ) -> Self {
+        Self {
+            registry,
+            client,
+            jwt_hs256_secret,
+            base_domain,
+            runtime_settings,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -68,7 +85,7 @@ pub struct AuthBootstrapQuery {
     next: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ProxyRouteError {
     MissingHost,
     InvalidHost,
@@ -141,7 +158,7 @@ pub fn extract_vm_proxy_route(
     })
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ProxyRuntimeSettings {
     upstream_request_timeout: Duration,
 }

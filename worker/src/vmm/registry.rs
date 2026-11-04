@@ -4,7 +4,6 @@ use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 use tokio::sync::{OwnedRwLockReadGuard, RwLock};
 
 /// Type to identify what the registry is allowed to do.
-#[derive(Clone)]
 pub struct Writer;
 
 #[derive(Clone)]
@@ -46,7 +45,7 @@ impl<F: Factory> Registry<F, Unitiliazed> {
     }
 }
 
-impl<F: Factory, Side> Clone for Registry<F, Side> {
+impl<F: Factory, Reader> Clone for Registry<F, Reader> {
     fn clone(&self) -> Self {
         Self {
             persistent: self.persistent.clone(),

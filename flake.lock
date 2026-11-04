@@ -246,11 +246,11 @@
         "rust-overlay": "rust-overlay_2"
       },
       "locked": {
-        "lastModified": 1793095137,
-        "narHash": "sha256-yJppEGDawezaElZBgF4QCmgoPkCoqeR9G67Q0q8T/6U=",
+        "lastModified": 1793797228,
+        "narHash": "sha256-cAIQSCC5XnuH9NTwBKmn4uvNUMQvisbRaOw0ASoONRA=",
         "owner": "crocoder-dev",
         "repo": "shared-context-engineering",
-        "rev": "5dab05b4647b23dd68bce85da0576fa1155721ae",
+        "rev": "1334eda991a4c6bfb5903075dc6e1878173525e6",
         "type": "github"
       },
       "original": {

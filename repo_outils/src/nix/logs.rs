@@ -187,18 +187,7 @@ impl ActiveStep {
         }
     }
 
-    fn complete(self, id: EntryId, completed_at: SystemTime) -> FinishedStep {
-        FinishedStep {
-            id,
-            started_at: self.started_at,
-            text: self.text,
-            level: self.level,
-            log_type: self.log_type,
-            parent: self.parent,
-            messages: self.messages,
-            completed_at,
-        }
-    }
+
 }
 
 /// Represents a step that has completed
@@ -212,6 +201,25 @@ struct FinishedStep {
     parent: Option<EntryId>,
     messages: Vec<Message>,
     completed_at: SystemTime,
+}
+
+impl FinishedStep {
+    fn new(
+        id: EntryId,
+        active_step: ActiveStep,
+        completed_at: SystemTime,
+    ) -> Self {
+        Self {
+            id,
+            text: active_step.text,
+            level: active_step.level,
+            log_type: active_step.log_type,
+            started_at: active_step.started_at,
+            parent: active_step.parent,
+            messages: active_step.messages,
+            completed_at,
+        }
+    }
 }
 
 #[derive(Serialize, Debug)]
@@ -288,7 +296,7 @@ impl Parser for State {
             return;
         };
         if let Some(active_step) = self.active_steps.remove(&entry_id) {
-            let finished_step = active_step.complete(entry_id, timestamp);
+            let finished_step = FinishedStep::new(entry_id, active_step, timestamp);
             self.finished_steps.push(finished_step);
         } else {
             warn!(?stop.id, "Stop entry without matching start");

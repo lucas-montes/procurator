@@ -55,3 +55,34 @@ pedantic = { level = "deny" }
 
 [workspace.lints.rust]
 warnings = "warn"
+
+
+
+# [[bin]]
+# name = "pcr"
+# path = "cli/pcr/main.rs"
+
+# [[bin]]
+# name = "pcr-worker"
+# path = "cli/pcr-worker/main.rs"
+
+# [[bin]]
+# name = "repohub"
+# path = "repohub/main.rs"
+
+# [[bin]]
+# name = "ci_service"
+# path = "ci_service/main.rs"
+
+# [[bin]]
+# name = "cache"
+# path = "cache/main.rs"
+
+
+# [[bin]]
+# name = "control-plane"
+# path = "control_plane/main.rs"
+
+# [[bin]]
+# name = "worker"
+# path = "worker/main.rs"

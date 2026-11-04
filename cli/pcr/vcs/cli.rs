@@ -120,10 +120,10 @@ fn execute_repo_clone(args: RepoCloneArgs) {
     match repo_outils::git::GitRepo::clone(&args.url, &path) {
         Ok(_) => {
             println!("Successfully cloned {} to {}", args.url, path.display());
-            info!("Repo clone completed in {:?}", start.elapsed());
+            info!(elapsed=?start.elapsed(), url=args.url, path=?path.display(), "Repo clone completed");
         }
         Err(e) => {
-            error!("Failed to clone repository: {}", e);
+            error!(error=%e, "Failed to clone repository");
             std::process::exit(1);
         }
     }
@@ -139,15 +139,15 @@ fn execute_repo_pull(args: RepoPullArgs) {
         Ok(repo) => match repo.pull() {
             Ok(_) => {
                 println!("Successfully pulled repository at {}", path.display());
-                info!("Repo pull completed in {:?}", start.elapsed());
+                info!(elapsed=?start.elapsed(), path=?path.display(), "Repo pull completed");
             }
             Err(e) => {
-                error!("Failed to pull repository: {}", e);
+                error!(error=%e, "Failed to pull repository");
                 std::process::exit(1);
             }
         },
         Err(e) => {
-            error!("Failed to open repository: {}", e);
+            error!(error=%e, "Failed to open repository");
             std::process::exit(1);
         }
     }
@@ -157,21 +157,21 @@ fn execute_repo_pull(args: RepoPullArgs) {
 fn execute_repo_push(args: RepoPushArgs) {
     let start = Instant::now();
     let path = args.path.unwrap_or_else(|| PathBuf::from("."));
-    info!("Pushing repository at: {}", path.display());
+    info!(path=?path.display(), "Pushing repository");
 
     let repo = match repo_outils::git::GitRepo::open(&path) {
         Ok(repo) => repo,
         Err(e) => {
-            error!("Failed to open repository: {}", e);
+            error!(error=%e, "Failed to open repository");
             std::process::exit(1);
         }
     };
 
     // Push git changes
     match repo.push() {
-        Ok(_) => println!("Successfully pushed repository at {}", path.display()),
+        Ok(_) => info!(path=?path.display(), "Successfully pushed repository"),
         Err(e) => {
-            error!("Failed to push repository: {}", e);
+            error!(error=%e, "Failed to push repository");
             std::process::exit(1);
         }
     }
@@ -179,21 +179,21 @@ fn execute_repo_push(args: RepoPushArgs) {
     // Push Nix cache if configured
     match repo_outils::nix::read_cache_url(&path) {
         Ok(Some(url)) => {
-            info!("Pushing Nix artifacts to cache: {}", url);
+            info!(url=%url, "Pushing Nix artifacts to cache");
             match repo_outils::nix::push_all_to_cache(&url) {
-                Ok(_) => println!("Successfully pushed Nix artifacts to cache"),
-                Err(e) => warn!("Failed to push Nix cache: {}", e),
+                Ok(_) => info!("Successfully pushed Nix artifacts to cache"),
+                Err(e) => warn!(error=%e, "Failed to push Nix cache"),
             }
         }
         Ok(None) => {
             warn!("No Nix cache configured, skipping cache push");
         }
         Err(e) => {
-            warn!("Failed to read Nix config: {}", e);
+            warn!(error=%e, "Failed to read Nix config");
         }
     }
 
-    info!("Repo push completed in {:?}", start.elapsed());
+    info!(elapsed=?start.elapsed(), "Repo push completed");
 }
 
 /// Create a new branch using git2.
@@ -793,19 +793,4 @@ struct WorkspaceInfo {
     has_changes: bool,
     modified: Option<std::time::SystemTime>,
     path: PathBuf,
-}
-
-// ============================================================================
-// Tests
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_repo_clone_args_parsing() {
-        // This is a placeholder test
-        assert!(true);
-    }
 }
