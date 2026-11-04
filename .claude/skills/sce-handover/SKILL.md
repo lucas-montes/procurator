@@ -1,0 +1,131 @@
+---
+name: sce-handover
+description: >
+  Write a session handover document, or load one for continuation
+compatibility: claude
+---
+
+# SCE Handover
+
+## Execution contract
+
+Own this workflow from input through its terminal user-visible response.
+Follow its steps, gates, and stops in order; do not add, skip, reorder, or merge them.
+Keep intermediate workflow state private and continue immediately until a defined wait or stop.
+Resume user waits in this same skill and session.
+Render user-visible output only from the named workflow layouts or reports.
+Do not expose raw internal state or add text around a rendered layout or report.
+Non-SCE helpers may assist, but must return to the active step without changing
+workflow order, gates, waits, writes, validation, stops, or terminal output.
+Do not invoke another SCE skill, package, or workflow command.
+
+## Input
+
+`$ARGUMENTS` is optional and selects the mode:
+
+- Empty `$ARGUMENTS` selects **writer mode**.
+- Exactly one whitespace-trimmed path argument selects **loader mode**.
+- Anything else — more than one token, or a token that is clearly not a path —
+  is invalid input: state the expected usage (`/handover` or
+  `/handover context/handovers/<file>.md`) and stop without guessing a mode.
+
+Never infer the mode from conversation content or repository state. Only the
+presence or absence of a path argument decides it.
+
+## Workflow
+
+Follow exactly one path.
+
+### Writer path (no arguments)
+
+#### 1. Gather session and repository facts
+
+Inspect the current conversation for task-relevant progress: the goal being
+pursued, decisions made, work completed or in flight, and open questions or
+blockers.
+
+Ground those facts against repository state:
+
+- `git status`, `git diff`, and `git diff --cached` for uncommitted work,
+  including both unstaged and staged changes.
+- `context/plans/*.md` for the active plan and task, when one is being worked.
+- Recent commits, when they clarify what just landed.
+
+Label any detail not directly evidenced by the conversation or repository state
+as an assumption. Do not present an inferred detail as confirmed fact.
+
+#### 2. Determine the file name
+
+- When exactly one plan task is unambiguously active — one plan with one
+  in-progress or next-actionable task identifiable from the conversation and
+  repository state — use `context/handovers/{plan_name}-{task_id}.md`, where
+  `plan_name` is the plan's file stem and `task_id` is its task ID (for
+  example `T01`).
+- Otherwise use the collision-safe timestamped fallback
+  `context/handovers/handover-{YYYY-MM-DD-HHMMSS}.md`.
+
+Never overwrite an existing file. If the resolved path already exists, use the
+current timestamp for the fallback name, or append a further distinguishing
+timestamp segment, rather than overwriting it.
+
+#### 3. Compose the handover document
+
+Read `references/handover-template.md` before composing. It is the sole
+authority for the persisted schema and **Completeness contract**. Populate its
+layout from the gathered facts and satisfy that contract without redefining the
+required-section set here.
+
+Label inferred or assumed details inline as assumptions; do not blend them with
+confirmed facts.
+
+#### 4. Confirm the context root
+
+When `context/` does not exist, there is no durable location to write to.
+Do not create it; `sce setup --bootstrap-context` owns context bootstrap.
+Render the **Writer blocked** layout with `sce setup --bootstrap-context` as
+the required action, and stop without writing a file.
+
+#### 5. Write exactly one file
+
+Write only the composed handover document to the path resolved in step 2.
+Do not change plan or task state or edit any other file. Before reporting
+success, validate the written file against the template's **Completeness contract**.
+
+#### 6. Report
+
+Render the **Writer success** layout from `references/output.md` with the
+written path. Stop.
+
+### Loader path (one path argument)
+
+#### 1. Validate the path
+
+The argument must resolve to an existing file under `context/handovers/` with
+a `.md` extension. Reject:
+
+- A path outside `context/handovers/`.
+- A path with a different extension.
+- A path that does not exist.
+
+Do not guess an alternate file, and do not treat an arbitrary repository file
+as a handover. When the path is rejected, render the **Loader blocked** layout
+and stop.
+
+#### 2. Validate handover completeness
+
+Read the file and `references/handover-template.md`. Validate the file against
+the template's **Completeness contract**; do not define a second required-section
+list or a different content-validity rule here.
+
+When that contract fails, render the **Loader blocked** layout (invalid handover)
+and stop.
+
+#### 3. Present for continuation
+
+Render the **Loader success** layout from `references/output.md`, surfacing
+the handover's task state, decisions, open questions, and next recommended
+step for continuation in the current session.
+
+Loading is read-only: do not edit any file, mark a plan task complete, change
+repository state, or begin the recommended next step. Presenting the loaded
+guidance is the entire loader contract.

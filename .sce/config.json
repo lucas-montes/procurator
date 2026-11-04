@@ -9,7 +9,7 @@
   "integrations": {
     "optional_workflows": [],
     "target": [
-      "opencode"
+      "claude"
     ]
   },
   "policies": {
