@@ -39,8 +39,6 @@ let
 
   mkClusterVm = addr: labels: {
     role = "worker";
-    cpu = 1.0;
-    memory = { amount = 1.0; unit = "GB"; };
     labels = labels;
     deployment = { addr = addr; };
   };

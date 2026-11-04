@@ -143,14 +143,10 @@ let
     {
       control-plane-1 = {
         role = "control-plane";
-        cpu = 1.0;
-        memory = { amount = 1.0; unit = "GB"; };
         deployment = { addr = "192.168.1.10:5000"; };
       };
       worker-1 = {
         role = "worker";
-        cpu = 1.0;
-        memory = { amount = 1.0; unit = "GB"; };
         deployment = { addr = "192.168.1.11:8080"; };
       };
     };
