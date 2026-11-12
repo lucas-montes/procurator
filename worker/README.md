@@ -17,14 +17,20 @@ A structure that is dependand of the backend used, currently it's cloud hypervis
 It creates the vms (in this case it spawns a process and creates a client to communicate with it)
 
 
+## Status
+
+The RPCs this TODO list was written against now exist: `pause_vm`/`resume_vm`/`snapshot_vm`/`backup_disk` are implemented end-to-end (`server.rs` → `ch/handle.rs`, real cloud-hypervisor client calls, not stubs). Checked each item below against current code.
+
+**Regression, not just unfinished:** the cross-crate e2e test (`worker/src/e2e.rs`, 243 lines) that used to exercise the pull-assignment loop was deleted outright in commit `26267fd` ("some cleanup") with nothing replacing it. `context/overview.md` still cites it by path as proof the loop works — that reference is now stale.
+
 ## TODO
-[ ] This is actually important, i need a graceful shutdown, so I can make a snapshot of the vms and resume if needed
-[ ] Need a better way to keep state and failures to clean up the directories
-[ ] The values for the rpcs to return stats probably should be abstract as well
-[ ] Have an interactive shell with some socket?
-[ ] Test better the overall system
-[ ] Test the snapshot + resume and the backup logic
-[ ] Maybe when running the `create` cli command we might want to specify if we want opencode up and running by default
+[ ] This is actually important, i need a graceful shutdown, so I can make a snapshot of the vms and resume if needed — still open; no `SIGTERM`/`ctrl_c` handling exists in `main.rs`/`lib.rs`. The snapshot/resume primitives it would call now exist, though.
+[ ] Need a better way to keep state and failures to clean up the directories — still open; the same `//TODO` comment is still in `vmm/supervisor.rs`.
+[ ] The values for the rpcs to return stats probably should be abstract as well — still open, and worse than "probably should be": `Handle::health()` is currently a no-op stub (`Ok(())`) with its own `//TODO: create the function in the client to get stats and info`.
+[ ] Have an interactive shell with some socket? — still open, no code found.
+[ ] Test better the overall system — still open, and the one thing that did this (`e2e.rs`) was removed; see Status above.
+[ ] Test the snapshot + resume and the backup logic — still open: zero `#[test]`/`#[tokio::test]` in `server.rs` or `ch/handle.rs`, so the lifecycle RPCs (now implemented) have no unit coverage.
+[ ] Maybe when running the `create` cli command we might want to specify if we want opencode up and running by default — still open; opencode startup is fixed at image-build time (`nix/lib/diskVm.nix` systemd unit), not a runtime choice.
 
 ## Run it
 

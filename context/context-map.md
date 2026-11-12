@@ -31,7 +31,7 @@ Quick navigation for AI sessions working on Procurator.
   - `cli/pcr/stack/service.rs` - Type-state services, manifest, supervisor, healthcheck integration
   - `cli/pcr/stack/logging.rs` - Log writers (terminal, file, both)
   - `cli/pcr/stack/watch.rs` - File watcher for hot-reload
-- `cli/pcr/agents/` - Agent workspace commands
+- `cli/pcr/agents/` - Workspace lifecycle command stubs (`up`/`down`/`stop`/`start`/`restart`; placeholders only). Real agent workspace prep (clone + branch) lives in `vcs/cli.rs`'s `agent` subcommand, not here.
 
 ### Git Utilities (`repo_outils/`)
 - `repo_outils/src/git/repo.rs` - GitRepo operations plus `RepoCache` local mirror acceleration
@@ -44,9 +44,17 @@ Quick navigation for AI sessions working on Procurator.
 - `control_plane/` - Coordination service
 - `worker/` - Background job execution
 - `ci_service/` - CI service
-- `cache/` - Caching service
+
+### Cache (`cache/`)
+Embeddable artifact cache in a hexagonal layout: named public/private caches, token auth, Nix front-end only. Plain HTTP, no TLS.
+- `cache/src/domain/` - Pure rules: `cache.rs` (names, visibility, spec), `digest.rs` (SHA-256, nix32), `access.rs` (principals, grants, authorize), `nix/` (narinfo, NAR file names, signing)
+- `cache/src/application/` - `Service` with every use case (`nix.rs`, `tokens.rs`, `gc.rs`) and `ports.rs` (`BlobStore`, `Index`, `Clock`, `Entropy`)
+- `cache/src/adapters/` - `http/` (axum router: Nix routes under `/<cache>/`, token API under `/_api/v1/tokens`), `fs.rs` (disk blobs), `sqlite.rs` (index), `memory.rs` (in-memory blobs and index), `system.rs` (clock, randomness)
+- `cache/src/config.rs`, `cache/src/main.rs` - TOML config and the composition root
+- `cache/tests/` - `http.rs` (in-process router tests), `nix_e2e.rs` (real `nix copy`, `--ignored`)
 
 ## Current Work
+- **Completed plan:** `plans/cache-hexagonal-rewrite.md` (T01–T14 done; cache rewritten as a hexagonal library with named public/private caches and token auth)
 - **Pending plan:** `plans/rust-log-env-var.md` (T01 done, T02 pending)
 - **Completed plan:** `plans/control-plane-pull-assignments.md` (T01–T09 done; control-plane pull loop, worker poll/reconcile/heartbeat, Nix inventory, cross-crate e2e)
 - **Completed plan:** `plans/healthcheck.md` (T01–T05 done)

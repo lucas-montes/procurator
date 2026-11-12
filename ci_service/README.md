@@ -21,7 +21,14 @@ Structured as a library (`ci_service::*`) with a thin binary (`main.rs`). The li
 
 ## Status
 
-Scaffolded — the job queue, database, HTTP API, and worker loop are wired together. Core Nix eval/build logic is in progress.
+Scaffolded — the job queue, database, HTTP API, and worker loop are wired together, and the worker runs real `nix flake check` builds (`worker.rs::process_build` → `repo_outils::nix::flake_check`) with retry/backoff on failure.
+
+Three of the four pipeline steps in "How It Works" above don't exist yet, independent of the `nix flake check` call itself:
+
+- **No cache check before building** — the worker always runs the full `nix flake check`; there's no lookup against the binary cache to skip an already-built commit.
+- **No push to cache on success.**
+- **No control-plane notification** — nothing in `ci_service/src/` references `control_plane`, `capnp`, or any notify path; there's no `cache` reference either. A successful build updates the job's own status in SQLite and stops there.
+- **Build summary is a placeholder** — on success, `process_build` stores `let db_summary = DbBuildSummary;`, a bare default; the real `CheckResult`/summary data from the Nix run (steps, timing, pass/fail detail) is computed but discarded, not persisted. This is also why the Notes item below (track which tests failed) isn't possible yet — there's no structured summary to look at.
 
 ## Notes
 An important features would be to save the runs, and keep track of what tests failed so we can identify flaky tests and rerun them or notify the user

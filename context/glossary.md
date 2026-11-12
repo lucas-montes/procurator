@@ -23,6 +23,9 @@
 - **Exclude repos**: Using `--exclude` flag to skip certain submodules
 - **Agent workspace**: A prepared directory for AI agent work (`<project-dir>/agents/<branch>/`) - co-located with project
 - **Nix cache**: Binary cache for Nix derivations, configured in `flake.nix` via `nixConfig.extra-substituters`
+- **Named cache**: One tenant of the `cache` service, declared as `[caches.<name>]` and served under `/<name>/`; has its own signing key, quota, and retention.
+- **Visibility (cache)**: `public` (anonymous read, token write) or `private` (token read and write).
+- **Grant (cache)**: A token's permission on one named cache, `read` or `write` (`write` includes `read`); admin tokens bypass grants and manage tokens.
 - **Repo mirror cache**: Local bare mirror used to accelerate clones via `git clone --reference`; stored under `~/.cache/procurator/repo-cache/`.
 - **Timing log**: Per-command duration log emitted after VCS command completion for runtime observability.
 

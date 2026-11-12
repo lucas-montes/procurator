@@ -6,9 +6,10 @@ The primary user-facing command-line tool (`pcr`). Provides four top-level comma
 
 | Command | Purpose |
 |---------|---------|
-| `init` | Set up a workspace from a `flake.nix` |
-| `stack` | Manage local dev stack (up/down/stop/start/restart) |
-| `repo` | Clone, push, pull repositories |
+| `init` | Set up a workspace from a `flake.nix` (scans the repo via `autonix` and writes config + `flake.nix`) |
+| `stack` | Run the local dev stack in the foreground (`start` only — no `up`/`down`/`stop`/`restart`) |
+| `vcs` | Git operations: `vcs repo {clone,pull,push,branch}` (single repo), `vcs project {clone,pull,push,branch,list}` (multi-repo with submodules), `vcs agent {prepare,list}` (agent workspace prep: clone + branch) |
+| `agents` | Workspace lifecycle placeholders (`up`/`down`/`stop`/`start`/`restart`) — stubs only, see Status |
 
 Also ships the `pcr-worker-test` binary for manually exercising worker RPC calls.
 
@@ -31,7 +32,11 @@ Supported verbs:
 
 ## Status
 
-Scaffolded — `init` has an implementation, other commands are stubs. Test binaries are functional.
+Further along than "scaffolded": `init`, `stack start` (full service graph, supervisor, log writer, file watcher), and all of `vcs` (`repo`, `project`, `agent`) are implemented, not stubs. Test binaries are functional.
+
+The only real stub is the top-level **`agents`** command (`pcr agents up/down/stop/start/restart`) — every arm just prints a placeholder message. Note this is a different, unrelated surface from `vcs agent` (which actually prepares an agent workspace by cloning a repo and creating a branch); the similar naming is easy to confuse and worth resolving (rename or remove one of them) independently of this audit.
+
+`stack` itself only implements `start`; `up`/`down`/`stop`/`restart` don't exist on it.
 
 ## Stack
 

@@ -3,12 +3,12 @@
 # Validates:
 #   1. Defaults flow into the generated TOML (as JSON via the stub) and
 #      ExecStart points at bin/cache --config
-#   2. TLS + access + signing key options reach the generated config
-#   3. certFile/keyFile must be set together (assertion)
-#   4. mTLS clientCa requires certFile/keyFile (assertion)
+#   2. Named caches, GC, and the admin token hash reach the generated config
+#   3. At least one cache must be defined (assertion)
+#   4. The admin token hash must be 64 hex characters (assertion)
 #
 # Run:
-#   nix eval --raw -f ./nix/tests/cache-fast.nix --apply "f: f {}"
+#   nix eval -f ./nix/tests/cache-fast.nix --apply "f: f {}"
 #
 # Returns true on success, throws on failure.
 
@@ -34,41 +34,48 @@ let
       evalResult.config.systemd.services."procurator-cache".serviceConfig.ExecStart
       "${toString pkgsStub.cache}/bin/cache --config ";
 
+  hash = "1734d503f6aa6a047c36d113cbad769f719c93784b469b771c4c3e7c63adbefd";
 in
 let
   # ── 1. Defaults ────────────────────────────────────────────────────
-  defaults = evalCache { enable = true; };
+  defaults = evalCache {
+    enable = true;
+    caches.public = { visibility = "public"; signKeyFile = "/run/secrets/public.key"; };
+  };
   defaultsJson = cacheJson defaults;
 
   defaultsCheck =
     assert' "defaults pass assertions" (checkAssertions defaults)
     && assertEq "addr" defaultsJson.addr "0.0.0.0:8081"
-    && assertEq "store_dir" defaultsJson.store_dir "/nix/store"
     && assertEq "storage_dir" defaultsJson.storage_dir "/var/lib/procurator-cache"
-    && assertEq "max_size" defaultsJson.max_size "50G"
-    && assertEq "priority" defaultsJson.priority 30
-    && assertEq "tls" defaultsJson.tls { provider = "file"; writer_allowlist = []; }
-    && assertEq "access" defaultsJson.access {
-      reads_require_auth = false;
-      writes_require_auth = "auto";
-      loopback_bypass = true;
+    && assertEq "gc" defaultsJson.gc { interval_secs = 3600; orphan_grace_secs = 86400; }
+    && assert' "no admin token by default" (!(defaultsJson ? admin_token_sha256))
+    && assertEq "caches.public" defaultsJson.caches.public {
+      kind = "nix";
+      visibility = "public";
+      sign_key_file = "/run/secrets/public.key";
+      store_dir = "/nix/store";
+      priority = 30;
+      max_size = "0";
+      retention_days = 0;
     };
 
-  # ── 2. Explicit TLS/access/signing options flow through ────────────
+  # ── 2. Explicit options flow through ───────────────────────────────
   explicit = evalCache {
     enable = true;
     addr = "127.0.0.1:9001";
     storageDir = "/srv/cache";
-    maxSize = "10G";
-    priority = 40;
-    secretKeyFiles = [ "/run/secrets/cache.key" ];
-    tls.certFile = "/run/secrets/cert.pem";
-    tls.keyFile = "/run/secrets/key.pem";
-    tls.clientCaFile = "/run/secrets/ca.pem";
-    tls.writerAllowlist = [ "ci-writer" ];
-    access.readsRequireAuth = true;
-    access.writesRequireAuth = "always";
-    access.loopbackBypass = false;
+    adminTokenSha256 = hash;
+    gc.intervalSecs = 600;
+    gc.orphanGraceSecs = 120;
+    caches.public = { visibility = "public"; signKeyFile = "/run/secrets/public.key"; };
+    caches.internal = {
+      visibility = "private";
+      signKeyFile = "/run/secrets/internal.key";
+      priority = 10;
+      maxSize = "200G";
+      retentionDays = 90;
+    };
   };
   explicitJson = cacheJson explicit;
 
@@ -76,32 +83,26 @@ let
     assert' "explicit passes assertions" (checkAssertions explicit)
     && assertEq "addr" explicitJson.addr "127.0.0.1:9001"
     && assertEq "storage_dir" explicitJson.storage_dir "/srv/cache"
-    && assertEq "max_size" explicitJson.max_size "10G"
-    && assertEq "priority" explicitJson.priority 40
-    && assertEq "sign_key_files" explicitJson.sign_key_files [ "/run/secrets/cache.key" ]
-    && assertEq "tls.cert_file" explicitJson.tls.cert_file "/run/secrets/cert.pem"
-    && assertEq "tls.key_file" explicitJson.tls.key_file "/run/secrets/key.pem"
-    && assertEq "tls.client_ca_file" explicitJson.tls.client_ca_file "/run/secrets/ca.pem"
-    && assertEq "tls.writer_allowlist" explicitJson.tls.writer_allowlist [ "ci-writer" ]
-    && assertEq "access" explicitJson.access {
-      reads_require_auth = true;
-      writes_require_auth = "always";
-      loopback_bypass = false;
-    };
+    && assertEq "admin_token_sha256" explicitJson.admin_token_sha256 hash
+    && assertEq "gc" explicitJson.gc { interval_secs = 600; orphan_grace_secs = 120; }
+    && assertEq "cache names" (builtins.attrNames explicitJson.caches) [ "internal" "public" ]
+    && assertEq "internal.visibility" explicitJson.caches.internal.visibility "private"
+    && assertEq "internal.sign_key_file" explicitJson.caches.internal.sign_key_file "/run/secrets/internal.key"
+    && assertEq "internal.priority" explicitJson.caches.internal.priority 10
+    && assertEq "internal.max_size" explicitJson.caches.internal.max_size "200G"
+    && assertEq "internal.retention_days" explicitJson.caches.internal.retention_days 90;
 
-  # ── 3. certFile/keyFile must be set together ───────────────────────
-  certOnly = assertThrows "certFile without keyFile"
+  # ── 3. At least one cache ──────────────────────────────────────────
+  noCaches = assertThrows "no caches defined"
+    (checkAssertions (evalCache { enable = true; }));
+
+  # ── 4. Admin token hash shape ──────────────────────────────────────
+  badHash = assertThrows "malformed admin token hash"
     (checkAssertions (evalCache {
       enable = true;
-      tls.certFile = "/run/secrets/cert.pem";
-    }));
-
-  # ── 4. clientCa requires certFile/keyFile ──────────────────────────
-  clientCaOnly = assertThrows "clientCaFile without pair"
-    (checkAssertions (evalCache {
-      enable = true;
-      tls.clientCaFile = "/run/secrets/ca.pem";
+      adminTokenSha256 = "not-a-hash";
+      caches.public = { visibility = "public"; signKeyFile = "/run/secrets/public.key"; };
     }));
 
 in
-defaultsCheck && explicitCheck && certOnly && clientCaOnly
+defaultsCheck && explicitCheck && noCaches && badHash

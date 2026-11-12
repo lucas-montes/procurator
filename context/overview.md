@@ -2,8 +2,11 @@
 
 ## Current focus
 - Control plane ↔ worker **pull-based assignment** over the Cap'n Proto
-  `Master` RPC surface is implemented end to end and proven by a cross-crate
-  e2e test (`worker/src/e2e.rs`).
+  `Master` RPC surface is implemented end to end. The cross-crate e2e test
+  that once proved this (`worker/src/e2e.rs`) was deleted in commit
+  `26267fd` with no replacement; coverage is unit-level only, and the VM
+  lifecycle RPCs (`pause_vm`/`resume_vm`/`snapshot_vm`/`backup_disk`) have no
+  tests at all.
 - `publishState` stores explicit generations (`commit`, `generation`,
   `intentHash`, `vmSpecs` with `id` + `targetWorker`); workers poll
   `getAssignment`, reconcile locally, and report `pushData` heartbeats;

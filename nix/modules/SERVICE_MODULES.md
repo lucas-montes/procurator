@@ -49,7 +49,10 @@ Every module follows the same shape: `package` (defaults to the built crate), `a
             proxyJwtHs256Secret = "<required: strong secret when proxy binds non-loopback>";
           };
 
-          services.procurator.cache.enable = true;   # 0.0.0.0:8081, mTLS via tls.* options
+          services.procurator.cache = {             # 0.0.0.0:8081, plain HTTP
+            enable = true;
+            caches.public = { visibility = "public"; signKeyFile = "/run/secrets/cache.key"; };
+          };
           services.procurator.ci.enable = true;      # 0.0.0.0:8082
           services.procurator.repohub.enable = true; # 0.0.0.0:8083
           services.procurator.gitServer.enable = true;
