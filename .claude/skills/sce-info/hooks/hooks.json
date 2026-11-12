@@ -1,4 +1,0 @@
-{
-  "description": "SCE hooks module",
-  "modules": ["./register.ts"]
-}
