@@ -7,3 +7,6 @@
 - Do not make extra allocations using clone, to_string, to_owned, to_vec and so on, leverage lifetimes.
 - Do not overuse neither Arc, nor Mutex.
 - For async functions, privilege returning impl Future<...>.
+- Don't use type, create a new struct.
+- mod.rs files are only used to export, do not write code in them.
+- Do not use python to edit files or perform any operation.

@@ -1,47 +1,37 @@
-//! Procurator Nix binary cache: full read/write with mTLS.
-//! Why: push-first flow needs `nix copy --to/--from https://cache` to just work.
+//! `cache` binary: the composition root.
+//! Why: all wiring lives here — config in, adapters chosen, HTTP served.
 
-mod config;
-mod nix;
-mod routes;
-mod storage;
-mod tls;
-
-use std::net::SocketAddr;
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
-use config::Config;
-use routes::{AppState, router};
-use storage::LocalDisk;
-use tls::{FilePki, TlsProvider as _, identity_from_leaf};
+use cache::adapters::fs::FsBlobStore;
+use cache::adapters::http::router;
+use cache::adapters::sqlite::SqliteIndex;
+use cache::adapters::system::SystemEnv;
+use cache::application::Service;
+use cache::application::ports::{BlobError, IndexError};
+use cache::config::{Config, ConfigError};
 
-/// Concrete startup errors. Why: no `anyhow`, no `Box<dyn>`.
+/// Startup failures.
 #[derive(Debug)]
 enum MainError {
-    /// CLI usage error (prints usage, exit code 2).
-    Usage(String),
-    /// Config invalid.
-    Config(config::ConfigError),
-    /// Storage init failed.
-    Storage(storage::StorageError),
-    /// TLS init failed.
-    Tls(tls::TlsError),
-    /// Listener bind failed.
-    Bind(String),
-    /// Serving failed.
-    Serve(String),
+    Config(ConfigError),
+    Blobs(BlobError),
+    Index(IndexError),
+    Bind(std::io::Error),
+    Serve(std::io::Error),
 }
 
-impl std::fmt::Display for MainError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for MainError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Usage(m) => write!(f, "{m}"),
-            Self::Config(e) => write!(f, "config: {e}"),
-            Self::Storage(e) => write!(f, "storage: {e}"),
-            Self::Tls(e) => write!(f, "tls: {e}"),
-            Self::Bind(m) => write!(f, "bind: {m}"),
-            Self::Serve(m) => write!(f, "serve: {m}"),
+            Self::Config(e) => e.fmt(f),
+            Self::Blobs(e) => e.fmt(f),
+            Self::Index(e) => e.fmt(f),
+            Self::Bind(e) => write!(f, "bind: {e}"),
+            Self::Serve(e) => write!(f, "serve: {e}"),
         }
     }
 }
@@ -49,161 +39,102 @@ impl std::fmt::Display for MainError {
 impl std::error::Error for MainError {}
 
 /// Resolve `--config <path>`. Why: CLI arg only — no env pointer, no fixed path.
-fn config_path() -> Result<PathBuf, MainError> {
+fn config_path() -> Result<PathBuf, String> {
     const USAGE: &str = "usage: cache --config <path.toml>";
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("--config") => args
             .next()
             .map(PathBuf::from)
-            .ok_or_else(|| MainError::Usage(format!("{USAGE} (missing path after --config)"))),
-        Some(other) => Err(MainError::Usage(format!("{USAGE} (got {other:?})"))),
-        None => Err(MainError::Usage(USAGE.to_string())),
+            .ok_or_else(|| format!("{USAGE} (missing path after --config)")),
+        Some(other) => Err(format!("{USAGE} (got {other:?})")),
+        None => Err(String::from(USAGE)),
     }
+}
+
+/// Resolve when the process is asked to stop.
+async fn shutdown_signal() {
+    let interrupt = tokio::signal::ctrl_c();
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("install SIGTERM handler");
+    tokio::select! {
+        _ = interrupt => {}
+        _ = terminate.recv() => {}
+    }
+    tracing::info!("shutting down");
+}
+
+/// Run GC on a fixed interval for as long as the process lives.
+async fn gc_loop(service: Arc<Service<FsBlobStore, SqliteIndex, SystemEnv>>, every: Duration) {
+    let mut ticker = tokio::time::interval(every);
+    // Why: the first tick fires immediately, cleaning up after a restart.
+    loop {
+        ticker.tick().await;
+        match service.collect_garbage().await {
+            Ok(report) => tracing::info!(?report, "gc pass finished"),
+            Err(error) => tracing::error!(%error, "gc pass failed"),
+        }
+    }
+}
+
+async fn run(config: Config) -> Result<(), MainError> {
+    let addr = config.addr();
+    let gc_interval = config.gc_interval();
+    let orphan_grace_secs = config.orphan_grace_secs();
+    let admin_token = config.admin_token();
+    std::fs::create_dir_all(config.storage_dir()).map_err(MainError::Bind)?;
+    let blobs = FsBlobStore::open(config.storage_dir()).map_err(MainError::Blobs)?;
+    let index = SqliteIndex::open(&config.storage_dir().join("index.sqlite"))
+        .await
+        .map_err(MainError::Index)?;
+    if admin_token.is_none() {
+        tracing::warn!("no admin_token_sha256 configured: tokens can only be used, not created");
+    }
+    let service = Arc::new(Service::new(
+        blobs,
+        index,
+        SystemEnv,
+        config.into_caches(),
+        admin_token,
+        orphan_grace_secs,
+    ));
+    for spec in service.caches() {
+        tracing::info!(
+            cache = spec.name().as_str(),
+            visibility = ?spec.visibility(),
+            public_key = spec.signing_key().public_key(),
+            "serving cache"
+        );
+    }
+    let gc = tokio::spawn(gc_loop(Arc::clone(&service), gc_interval));
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .map_err(MainError::Bind)?;
+    tracing::info!(%addr, "cache listening (plain HTTP; terminate TLS in front)");
+    let served = axum::serve(listener, router(service))
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .map_err(MainError::Serve);
+    gc.abort();
+    served
 }
 
 #[tokio::main]
 async fn main() -> Result<(), MainError> {
     tracing_subscriber::fmt()
-        // .json()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .with_target(false)
-        // .with_current_span(false)
-        .with_level(true)
-        // .without_time()
         .init();
     let path = match config_path() {
-        // Why: usage errors exit 2 with a one-line message, not a Debug dump.
-        Err(MainError::Usage(m)) => {
-            eprintln!("{m}");
+        Ok(path) => path,
+        // Why: usage errors exit 2 with one line, not a Debug dump.
+        Err(usage) => {
+            eprintln!("{usage}");
             std::process::exit(2);
         }
-        Err(e) => return Err(e),
-        Ok(p) => p,
     };
-    let config = Config::from_file(&path).map_err(MainError::Config)?;
-    tracing::info!(
-        addr = %config.addr,
-        storage = %config.storage_dir.display(),
-        mtls = config.mtls_enabled(),
-        "starting procurator cache"
-    );
-    // Why: static dispatch — match picks a concrete backend, no `dyn`.
-    let provider = config.tls.provider.clone();
-    if provider != "file" {
-        return Err(MainError::Tls(tls::TlsError::UnknownProvider(provider)));
-    }
-    let store = LocalDisk::create(config.storage_dir.clone(), config.max_size_bytes)
-        .map_err(MainError::Storage)?;
-    let state = AppState {
-        config: Arc::new(config),
-        store,
-    };
-    serve(state).await
-}
-
-/// Serve plain HTTP or HTTPS+mTLS depending on config.
-async fn serve(state: AppState<LocalDisk>) -> Result<(), MainError> {
-    let addr: SocketAddr = state
-        .config
-        .addr
-        .parse()
-        .map_err(|e| MainError::Bind(format!("bad addr: {e}")))?;
-    let app = router(state.clone());
-    if !state.config.tls_enabled() {
-        tracing::warn!("TLS disabled — dev only, use mTLS in production");
-        let listener = tokio::net::TcpListener::bind(addr)
-            .await
-            .map_err(|e| MainError::Bind(e.to_string()))?;
-        // Why: ConnectInfo feeds the loopback-bypass middleware (no TLS hook here).
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        .map_err(|e| MainError::Serve(e.to_string()))?;
-        return Ok(());
-    }
-    // Why: manual accept loop (like worker proxy) gives us peer certs for authz.
-    let cert = state
-        .config
-        .tls
-        .cert_file
-        .clone()
-        .unwrap_or_else(|| PathBuf::from("/nonexistent-cert.pem"));
-    let key = state
-        .config
-        .tls
-        .key_file
-        .clone()
-        .unwrap_or_else(|| PathBuf::from("/nonexistent-key.pem"));
-    let pki = FilePki {
-        cert,
-        key,
-        client_ca: state.config.tls.client_ca_file.clone(),
-    };
-    let tls_cfg = pki.server_config().map_err(MainError::Tls)?;
-    // Why: validate rotation path at startup; failures abort instead of serving stale certs.
-    pki.reload().map_err(MainError::Tls)?;
-    serve_mtls(addr, tls_cfg, app).await
-}
-
-/// TLS accept loop that injects `PeerIdentity` per connection.
-/// Why: handlers authorize writes by client cert without parsing TLS themselves.
-async fn serve_mtls(
-    addr: SocketAddr,
-    tls_cfg: Arc<rustls::ServerConfig>,
-    app: axum::Router,
-) -> Result<(), MainError> {
-    use hyper_util::rt::{TokioExecutor, TokioIo};
-    use hyper_util::server::conn::auto::Builder;
-    use hyper_util::service::TowerToHyperService;
-    use tokio_rustls::TlsAcceptor;
-
-    let acceptor = TlsAcceptor::from(tls_cfg);
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(|e| MainError::Bind(e.to_string()))?;
-    tracing::info!(%addr, "cache listening with mTLS");
-    loop {
-        let (stream, peer_addr) = listener
-            .accept()
-            .await
-            .map_err(|e| MainError::Serve(e.to_string()))?;
-        let acceptor = acceptor.clone();
-        let app = app.clone();
-        tokio::spawn(async move {
-            let Ok(tls_stream) = acceptor.accept(stream).await else {
-                tracing::warn!(%peer_addr, "TLS handshake failed");
-                return;
-            };
-            // Why: rustls already verified the chain; we only label the peer.
-            let mut identity = {
-                let (_io, conn) = tls_stream.get_ref();
-                let leaf = conn.peer_certificates().and_then(|chain| chain.first());
-                identity_from_leaf(leaf.map(std::convert::AsRef::as_ref))
-            };
-            identity.is_loopback = peer_addr.ip().is_loopback();
-            tracing::debug!(
-                %peer_addr,
-                cn = ?identity.common_name,
-                fp = %identity.fingerprint_hex,
-                "mTLS peer"
-            );
-            // Why: per-connection layer so all requests share this peer's identity.
-            let service = tower::ServiceBuilder::new()
-                .layer(axum::Extension(identity))
-                .service(app);
-            let service = TowerToHyperService::new(service);
-            if let Err(e) = Builder::new(TokioExecutor::new())
-                .serve_connection(TokioIo::new(tls_stream), service)
-                .await
-            {
-                tracing::warn!(%peer_addr, error = %e, "HTTPS connection failed");
-            }
-        });
-    }
+    run(Config::from_file(&path).map_err(MainError::Config)?).await
 }

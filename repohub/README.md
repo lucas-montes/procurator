@@ -98,4 +98,10 @@ Uses `repo_outils` for Git operations and Nix flake metadata.
 
 ## Status
 
-Scaffolded — CRUD for users/projects/repos is functional. Configuration management, Nix flake integration, build tracking, and E2E testing are planned.
+Scaffolded — CRUD for users/projects/repos is functional.
+
+- **Gerrit review is functional, not planned** — all 10 endpoints documented above are implemented (`create_change`/`upload_patch_set`/`vote_on_change` via use-case ports; `submit`/`abandon`/`restore`/`submit_readiness` directly in the web adapter), backed by SQLite persistence (`adapters/gerrit/persistence.rs`). The Gerrit Guide section above was accurate; this Status line previously wasn't.
+- **Nix flake integration is partially functional** — `services/repository_service.rs` has working read-side parsing (`parse_flake_metadata`/`parse_infrastructure`) used by the GitHub-like UI views. There's no write-side (generating or editing a flake from the UI).
+- **Configuration management is still planned** — `domain/configuration.rs` defines the types (`ProjectConfiguration`, `DependencyEdge`, etc.), but nothing persists, serves, or edits them yet.
+- **Build tracking is still planned** — no build-status concept exists anywhere in this crate.
+- **E2E testing is still planned** — no e2e/integration tests exist in this crate.

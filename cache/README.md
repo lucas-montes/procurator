@@ -120,6 +120,134 @@ nix-store --generate-binary-cache-key my-cache-1 secret.pem public.pem
 TOKEN=$(openssl rand -hex 32); printf %s "$TOKEN" | sha256sum   # hash goes in the config
 ```
 
+## Deploying on NixOS
+
+The flake ships a NixOS module ([../nix/modules/cache.nix](../nix/modules/cache.nix))
+that generates the TOML config and runs the server as a hardened systemd unit
+(`procurator-cache.service`) under its own user.
+
+### 1) Add the module and the overlay
+
+The overlay provides `pkgs.cache`, which the module uses as its default package.
+
+```nix
+{
+  inputs.procurator.url = "github:<owner>/procurator";
+
+  outputs = { nixpkgs, procurator, ... }: {
+    nixosConfigurations.cache-host = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        procurator.nixosModules.x86_64-linux.procurator
+        { nixpkgs.overlays = [ procurator.overlays.default ]; }
+        ./cache.nix
+      ];
+    };
+  };
+}
+```
+
+### 2) Create the secrets on the host
+
+```bash
+# One signing key per cache. Keep the secret half off the Nix store.
+nix-store --generate-binary-cache-key cache.example.org-public-1 public.secret public.pub
+nix-store --generate-binary-cache-key cache.example.org-internal-1 internal.secret internal.pub
+install -D -m 0400 -o procurator-cache public.secret   /etc/procurator-cache/public.secret
+install -D -m 0400 -o procurator-cache internal.secret /etc/procurator-cache/internal.secret
+
+# Bootstrap admin token: keep the token, put only its hash in the config.
+TOKEN=$(openssl rand -hex 32); echo "$TOKEN"
+printf %s "$TOKEN" | sha256sum
+```
+
+The `procurator-cache` user exists once the module has been deployed; until
+then, create the files as root and `chown` them after the first switch (the
+service restarts on failure, so it picks them up). Use a secrets manager
+(sops-nix, agenix) in place of `install` in real deployments. Pass `signKeyFile` as a **string** path: a Nix path literal
+(`./public.secret`) would copy the key into the world-readable Nix store.
+
+### 3) Configure the caches
+
+```nix
+# cache.nix
+{
+  services.procurator.cache = {
+    enable = true;
+    # Bind locally; a TLS reverse proxy is the only public entry point.
+    addr = "127.0.0.1:8081";
+    adminTokenSha256 = "<output of sha256sum above>";
+
+    caches.public = {
+      visibility = "public";
+      signKeyFile = "/etc/procurator-cache/public.secret";
+      maxSize = "100G";
+    };
+    caches.internal = {
+      visibility = "private";
+      signKeyFile = "/etc/procurator-cache/internal.secret";
+      maxSize = "200G";
+      retentionDays = 90;
+    };
+  };
+
+  services.nginx = {
+    enable = true;
+    virtualHosts."cache.example.org" = {
+      enableACME = true;
+      forceSSL = true;
+      locations."/" = {
+        proxyPass = "http://127.0.0.1:8081";
+        # Why: NARs can be gigabytes; stream them instead of buffering.
+        extraConfig = ''
+          client_max_body_size 0;
+          proxy_request_buffering off;
+          proxy_buffering off;
+        '';
+      };
+    };
+  };
+  networking.firewall.allowedTCPPorts = [ 80 443 ];
+}
+```
+
+| Option | Default | Maps to |
+|---|---|---|
+| `enable` | `false` | Runs `procurator-cache.service`. |
+| `package` | `pkgs.cache` | The server binary. |
+| `addr` | `0.0.0.0:8081` | `addr` |
+| `storageDir` | `/var/lib/procurator-cache` | `storage_dir` (the only writable path) |
+| `adminTokenSha256` | `null` | `admin_token_sha256` (must be 64 lowercase hex characters) |
+| `gc.intervalSecs`, `gc.orphanGraceSecs` | `3600`, `86400` | `[gc]` |
+| `caches.<name>.{visibility, signKeyFile, kind, storeDir, priority, maxSize, retentionDays}` | see [Configuration](#configuration) | `[caches.<name>]` |
+| `openFirewall` | `false` | Opens the port from `addr`. |
+| `user`, `group` | `procurator-cache` | Service account. |
+| `extraArgs` | `[]` | Extra command-line arguments. |
+
+Evaluation fails if no cache is defined or the admin hash is malformed.
+
+### 4) Mint tokens and point clients at it
+
+```bash
+curl -sS -X POST https://cache.example.org/_api/v1/tokens \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"ci","grants":[{"cache":"internal","permission":"write"},{"cache":"public","permission":"write"}]}'
+```
+
+On client machines:
+
+```nix
+nix.settings = {
+  extra-substituters = [ "https://cache.example.org/public" "https://cache.example.org/internal" ];
+  extra-trusted-public-keys = [ "<contents of public.pub>" "<contents of internal.pub>" ];
+  # Needed for the private cache: "machine cache.example.org password pcr_…"
+  netrc-file = "/etc/nix/netrc";
+};
+```
+
+Check the service with `systemctl status procurator-cache` and
+`curl https://cache.example.org/readyz`.
+
 ## Access model
 
 - A request carries a token as `Authorization: Bearer <token>` or as the

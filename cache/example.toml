@@ -1,20 +1,35 @@
-# Example cache config. Run: cargo run -p cache -- --config ./example.toml
-# All settings have defaults; only storage_dir needs overriding for non-root runs.
+# Example cache config. Run from the repository root:
+#   cargo run -p cache -- --config ./cache/example.toml
 addr = "127.0.0.1:8081"
-store_dir = "/nix/store"
+# Holds blobs/, staging/ and index.sqlite.
 storage_dir = "/tmp/pcache"
-max_size = "50G"
+
+# SHA-256 of the bootstrap admin token. This one is the hash of the literal
+# string `dev-admin-token` — a throwaway for local use. For anything real:
+#   TOKEN=$(openssl rand -hex 32); printf %s "$TOKEN" | sha256sum
+# and keep $TOKEN somewhere safe. Admin tokens mint all other tokens.
+admin_token_sha256 = "1734d503f6aa6a047c36d113cbad769f719c93784b469b771c4c3e7c63adbefd"
+
+[gc]
+interval_secs = 3600
+# How long an uploaded NAR may wait for its narinfo before GC removes it.
+orphan_grace_secs = 86400
+
+# Anyone can read; pushing needs a token with a `write` grant.
+# Served at http://127.0.0.1:8081/public
+[caches.public]
+visibility = "public"
+# Throwaway dev key committed next to this file. Generate your own:
+#   nix-store --generate-binary-cache-key my-cache-1 secret.pem public.pem
+sign_key_file = "./cache/cache-private.pem"
 priority = 30
-sign_key_files = []
+max_size = "50G"      # 0 = unlimited
+retention_days = 0    # 0 = keep until space is needed
 
-[tls]
-provider = "file"
-# cert_file = "/run/secrets/cache-cert.pem"
-# key_file = "/run/secrets/cache-key.pem"
-# client_ca_file = "/run/secrets/cache-client-ca.pem"
-# writer_allowlist = ["ci-writer"]
-
-[access]
-reads_require_auth = false
-writes_require_auth = "auto" # auto | always | never
-loopback_bypass = true
+# Reading and pushing both need a token.
+# Served at http://127.0.0.1:8081/private
+[caches.private]
+visibility = "private"
+sign_key_file = "./cache/cache-private.pem"
+max_size = "50G"
+retention_days = 90

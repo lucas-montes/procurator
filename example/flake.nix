@@ -24,12 +24,19 @@
     };
 
   nixConfig = {
-    # Equivalent to:
-    # nix.settings.substituters = [ "http://127.0.0.1:8081" ];
-    # nix.settings.trusted-public-keys = [ "cache.local-1:REPLACE_WITH_YOUR_PUBLIC_KEY_BASE64" ];
-    # nix.settings.accept-flake-config = true;
-    substituters = [ "http://127.0.0.1:8081" ];
-    trusted-public-keys = [ "cache.local-1:REPLACE_WITH_YOUR_PUBLIC_KEY_BASE64" ];
+    # Why `extra-`: the bare `substituters`/`trusted-public-keys` keys REPLACE
+    # the system defaults. Dropping cache.nixos.org makes a plain `nix build`
+    # here try to bootstrap stdenv from source (~900 derivations). The `extra-`
+    # forms append, so the local cache is consulted *in addition to* upstream.
+    #
+    # Equivalent NixOS form:
+    #   nix.settings.extra-substituters = [ "http://127.0.0.1:8081/public" ];
+    #   nix.settings.extra-trusted-public-keys = [ "cache.local:hfNlzq2QP6JLd9ghjD/6+IZ3A21etwghcrKP5wvJV2k=" ];
+    extra-substituters = [ "http://127.0.0.1:8081/public" ];
+    # This is the throwaway dev key committed at ../cache/cache-public.pem, so
+    # the example works out of the box. Generate your own before trusting this
+    # cache for anything real — the matching secret key is in the repo.
+    extra-trusted-public-keys = [ "cache.local:hfNlzq2QP6JLd9ghjD/6+IZ3A21etwghcrKP5wvJV2k=" ];
     accept-flake-config = true;
   };
 }

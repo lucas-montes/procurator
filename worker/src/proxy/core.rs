@@ -182,7 +182,7 @@ pub async fn proxy_handler<F: Factory>(
         &state.base_domain,
         request,
         OPENCODE_UPSTREAM_PORT,
-        state.runtime_settings,
+        state.runtime_settings.clone(),
     )
     .await)
 }

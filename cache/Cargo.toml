@@ -3,30 +3,49 @@ name = "cache"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["http", "sqlite"]
+# Inbound HTTP adapter (axum router). Off = embed the use cases only.
+http = ["dep:axum", "dep:tokio-util"]
+# SQLite index adapter.
+sqlite = ["dep:sqlx"]
+
+[[bin]]
+name = "cache"
+path = "src/main.rs"
+required-features = ["http", "sqlite"]
+
+[[test]]
+name = "http"
+required-features = ["http"]
+
+[[test]]
+name = "nix_e2e"
+required-features = ["http", "sqlite"]
+
 [dependencies]
-axum.workspace = true
-tokio.workspace = true
-tokio-util = { workspace = true, features = ["io"] }
-ed25519-dalek = "2.0"
-base64 = "0.21"
+tokio = { workspace = true, features = ["io-util", "signal", "time"] }
+futures.workspace = true
+bytes = "1"
 tracing.workspace = true
 tracing-subscriber.workspace = true
 serde.workspace = true
-serde_json.workspace = true
-uuid.workspace = true
 toml = "0.8"
-# TLS (mTLS) stack, same versions as worker proxy.
-tokio-rustls = "0.26"
-rustls = { version = "0.23", features = ["ring"] }
-rustls-pemfile = "2"
-# X.509 parsing for CN allowlists + SHA-256 fingerprints for identity.
-x509-parser = "0.16"
+uuid.workspace = true
+ed25519-dalek = "2.0"
+base64 = "0.21"
 sha2 = "0.10"
 hex = "0.4"
-# Manual TLS accept loop (reuses worker proxy pattern).
-hyper = { version = "1", features = ["http1"] }
-hyper-util = { version = "0.1", features = ["server", "tokio", "http1"] }
+getrandom = "0.2"
+axum = { workspace = true, optional = true }
+tokio-util = { workspace = true, features = ["io"], optional = true }
+sqlx = { workspace = true, optional = true }
+
+[dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+tempfile = "3"
+serde_json.workspace = true
 
 [lints]
 workspace = true
