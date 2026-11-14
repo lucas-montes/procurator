@@ -1,5 +1,5 @@
 use clap::{Args, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tracing::{error, info, warn};
 
@@ -49,8 +49,8 @@ pub enum RepoCommands {
     Clone(RepoCloneArgs),
     /// Pull latest changes
     Pull(RepoPullArgs),
-    /// Push local commits
-    Push(RepoPushArgs),
+    /// Build the commit, push its artifacts to the flake's cache, then push the commits
+    Push,
     /// Create a new branch
     Branch(RepoBranchArgs),
 }
@@ -72,14 +72,6 @@ pub struct RepoPullArgs {
     path: Option<PathBuf>,
 }
 
-/// Push arguments for single repository.
-#[derive(Debug, Args)]
-pub struct RepoPushArgs {
-    /// Path to the repository (defaults to current directory)
-    #[arg(short, long)]
-    path: Option<PathBuf>,
-}
-
 /// Branch arguments for single repository.
 #[derive(Debug, Args)]
 pub struct RepoBranchArgs {
@@ -95,7 +87,7 @@ impl RepoArgs {
         match self.command {
             RepoCommands::Clone(args) => execute_repo_clone(args),
             RepoCommands::Pull(args) => execute_repo_pull(args),
-            RepoCommands::Push(args) => execute_repo_push(args),
+            RepoCommands::Push => execute_repo_push(),
             RepoCommands::Branch(args) => execute_repo_branch(args),
         }
     }
@@ -153,13 +145,16 @@ fn execute_repo_pull(args: RepoPullArgs) {
     }
 }
 
-/// Push local commits to remote with optional Nix cache.
-fn execute_repo_push(args: RepoPushArgs) {
+/// Push the current repository: first the artifacts `HEAD` builds, to the
+/// cache named in the flake's `nixConfig`, then the commits.
+/// Why: CI starts on the git push; with the artifacts already uploaded it
+/// substitutes them instead of rebuilding.
+fn execute_repo_push() {
     let start = Instant::now();
-    let path = args.path.unwrap_or_else(|| PathBuf::from("."));
-    info!(path=?path.display(), "Pushing repository");
+    let path = Path::new(".");
+    info!("Pushing repository");
 
-    let repo = match repo_outils::git::GitRepo::open(&path) {
+    let repo = match repo_outils::git::GitRepo::open(path) {
         Ok(repo) => repo,
         Err(e) => {
             error!(error=%e, "Failed to open repository");
@@ -167,29 +162,28 @@ fn execute_repo_push(args: RepoPushArgs) {
         }
     };
 
-    // Push git changes
+    // Why: the cache is an optimisation; its failures never block the push.
+    match repo_outils::nix::read_cache_url(path) {
+        Ok(Some(url)) => match repo.head_commit() {
+            Ok(rev) => {
+                info!(url=%url, rev=%rev, "Building HEAD and pushing its artifacts");
+                match repo_outils::nix::push_commit(path, &rev.to_string(), &url) {
+                    Ok(0) => info!("Nothing new to push to the cache"),
+                    Ok(count) => info!(count, "Artifacts built here are in the cache"),
+                    Err(e) => warn!(error=%e, "Failed to push artifacts to the cache"),
+                }
+            }
+            Err(e) => warn!(error=%e, "Failed to resolve HEAD, skipping cache push"),
+        },
+        Ok(None) => warn!("No Nix cache configured, skipping cache push"),
+        Err(e) => warn!(error=%e, "Failed to read Nix config, skipping cache push"),
+    }
+
     match repo.push() {
-        Ok(_) => info!(path=?path.display(), "Successfully pushed repository"),
+        Ok(()) => info!("Successfully pushed repository"),
         Err(e) => {
             error!(error=%e, "Failed to push repository");
             std::process::exit(1);
-        }
-    }
-
-    // Push Nix cache if configured
-    match repo_outils::nix::read_cache_url(&path) {
-        Ok(Some(url)) => {
-            info!(url=%url, "Pushing Nix artifacts to cache");
-            match repo_outils::nix::push_all_to_cache(&url) {
-                Ok(_) => info!("Successfully pushed Nix artifacts to cache"),
-                Err(e) => warn!(error=%e, "Failed to push Nix cache"),
-            }
-        }
-        Ok(None) => {
-            warn!("No Nix cache configured, skipping cache push");
-        }
-        Err(e) => {
-            warn!(error=%e, "Failed to read Nix config");
         }
     }
 

@@ -2,7 +2,7 @@
 
 ## What
 
-A shared utility library for Git repository management and Nix operations. Provides `GitRepo` (working-copy clone/pull/push/branch via `git2`) and `RepoPath`/`create_bare_repo`/`clone_into_bare` (bare-repo creation, path management, SSH URL generation, and Nix-compatible `git+file://` URLs). Also includes Nix-specific helpers (flake evaluation, build log parsing, cache push/pull).
+A shared utility library for Git repository management and Nix operations. Provides `GitRepo` (working-copy clone/pull/push/branch via `git2`) and `RepoPath`/`create_bare_repo`/`clone_into_bare` (bare-repo creation, path management, SSH URL generation, and Nix-compatible `git+file://` URLs). Also includes Nix-specific helpers (flake evaluation, build log parsing, and `push_commit`, which builds a commit and uploads what this machine built to a binary cache).
 
 ## Why
 

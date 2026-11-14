@@ -6,7 +6,6 @@
 use std::fmt;
 use std::path::Path;
 use std::process::Command;
-use tracing::warn;
 
 /// Errors specific to cache operations.
 #[derive(Debug)]
@@ -22,8 +21,6 @@ pub enum CacheError {
     JsonParse(serde_json::Error),
     /// No substituter URL found in flake config
     NoCacheConfig,
-    /// No Nix build artifacts found (no `./result` symlinks)
-    NoArtifacts,
 }
 
 impl fmt::Display for CacheError {
@@ -40,7 +37,6 @@ impl fmt::Display for CacheError {
             }
             CacheError::JsonParse(err) => write!(f, "Failed to parse JSON: {}", err),
             CacheError::NoCacheConfig => write!(f, "No cache URL configured in flake nixConfig"),
-            CacheError::NoArtifacts => write!(f, "No Nix build artifacts found (no ./result)"),
         }
     }
 }
@@ -116,33 +112,6 @@ fn try_read_substituters(repo_path: &Path, attr: &str) -> Result<Option<String>>
     Ok(urls.into_iter().find(|u| !u.is_empty()))
 }
 
-/// Push all locally-built Nix artifacts to a binary cache.
-///
-/// Discovers `./result` symlinks (including `result-*`) created by
-/// `nix build` and copies each to the cache via `nix copy --to <url>`.
-pub fn push_all_to_cache(url: &str) -> Result<()> {
-    let artifacts = find_nix_artifacts()?;
-
-    if artifacts.is_empty() {
-        return Err(CacheError::NoArtifacts);
-    }
-
-    let mut last_err = None;
-
-    for artifact in &artifacts {
-        warn!("Pushing {} to cache {}", artifact.display(), url);
-        if let Err(e) = push_to_cache(url, artifact) {
-            warn!("Failed to push {}: {}", artifact.display(), e);
-            last_err = Some(e);
-        }
-    }
-
-    match last_err {
-        Some(e) => Err(e),
-        None => Ok(()),
-    }
-}
-
 /// Push a single store path (or symlink to one) to the cache.
 pub fn push_to_cache(url: &str, path: &Path) -> Result<()> {
     let output = Command::new("nix")
@@ -183,33 +152,6 @@ pub fn pull_from_cache(url: &str, path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Find Nix build artifacts in the current directory.
-///
-/// Looks for `./result` and `./result-*` symlinks (created by `nix build`).
-pub fn find_nix_artifacts() -> Result<Vec<std::path::PathBuf>> {
-    let mut artifacts = Vec::new();
-    let cwd = std::env::current_dir()?;
-
-    // Check for ./result
-    let result_path = cwd.join("result");
-    if result_path.exists() {
-        artifacts.push(result_path);
-    }
-
-    // Check for ./result-*
-    if let Ok(entries) = std::fs::read_dir(&cwd) {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
-            if name_str.starts_with("result-") && entry.path().exists() {
-                artifacts.push(entry.path());
-            }
-        }
-    }
-
-    Ok(artifacts)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,12 +162,6 @@ mod tests {
         assert_eq!(
             format!("{}", err),
             "No cache URL configured in flake nixConfig"
-        );
-
-        let err = CacheError::NoArtifacts;
-        assert_eq!(
-            format!("{}", err),
-            "No Nix build artifacts found (no ./result)"
         );
 
         let err = CacheError::NixCommandFailed {

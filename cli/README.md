@@ -38,10 +38,26 @@ The only real stub is the top-level **`agents`** command (`pcr agents up/down/st
 
 `stack` itself only implements `start`; `up`/`down`/`stop`/`restart` don't exist on it.
 
+## Pushing a repository
+
+`pcr vcs repo push` (run from the repository root, no arguments) does two things, in order:
+
+1. **Warms the binary cache for `HEAD`.** If the flake declares a cache in
+   `nixConfig.extra-substituters` (or `substituters`), it builds every
+   `packages.<system>.*` and `checks.<system>.*` output of the *committed*
+   `HEAD` (uncommitted edits are ignored), then uploads every store path this
+   machine built itself — build-time dependencies included, substituted paths
+   excluded. CI and teammates then substitute those instead of rebuilding.
+2. **Pushes the commits** to `origin`.
+
+A cache failure is logged as a warning and never blocks the git push. Pushing
+needs a token with `write` on that cache, read from Nix's netrc file
+(`netrc-file` in `nix.conf`; see [../cache/README.md](../cache/README.md)).
+
 ## Stack
 
 To test it manually
 
 ```bash
-cargo run -p cli --bin pcr -- vcs repo push --path .
+cargo run -p cli --bin pcr -- vcs repo push
 ```

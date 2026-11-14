@@ -342,6 +342,14 @@ impl GitRepo {
         Ok(())
     }
 
+    /// The commit `HEAD` points at.
+    ///
+    /// # Errors
+    /// Fails when `HEAD` is unborn or does not point at a commit.
+    pub fn head_commit(&self) -> Result<git2::Oid> {
+        Ok(self.repo.head()?.peel_to_commit()?.id())
+    }
+
     /// Get the current branch name.
     pub fn current_branch(&self) -> Result<String> {
         let head = self.repo.head()?;
