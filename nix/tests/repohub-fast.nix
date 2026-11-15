@@ -60,7 +60,7 @@ let
     services.procurator.gitServer.enable = true;
     services.procurator.gitServer.admins = [ "lucas" ];
     services.procurator.gitServer.authorizedKeys = [ "ssh-ed25519 AAAA test" ];
-    services.procurator.gitServer.ciWebhookUrl = "http://127.0.0.1:8082/api/builds";
+    services.procurator.gitServer.ciWebhookUrl = "http://127.0.0.1:8082/api/runs";
   };
   combinedJson = repohubJson combined;
 
@@ -88,7 +88,7 @@ let
   hookSrc = combined.config.environment.etc."git-server/post-receive".source;
   hookCheck =
     assert' "legacy CI port 3000 removed from hook" (builtins.match ".*localhost:3000.*" hookSrc == null)
-    && assert' "hook targets configured webhook" (builtins.match ".*127.0.0.1:8082/api/builds.*" hookSrc != null);
+    && assert' "hook targets configured webhook" (builtins.match ".*127.0.0.1:8082/api/runs.*" hookSrc != null);
 
   # ── 3. Strict defaults with git-server enabled (no baked-in hosts) ─
   strict = evalRepohub {

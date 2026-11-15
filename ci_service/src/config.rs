@@ -168,7 +168,7 @@ fn default_worker_poll_interval_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, ConfigError};
+    use super::Config;
     use std::path::PathBuf;
 
     /// Write a temp file that won't collide across parallel tests.

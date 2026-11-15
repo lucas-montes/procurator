@@ -1,26 +1,34 @@
 [package]
 name = "ci_service"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [features]
-default = ["web"]
-web = ["axum"]
+default = ["http", "sqlite"]
+# Inbound HTTP adapter (axum router). Off = embed the use cases only.
+http = ["dep:axum"]
+# SQLite run store adapter.
+sqlite = ["dep:sqlx"]
+
+[[bin]]
+name = "ci_service"
+path = "src/main.rs"
+required-features = ["http", "sqlite"]
 
 [dependencies]
-tokio = { workspace = true, features = ["signal"] }
-tokio-stream = "0.1"
-axum= { workspace = true, optional = true }
+tokio = { workspace = true, features = ["signal", "time"] }
 serde.workspace = true
-serde_json.workspace = true
 toml = "0.8"
-sqlx.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-tower-http = { version = "0.5", features = ["trace"] }
-chrono.workspace = true
-futures.workspace = true
-repo_outils.workspace = true
+axum = { workspace = true, optional = true }
+sqlx = { workspace = true, optional = true }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+serde_json.workspace = true
+tempfile = "3"
 
 [lints]
 workspace = true

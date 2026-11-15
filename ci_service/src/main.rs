@@ -1,13 +1,41 @@
-use std::path::PathBuf;
+//! `ci_service` binary: the composition root for a standalone deployment.
+//! Why: all wiring lives here — config in, adapters chosen, HTTP served.
 
-use axum::{routing::get, Router};
-use ci_service::{routes, AppState, Database, JobQueue, Worker};
-use tracing::info;
+use std::fmt;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use ci_service::adapters::http::router;
+use ci_service::adapters::sqlite::SqliteRunStore;
+use ci_service::adapters::system::SystemClock;
+use ci_service::application::ports::StoreError;
+use ci_service::application::{Service, ServiceError};
+use ci_service::config::{Config, ConfigError};
 use tracing_subscriber::EnvFilter;
 
-use crate::config::Config;
+/// Startup failures.
+#[derive(Debug)]
+enum MainError {
+    Config(ConfigError),
+    Store(StoreError),
+    Recover(ServiceError),
+    Bind(std::io::Error),
+    Serve(std::io::Error),
+}
 
-mod config;
+impl fmt::Display for MainError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Config(e) => e.fmt(f),
+            Self::Store(e) => e.fmt(f),
+            Self::Recover(e) => write!(f, "recover interrupted runs: {e}"),
+            Self::Bind(e) => write!(f, "bind: {e}"),
+            Self::Serve(e) => write!(f, "serve: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for MainError {}
 
 /// Resolve `--config <path>`. Why: CLI arg only — no env pointer, no fixed path.
 fn config_path() -> Result<PathBuf, String> {
@@ -19,8 +47,48 @@ fn config_path() -> Result<PathBuf, String> {
             .map(PathBuf::from)
             .ok_or_else(|| format!("{USAGE} (missing path after --config)")),
         Some(other) => Err(format!("{USAGE} (got {other:?})")),
-        None => Err(USAGE.to_string()),
+        None => Err(String::from(USAGE)),
     }
+}
+
+/// Resolve when the process is asked to stop.
+async fn shutdown_signal() {
+    let interrupt = tokio::signal::ctrl_c();
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("install SIGTERM handler");
+    tokio::select! {
+        _ = interrupt => {}
+        _ = terminate.recv() => {}
+    }
+    tracing::info!("shutdown signal received");
+}
+
+async fn run(config: Config) -> Result<(), MainError> {
+    let store = SqliteRunStore::open(&config.database_url)
+        .await
+        .map_err(MainError::Store)?;
+    let service = Arc::new(Service::new(store, SystemClock));
+
+    // Why: no worker is running yet, so every `running` row is a leftover.
+    let recovered = service.recover().await.map_err(MainError::Recover)?;
+    if recovered > 0 {
+        tracing::warn!(
+            recovered,
+            "requeued runs interrupted by the previous process"
+        );
+    }
+
+    let listener = tokio::net::TcpListener::bind(&config.bind_address)
+        .await
+        .map_err(MainError::Bind)?;
+    tracing::info!(
+        bind_address = config.bind_address.as_str(),
+        "serving CI API"
+    );
+    axum::serve(listener, router(service))
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .map_err(MainError::Serve)
 }
 
 #[tokio::main]
@@ -33,59 +101,18 @@ async fn main() {
 
     // Why: usage errors exit 2 with a one-line message, not a Debug dump.
     let path = match config_path() {
+        Ok(path) => path,
         Err(usage) => {
             eprintln!("{usage}");
             std::process::exit(2);
         }
-        Ok(p) => p,
     };
-    // Fail-fast: unreadable, unparsable, or invalid bind/paths exits here.
-    let config = Config::from_file(&path).unwrap_or_else(|e| {
-        eprintln!("{e}");
+    let result = match Config::from_file(&path) {
+        Ok(config) => run(config).await,
+        Err(e) => Err(MainError::Config(e)),
+    };
+    if let Err(e) = result {
+        eprintln!("ci_service: {e}");
         std::process::exit(1);
-    });
-
-    info!(
-        database = config.database_url.as_str(),
-        bind_address = config.bind_address.as_str(),
-        repos_path = config.repos_base_path.as_str(),
-        path = %path.display(),
-        "Starting Procurator CI Service"
-    );
-
-    // Initialize database
-    let database = Database::new(&config.database_url).await.unwrap();
-
-    // Initialize job queue and repository store
-    let queue = JobQueue::new(database);
-
-    let worker = Worker::new(queue.clone());
-    let state = AppState::new(queue);
-
-    tokio::spawn(worker.run());
-
-    info!(target: "ciService", "Build worker spawned");
-
-    let app = Router::new()
-        .nest("/api", routes())
-        .route("/health", get(|| async { "OK" }))
-        .with_state(state);
-
-    info!(target: "ciService", bind_address = config.bind_address.as_str(), "Starting HTTP server");
-
-    let listener = tokio::net::TcpListener::bind(&config.bind_address)
-        .await
-        .unwrap();
-
-    axum::serve(listener, app)
-        .with_graceful_shutdown(signal())
-        .await
-        .unwrap();
-}
-
-async fn signal() {
-    tokio::signal::ctrl_c()
-        .await
-        .expect("Failed to install CTRL+C signal handler");
-    info!(target: "ciService", "Shutdown signal received, terminating...");
+    }
 }

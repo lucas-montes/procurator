@@ -107,32 +107,21 @@ while read oldrev newrev refname; do
     echo "GPG Status: $gpg_status"
     [ -n "$gpg_signer" ] && echo "GPG Signer: $gpg_signer"
 
-    # Build JSON payload - use escaped strings for safety
-    # Escape double quotes and backslashes in strings
-    escaped_author=$(echo "$commit_author" | sed 's/\\/\\\\/g; s/"/\\"/g')
-    escaped_email=$(echo "$commit_email" | sed 's/\\/\\\\/g; s/"/\\"/g')
-    escaped_message=$(echo "$commit_message" | sed 's/\\/\\\\/g; s/"/\\"/g')
-    escaped_signer=$(echo "$gpg_signer" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    # Build the run request. The CI service identifies repos as owner/name and
+    # resolves paths itself, so no filesystem path is sent.
+    # /var/lib/git-server/lucas/dummy.git -> lucas/dummy
+    OWNER=$(basename "$PARENT_DIR")
+    # Why: git allows `"` and `\` in ref names; escape them for JSON.
+    escaped_ref=$(printf '%s' "$refname" | sed 's/\\/\\\\/g; s/"/\\"/g')
 
-    json_payload="{\"repo\":\"$REPO_NAME\",\"bare_repo_path\":\"$REPO_PATH\",\"old_rev\":\"$oldrev\",\"new_rev\":\"$newrev\",\"ref\":\"$refname\""
-
-    # Add optional fields only if they have values
-    [ -n "$commit_author" ] && json_payload="$json_payload,\"commit_author\":\"$escaped_author\""
-    [ -n "$commit_email" ] && json_payload="$json_payload,\"commit_email\":\"$escaped_email\""
-    [ -n "$commit_message" ] && json_payload="$json_payload,\"commit_message\":\"$escaped_message\""
-    [ -n "$gpg_status" ] && [ "$gpg_status" != "N" ] && json_payload="$json_payload,\"gpg_status\":\"$gpg_status\""
-    [ -n "$gpg_key" ] && json_payload="$json_payload,\"gpg_key\":\"$gpg_key\""
-    [ -n "$gpg_signer" ] && json_payload="$json_payload,\"gpg_signer\":\"$escaped_signer\""
+    json_payload="{\"repo\":\"$OWNER/$REPO_NAME\",\"commit\":\"$newrev\",\"ref\":\"$escaped_ref\""
     [ -n "$SSH_USER" ] && json_payload="$json_payload,\"pusher\":\"$SSH_USER\""
-    [ -n "$SSH_KEY_FP" ] && json_payload="$json_payload,\"ssh_key_fingerprint\":\"$SSH_KEY_FP\""
-    [ -n "$SSH_CLIENT_IP" ] && json_payload="$json_payload,\"ssh_client_ip\":\"$SSH_CLIENT_IP\""
-
     json_payload="$json_payload}"
 
     echo "Sending payload to CI service..."
 
     # Notify CI service
-    response=$(curl -s -w "\n%{http_code}" -X POST http://localhost:3000/api/builds \
+    response=$(curl -s -w "\n%{http_code}" -X POST http://localhost:3000/api/runs \
         -H "Content-Type: application/json" \
         -d "$json_payload")
 

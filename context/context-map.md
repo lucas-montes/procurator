@@ -17,6 +17,7 @@ Quick navigation for AI sessions working on Procurator.
   - [stack/healthcheck.md](stack/healthcheck.md) — Healthcheck system (schema + runner)
 - [plans/](plans/) - Implementation plans and task tracking
 - [specs/](specs/) - Technical specifications (e.g. Nix schema)
+  - [specs/ci-service.md](specs/ci-service.md) — CI service target design: flake checks, per-check logs, cache reuse, `procurator.nix` config, ports, security
 - [tmp/](tmp/) - Session scratch space
 
 ## Codebase Map
@@ -43,7 +44,10 @@ Quick navigation for AI sessions working on Procurator.
 - `repohub/` - Repository hub service
 - `control_plane/` - Coordination service
 - `worker/` - Background job execution
-- `ci_service/` - CI service
+- `ci_service/` - CI service, hexagonal like `cache` (spec: `specs/ci-service.md`)
+  - `ci_service/src/domain/run.rs` - run identity, statuses, lifecycle transitions
+  - `ci_service/src/application/` - `Service` use cases and `ports.rs` (`RunStore`, `Clock`)
+  - `ci_service/src/adapters/` - `sqlite.rs`, `memory.rs` (held to `store_contract.rs`), `system.rs`, `http/`
 
 ### Cache (`cache/`)
 Embeddable artifact cache in a hexagonal layout: named public/private caches, token auth, Nix front-end only. Plain HTTP, no TLS.
@@ -54,6 +58,7 @@ Embeddable artifact cache in a hexagonal layout: named public/private caches, to
 - `cache/tests/` - `http.rs` (in-process router tests), `nix_e2e.rs` (real `nix copy`, `--ignored`)
 
 ## Current Work
+- **Pending plan:** `plans/control-plane-web-console.md` (T01–T19 pending; separate `console` service that builds a live map of machines/VMs/units and real-time messages purely by parsing each service's JSON `tracing` logs (file / journal-gatewayd / journalctl sources), plus a control board using capnp for actions and machine/unit/VM pages; log convention in `specs/log-events.md`)
 - **Completed plan:** `plans/cache-hexagonal-rewrite.md` (T01–T14 done; cache rewritten as a hexagonal library with named public/private caches and token auth)
 - **Pending plan:** `plans/rust-log-env-var.md` (T01 done, T02 pending)
 - **Completed plan:** `plans/control-plane-pull-assignments.md` (T01–T09 done; control-plane pull loop, worker poll/reconcile/heartbeat, Nix inventory, cross-crate e2e)

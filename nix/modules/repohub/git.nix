@@ -3,7 +3,7 @@ with lib; let
   cfg = config.services.procurator.gitServer;
   # TO make it executable
   postReceiveHook = pkgs.writeScript "post-receive" (builtins.replaceStrings
-    ["http://localhost:3000/api/builds"]
+    ["http://localhost:3000/api/runs"]
     [cfg.ciWebhookUrl]
     (builtins.readFile ./post-receive));
   # Create git config file the same way as the hook
@@ -39,7 +39,7 @@ in {
 
     ciWebhookUrl = mkOption {
       type = types.str;
-      default = "http://localhost:8082/api/builds";
+      default = "http://localhost:8082/api/runs";
       description = "URL the post-receive hook notifies when pushes land (Procurator CI API).";
     };
   };
