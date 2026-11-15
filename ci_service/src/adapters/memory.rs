@@ -135,7 +135,7 @@ impl RunStore for MemoryRunStore {
         for check in checks {
             state.last_check += 1;
             let id = CheckId::new(state.last_check);
-            inserted.push(Check::from_parts(id, run, check, None));
+            inserted.push(Check::inserted(id, run, check));
         }
         state.checks.extend(inserted.iter().cloned());
         ready(Ok(inserted))
@@ -154,6 +154,32 @@ impl RunStore for MemoryRunStore {
             .find(|check| check.id() == id)
             .is_some_and(|check| check.advance(status, machine));
         ready(Ok(updated))
+    }
+
+    fn retry_check(&self, id: CheckId) -> impl Future<Output = Result<bool, StoreError>> + Send {
+        let mut state = self.state();
+        let retried = state
+            .checks
+            .iter_mut()
+            .find(|check| check.id() == id)
+            .is_some_and(Check::retry);
+        ready(Ok(retried))
+    }
+
+    fn close_open_checks(
+        &self,
+        run: RunId,
+        status: CheckStatus,
+    ) -> impl Future<Output = Result<u64, StoreError>> + Send {
+        let mut state = self.state();
+        let closed = state
+            .checks
+            .iter_mut()
+            .filter(|check| check.run() == run && !check.status().is_final())
+            .map(|check| check.advance(status, None))
+            .filter(|&closed| closed)
+            .count();
+        ready(Ok(u64::try_from(closed).unwrap_or(u64::MAX)))
     }
 
     fn checks(&self, run: RunId) -> impl Future<Output = Result<Vec<Check>, StoreError>> + Send {

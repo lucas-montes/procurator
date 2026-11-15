@@ -254,24 +254,50 @@ pub struct Check {
     run: RunId,
     evaluated: NewCheck,
     machine: Option<String>,
+    tries: u32,
 }
 
 impl Check {
-    /// Reassemble a stored check. `machine` is where it was built, when it
-    /// was.
+    /// A just-stored check, on its first try.
+    #[must_use]
+    pub fn inserted(id: CheckId, run: RunId, evaluated: NewCheck) -> Self {
+        Self::from_parts(id, run, evaluated, None, 1)
+    }
+
+    /// Reassemble a stored check. `machine` is where its latest try was
+    /// built, when it was; `tries` counts attempts, starting at 1.
     #[must_use]
     pub fn from_parts(
         id: CheckId,
         run: RunId,
         evaluated: NewCheck,
         machine: Option<String>,
+        tries: u32,
     ) -> Self {
         Self {
             id,
             run,
             evaluated,
             machine,
+            tries,
         }
+    }
+
+    /// Which attempt this is: 1, then one more per rerun.
+    #[must_use]
+    pub fn tries(&self) -> u32 {
+        self.tries
+    }
+
+    /// Queue a failed check for another try. `false` unless it failed.
+    pub fn retry(&mut self) -> bool {
+        if self.evaluated.status != CheckStatus::Failed {
+            return false;
+        }
+        self.evaluated.status = CheckStatus::Queued;
+        self.machine = None;
+        self.tries += 1;
+        true
     }
 
     /// The check's id.
@@ -420,11 +446,10 @@ mod tests {
 
     #[test]
     fn a_finished_check_does_not_move() {
-        let mut check = Check::from_parts(
+        let mut check = Check::inserted(
             CheckId::new(1),
             RunId::new(1),
             evaluated("x86_64-linux", false),
-            None,
         );
         assert!(check.advance(CheckStatus::Building, Some("ssh-ng://b")));
         assert_eq!(check.machine(), Some("ssh-ng://b"));
@@ -432,5 +457,23 @@ mod tests {
         assert_eq!(check.machine(), Some("ssh-ng://b"), "kept when not given");
         assert!(!check.advance(CheckStatus::Failed, None));
         assert_eq!(check.status(), CheckStatus::Passed);
+        assert!(!check.retry(), "only failed checks are retried");
+    }
+
+    #[test]
+    fn a_failed_check_is_retried_as_a_new_try() {
+        let mut check = Check::inserted(
+            CheckId::new(1),
+            RunId::new(1),
+            evaluated("x86_64-linux", false),
+        );
+        assert_eq!(check.tries(), 1);
+        assert!(check.advance(CheckStatus::Building, Some("local")));
+        assert!(check.advance(CheckStatus::Failed, None));
+        assert!(check.retry());
+        assert_eq!(
+            (check.status(), check.tries(), check.machine()),
+            (CheckStatus::Queued, 2, None)
+        );
     }
 }

@@ -1,6 +1,6 @@
 # CI Service — Spec
 
-Status: agreed on 2026-11-14. Build steps 1 and 2 are done (see "Build
+Status: agreed on 2026-11-14. Build steps 1–3 are done (see "Build
 order"); "Current state" at the end describes the scaffold they replaced.
 
 ## Purpose
@@ -305,12 +305,12 @@ pulling from the cache.
 
 ## Service config (TOML)
 
-On top of today's keys, all of which must actually be used (`max_retries`
-and `domain` currently are not):
+On top of today's keys, all of which must actually be used (`domain`
+currently is not):
 
 - `max_concurrent_runs`, `eval_workers`, `allowed_uris` (done in step 2)
-- limits: `max_reruns`, `max_check_timeout`, `max_run_timeout`,
-  `max_log_retention_days`
+- limits: `max_reruns` (replaces `max_retries`), `max_check_timeout`,
+  `max_run_timeout` (done in step 3), `max_log_retention_days`
 - `default_log_retention_days`
 - `cache_base_url`, `public_cache`, `private_cache_prefix`, `netrc_file`
 - `secrets_file`
@@ -370,12 +370,22 @@ src/  (root `procurator` crate: the monolith's composition root)
    worker loop with `max_concurrent_runs`, NixOS module PATH, `git` group
    and `safe.directory`. Uses `git+file://…?rev=`. `ci_service` no longer
    uses `repo_outils`, so the lost stderr in `repo_outils::nix::run_command`
-   no longer matters here (`flake_check` has no callers left). Known gaps
-   until step 3: no timeouts (a hanging build blocks its worker), and when
-   the builder breaks mid-build the run is `errored` but its unbuilt checks
-   stay `queued`/`building`.
-3. **Repo config.** `procurator.nix` parse and validate, blob-id cache, split
-   between per-run and repo-level settings, reruns and timeouts with caps.
+   no longer matters here (`flake_check` has no callers left).
+3. **Repo config.** ✅ Done 2026-11-16. `procurator.nix` read with git from
+   the checked commit, evaluated alone (`nix eval --expr`, pure, restricted,
+   no URIs, 30 s, 64 KiB), validated in full (unknown keys and webhook event
+   names are errors), cached in memory by blob id. Per-run settings drive the
+   run: `ci.checks` (explicit lists are evaluated as indexed attributes, so a
+   missing one fails alone), `ci.reruns` (failed checks only, each try
+   counted in `tries`), `ci.timeouts` (`--timeout`/`--max-silent-time` per
+   derivation, attributed by elapsed time because Nix's message names no
+   derivation; the run limit kills the build and marks open checks
+   `timed_out`), all capped by `max_reruns`, `max_check_timeout`,
+   `max_run_timeout`. Repo-level keys are validated but not read yet:
+   resolving them from the default branch head lands with their first user
+   (cache in step 4, webhooks in step 5, retention in step 6, deploy in
+   step 8). Timed-out checks are not rerun. If the builder breaks mid-run,
+   open checks are closed as `failed` and the run is `errored`.
 4. **Cache.** Substituter and netrc wiring in the NixOS module, push after
    build, public or private cache by visibility.
 5. **Events.** Outbox, dispatcher, webhook adapter, `SecretStore`.

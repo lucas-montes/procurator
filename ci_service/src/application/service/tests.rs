@@ -4,11 +4,12 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use super::Service;
 use crate::adapters::memory::MemoryRunStore;
-use crate::adapters::scripted::{ScriptedBuilder, derivation};
+use crate::adapters::scripted::{FixedConfig, ScriptedBuilder, derivation};
 use crate::application::ServiceError;
 use crate::application::ports::{BuildEvent, BuilderError, Clock, Evaluated};
 use crate::domain::check::{CheckStatus, LOCAL_MACHINE};
 use crate::domain::log::LogOrigin;
+use crate::domain::repo_config::{CheckSelection, Limits, RunSettings, Timeouts};
 use crate::domain::run::{CommitHash, GitRef, NewRun, RepoName, RunId, RunStatus};
 
 /// A clock tests move by hand.
@@ -20,9 +21,14 @@ impl Clock for &'static TestClock {
     }
 }
 
+/// Generous service limits.
+fn limits() -> Limits {
+    Limits::new(5, 3600, 7200)
+}
+
 /// A service whose builder evaluates to nothing.
 fn service() -> (
-    Service<MemoryRunStore, &'static TestClock, ScriptedBuilder>,
+    Service<MemoryRunStore, &'static TestClock, ScriptedBuilder, FixedConfig>,
     &'static TestClock,
 ) {
     with_builder(ScriptedBuilder::new(&["x86_64-linux"], Ok(Vec::new())))
@@ -31,11 +37,154 @@ fn service() -> (
 fn with_builder(
     builder: ScriptedBuilder,
 ) -> (
-    Service<MemoryRunStore, &'static TestClock, ScriptedBuilder>,
+    Service<MemoryRunStore, &'static TestClock, ScriptedBuilder, FixedConfig>,
+    &'static TestClock,
+) {
+    with_config(builder, FixedConfig::default(), limits())
+}
+
+fn with_config(
+    builder: ScriptedBuilder,
+    config: FixedConfig,
+    limits: Limits,
+) -> (
+    Service<MemoryRunStore, &'static TestClock, ScriptedBuilder, FixedConfig>,
     &'static TestClock,
 ) {
     let clock: &'static TestClock = Box::leak(Box::new(TestClock(AtomicI64::new(100))));
-    (Service::new(MemoryRunStore::new(), clock, builder), clock)
+    let service = Service::new(MemoryRunStore::new(), clock, builder, config, limits);
+    (service, clock)
+}
+
+#[tokio::test]
+async fn failed_checks_are_rerun_and_flaky_ones_show_their_tries() {
+    let evaluation = vec![
+        derivation("checks.x.flaky", "x86_64-linux", PASS, false),
+        derivation("checks.x.broken", "x86_64-linux", FAIL, false),
+    ];
+    let builder = ScriptedBuilder::new(&["x86_64-linux"], Ok(evaluation)).passing_from(PASS, 2);
+    let settings = RunSettings::new(CheckSelection::All, 2, Timeouts::default());
+    let (service, _) = with_config(builder, FixedConfig::settings(settings), limits());
+    let id = service.enqueue(request("lucas/dummy")).await.unwrap();
+    assert!(service.work_next().await.unwrap());
+
+    assert_eq!(service.run(id).await.unwrap().status(), RunStatus::Failed);
+    assert_eq!(
+        service.builder.built(),
+        [PASS, FAIL, PASS, FAIL, FAIL],
+        "reruns build only what failed"
+    );
+    let checks = service.checks(id).await.unwrap();
+    let summary: Vec<(CheckStatus, u32)> = checks
+        .iter()
+        .map(|check| (check.status(), check.tries()))
+        .collect();
+    assert_eq!(
+        summary,
+        [(CheckStatus::Passed, 2), (CheckStatus::Failed, 3)]
+    );
+    let broken = service.check_log(id, "checks.x.broken").await.unwrap();
+    assert_eq!(
+        lines(&broken),
+        [
+            "failed, building again: try 2 of 3",
+            "failed, building again: try 3 of 3"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn reruns_and_timeouts_are_capped_and_passed_to_the_builder() {
+    let evaluation = vec![derivation("checks.x.a", "x86_64-linux", FAIL, false)];
+    let builder = ScriptedBuilder::new(&["x86_64-linux"], Ok(evaluation));
+    let selection = CheckSelection::attrs(vec![String::from("checks.x.a")]).unwrap();
+    let asked = RunSettings::new(
+        selection.clone(),
+        50,
+        Timeouts::new(9000, 9000, 9000).unwrap(),
+    );
+    let (service, _) = with_config(
+        builder,
+        FixedConfig::settings(asked),
+        Limits::new(1, 100, 200),
+    );
+    service.enqueue(request("lucas/dummy")).await.unwrap();
+    assert!(service.work_next().await.unwrap());
+
+    let capped = Timeouts::new(100, 100, 200).unwrap();
+    assert_eq!(
+        service.builder.asked(),
+        [
+            (selection, None),
+            (CheckSelection::All, Some(capped)),
+            (CheckSelection::All, Some(capped)),
+        ],
+        "the selection is evaluated, then one try plus one capped rerun"
+    );
+}
+
+#[tokio::test]
+async fn timed_out_builds_are_not_rerun() {
+    let evaluation = vec![derivation("checks.x.slow", "x86_64-linux", FAIL, false)];
+    let events = vec![
+        BuildEvent::Started {
+            build: 9,
+            drv: String::from(FAIL),
+            machine: String::new(),
+        },
+        BuildEvent::TimedOut { build: 9 },
+    ];
+    let builder = ScriptedBuilder::new(&["x86_64-linux"], Ok(evaluation)).with_events(events);
+    let settings = RunSettings::new(CheckSelection::All, 3, Timeouts::default());
+    let (service, _) = with_config(builder, FixedConfig::settings(settings), limits());
+    let id = service.enqueue(request("lucas/dummy")).await.unwrap();
+    assert!(service.work_next().await.unwrap());
+
+    assert_eq!(service.run(id).await.unwrap().status(), RunStatus::Failed);
+    assert_eq!(service.builder.built(), [FAIL]);
+    let checks = service.checks(id).await.unwrap();
+    assert_eq!(checks[0].status(), CheckStatus::TimedOut);
+    let log = service.check_log(id, "checks.x.slow").await.unwrap();
+    assert_eq!(lines(&log), ["error: build timed out"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_run_past_its_time_limit_times_out() {
+    let evaluation = vec![
+        derivation("checks.x.hangs", "x86_64-linux", PASS, false),
+        derivation("checks.x.cached", "x86_64-linux", DEP, true),
+    ];
+    let builder = ScriptedBuilder::new(&["x86_64-linux"], Ok(evaluation)).hanging();
+    let settings = RunSettings::new(CheckSelection::All, 0, Timeouts::new(10, 10, 30).unwrap());
+    let (service, _) = with_config(builder, FixedConfig::settings(settings), limits());
+    let id = service.enqueue(request("lucas/dummy")).await.unwrap();
+    assert!(service.work_next().await.unwrap());
+
+    assert_eq!(service.run(id).await.unwrap().status(), RunStatus::TimedOut);
+    let statuses: Vec<CheckStatus> = service
+        .checks(id)
+        .await
+        .unwrap()
+        .iter()
+        .map(crate::domain::check::Check::status)
+        .collect();
+    assert_eq!(statuses, [CheckStatus::TimedOut, CheckStatus::Cached]);
+    let log = service.run_log(id).await.unwrap();
+    assert_eq!(lines(&log), ["run timed out after 30 seconds"]);
+}
+
+#[tokio::test]
+async fn an_invalid_repo_config_fails_the_run_without_evaluating() {
+    let builder = ScriptedBuilder::new(&["x86_64-linux"], Ok(Vec::new()));
+    let config = FixedConfig::invalid("procurator.nix: unknown field `rerun`");
+    let (service, _) = with_config(builder, config, limits());
+    let id = service.enqueue(request("lucas/dummy")).await.unwrap();
+    assert!(service.work_next().await.unwrap());
+
+    assert_eq!(service.run(id).await.unwrap().status(), RunStatus::Failed);
+    assert!(service.builder.asked().is_empty(), "nothing evaluated");
+    let log = service.run_log(id).await.unwrap();
+    assert_eq!(lines(&log), ["procurator.nix: unknown field `rerun`"]);
 }
 
 fn lines(log: &[crate::domain::log::LogLine]) -> Vec<&str> {

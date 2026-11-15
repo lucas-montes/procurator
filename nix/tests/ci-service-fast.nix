@@ -44,7 +44,9 @@ let  # ── 1. Defaults ──────────────────
     && assertEq "database_url" defaultsJson.database_url "sqlite:///var/lib/procurator-ci/ci.db"
     && assertEq "domain" defaultsJson.domain "homelab"
     && assertEq "repos_base_path" defaultsJson.repos_base_path "/var/lib/git-server"
-    && assertEq "max_retries" defaultsJson.max_retries 3
+    && assertEq "max_reruns" defaultsJson.max_reruns 3
+    && assertEq "max_check_timeout" defaultsJson.max_check_timeout 14400
+    && assertEq "max_run_timeout" defaultsJson.max_run_timeout 21600
     && assertEq "worker_poll_interval_ms" defaultsJson.worker_poll_interval_ms 1000
     && assertEq "max_concurrent_runs" defaultsJson.max_concurrent_runs 1
     && assertEq "eval_workers" defaultsJson.eval_workers 1
@@ -62,7 +64,9 @@ let  # ── 1. Defaults ──────────────────
     databaseUrl = "sqlite:///tmp/ci.db";
     domain = "lab";
     reposBasePath = "/srv/git";
-    maxRetries = 5;
+    maxReruns = 5;
+    maxCheckTimeout = 600;
+    maxRunTimeout = 1200;
     workerPollIntervalMillis = 250;
     maxConcurrentRuns = 3;
     evalWorkers = 4;
@@ -77,7 +81,9 @@ let  # ── 1. Defaults ──────────────────
     && assertEq "database_url" explicitJson.database_url "sqlite:///tmp/ci.db"
     && assertEq "domain" explicitJson.domain "lab"
     && assertEq "repos_base_path" explicitJson.repos_base_path "/srv/git"
-    && assertEq "max_retries" explicitJson.max_retries 5
+    && assertEq "max_reruns" explicitJson.max_reruns 5
+    && assertEq "max_check_timeout" explicitJson.max_check_timeout 600
+    && assertEq "max_run_timeout" explicitJson.max_run_timeout 1200
     && assertEq "worker_poll_interval_ms" explicitJson.worker_poll_interval_ms 250
     && assertEq "max_concurrent_runs" explicitJson.max_concurrent_runs 3
     && assertEq "eval_workers" explicitJson.eval_workers 4

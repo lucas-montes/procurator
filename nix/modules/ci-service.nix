@@ -12,7 +12,9 @@ let
     bind_address = cfg.addr;
     domain = cfg.domain;
     repos_base_path = cfg.reposBasePath;
-    max_retries = cfg.maxRetries;
+    max_reruns = cfg.maxReruns;
+    max_check_timeout = cfg.maxCheckTimeout;
+    max_run_timeout = cfg.maxRunTimeout;
     worker_poll_interval_ms = cfg.workerPollIntervalMillis;
     max_concurrent_runs = cfg.maxConcurrentRuns;
     eval_workers = cfg.evalWorkers;
@@ -60,10 +62,22 @@ in {
       '';
     };
 
-    maxRetries = mkOption {
-      type = types.int;
+    maxReruns = mkOption {
+      type = types.ints.unsigned;
       default = 3;
-      description = "Retry budget for failed build jobs.";
+      description = "Most times a repo's procurator.nix may ask for a failed check to be built again (ci.reruns is capped to this).";
+    };
+
+    maxCheckTimeout = mkOption {
+      type = types.ints.positive;
+      default = 4 * 3600;
+      description = "Most seconds a repo may let one derivation build (caps ci.timeouts.check and ci.timeouts.silent).";
+    };
+
+    maxRunTimeout = mkOption {
+      type = types.ints.positive;
+      default = 6 * 3600;
+      description = "Most seconds a repo may let one run take (caps ci.timeouts.run).";
     };
 
     workerPollIntervalMillis = mkOption {

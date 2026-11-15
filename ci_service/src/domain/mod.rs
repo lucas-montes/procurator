@@ -2,4 +2,5 @@
 
 pub mod check;
 pub mod log;
+pub mod repo_config;
 pub mod run;

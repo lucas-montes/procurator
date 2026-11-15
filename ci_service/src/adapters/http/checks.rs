@@ -11,7 +11,7 @@ use serde::Serialize;
 
 use super::error::HttpError;
 use crate::application::Service;
-use crate::application::ports::{Builder, Clock, RunStore};
+use crate::application::ports::{Builder, Clock, ConfigSource, RunStore};
 use crate::domain::check::{Check, Derivation};
 use crate::domain::log::{LogLine, LogOrigin};
 use crate::domain::run::RunId;
@@ -24,6 +24,7 @@ struct CheckBody<'a> {
     status: &'static str,
     drv_path: Option<&'a str>,
     machine: Option<&'a str>,
+    tries: u32,
 }
 
 impl<'a> From<&'a Check> for CheckBody<'a> {
@@ -34,6 +35,7 @@ impl<'a> From<&'a Check> for CheckBody<'a> {
             status: check.status().as_str(),
             drv_path: check.derivation().map(Derivation::path),
             machine: check.machine(),
+            tries: check.tries(),
         }
     }
 }
@@ -59,14 +61,15 @@ fn text(lines: &[LogLine], labels: bool) -> Response {
 }
 
 /// `GET /api/runs/{id}/checks`: a run's checks, in evaluation order.
-pub async fn list<S, C, B>(
-    State(service): State<Arc<Service<S, C, B>>>,
+pub async fn list<S, C, B, R>(
+    State(service): State<Arc<Service<S, C, B, R>>>,
     Path(id): Path<i64>,
 ) -> Result<Response, HttpError>
 where
     S: RunStore,
     C: Clock,
     B: Builder,
+    R: ConfigSource,
 {
     let checks = service.checks(RunId::new(id)).await?;
     let body = ChecksBody {
@@ -76,28 +79,30 @@ where
 }
 
 /// `GET /api/runs/{id}/log`: everything the run logged, labelled.
-pub async fn run_log<S, C, B>(
-    State(service): State<Arc<Service<S, C, B>>>,
+pub async fn run_log<S, C, B, R>(
+    State(service): State<Arc<Service<S, C, B, R>>>,
     Path(id): Path<i64>,
 ) -> Result<Response, HttpError>
 where
     S: RunStore,
     C: Clock,
     B: Builder,
+    R: ConfigSource,
 {
     let lines = service.run_log(RunId::new(id)).await?;
     Ok(text(&lines, true))
 }
 
 /// `GET /api/runs/{id}/checks/{attr}/log`: one check's own log.
-pub async fn log<S, C, B>(
-    State(service): State<Arc<Service<S, C, B>>>,
+pub async fn log<S, C, B, R>(
+    State(service): State<Arc<Service<S, C, B, R>>>,
     Path((id, attr)): Path<(i64, String)>,
 ) -> Result<Response, HttpError>
 where
     S: RunStore,
     C: Clock,
     B: Builder,
+    R: ConfigSource,
 {
     let lines = service.check_log(RunId::new(id), &attr).await?;
     Ok(text(&lines, false))

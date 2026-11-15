@@ -40,6 +40,7 @@ const SCHEMA: [&str; 6] = [
         outputs TEXT,
         status TEXT NOT NULL,
         machine TEXT,
+        tries INTEGER NOT NULL DEFAULT 1,
         UNIQUE (run_id, attr)
     )",
     "CREATE TABLE IF NOT EXISTS log_lines (
@@ -56,7 +57,11 @@ const COLUMNS: &str =
     "id, repo, commit_hash, git_ref, pusher, status, created_at, started_at, finished_at";
 
 /// Check columns, as [`check_from_row`] reads them.
-const CHECK_COLUMNS: &str = "id, run_id, attr, system, drv_path, outputs, status, machine";
+const CHECK_COLUMNS: &str = "id, run_id, attr, system, drv_path, outputs, status, machine, tries";
+
+/// Columns added after a table was first released: table, column, definition.
+/// Why: `CREATE TABLE IF NOT EXISTS` leaves an older table as it was.
+const ADDED_COLUMNS: [(&str, &str, &str); 1] = [("checks", "tries", "INTEGER NOT NULL DEFAULT 1")];
 
 /// Statuses a check can still move from.
 const OPEN_CHECKS: &str = "('queued', 'building')";
@@ -110,6 +115,22 @@ impl SqliteRunStore {
                     .execute(&pool)
                     .await
                     .map_err(StoreError::new)?;
+            }
+            for (table, column, definition) in ADDED_COLUMNS {
+                let present: i64 =
+                    sqlx::query_scalar("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?")
+                        .bind(table)
+                        .bind(column)
+                        .fetch_one(&pool)
+                        .await
+                        .map_err(StoreError::new)?;
+                if present == 0 {
+                    let sql = format!("ALTER TABLE {table} ADD COLUMN {column} {definition}");
+                    sqlx::query(&sql)
+                        .execute(&pool)
+                        .await
+                        .map_err(StoreError::new)?;
+                }
             }
             Ok(Self { pool })
         }
@@ -172,6 +193,7 @@ fn check_from_row(row: &SqliteRow) -> Result<Check, StoreError> {
         RunId::new(row.try_get("run_id").map_err(StoreError::new)?),
         check,
         get("machine")?,
+        row.try_get("tries").map_err(StoreError::new)?,
     ))
 }
 
@@ -321,7 +343,7 @@ impl RunStore for SqliteRunStore {
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(StoreError::new)?;
-                inserted.push(Check::from_parts(CheckId::new(id), run, check, None));
+                inserted.push(Check::inserted(CheckId::new(id), run, check));
             }
             tx.commit().await.map_err(StoreError::new)?;
             Ok(inserted)
@@ -347,6 +369,39 @@ impl RunStore for SqliteRunStore {
                 .await
                 .map_err(StoreError::new)?;
             Ok(result.rows_affected() == 1)
+        }
+    }
+
+    fn retry_check(&self, id: CheckId) -> impl Future<Output = Result<bool, StoreError>> + Send {
+        async move {
+            let result = sqlx::query(
+                "UPDATE checks SET status = 'queued', machine = NULL, tries = tries + 1
+                 WHERE id = ? AND status = 'failed'",
+            )
+            .bind(id.get())
+            .execute(&self.pool)
+            .await
+            .map_err(StoreError::new)?;
+            Ok(result.rows_affected() == 1)
+        }
+    }
+
+    fn close_open_checks(
+        &self,
+        run: RunId,
+        status: CheckStatus,
+    ) -> impl Future<Output = Result<u64, StoreError>> + Send {
+        async move {
+            let sql = format!(
+                "UPDATE checks SET status = ? WHERE run_id = ? AND status IN {OPEN_CHECKS}"
+            );
+            let result = sqlx::query(&sql)
+                .bind(status.as_str())
+                .bind(run.get())
+                .execute(&self.pool)
+                .await
+                .map_err(StoreError::new)?;
+            Ok(result.rows_affected())
         }
     }
 

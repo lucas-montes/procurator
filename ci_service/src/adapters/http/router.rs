@@ -9,26 +9,30 @@ use axum::routing::{get, post};
 
 use super::{checks, runs};
 use crate::application::Service;
-use crate::application::ports::{Builder, Clock, RunStore};
+use crate::application::ports::{Builder, Clock, ConfigSource, RunStore};
 
 /// Build the router for a service. Mount it at the root of a listener, or
 /// nest it inside the monolith's axum application.
-pub fn router<S, C, B>(service: Arc<Service<S, C, B>>) -> Router
+pub fn router<S, C, B, R>(service: Arc<Service<S, C, B, R>>) -> Router
 where
     S: RunStore,
     C: Clock,
     B: Builder,
+    R: ConfigSource,
 {
     Router::new()
         .route("/health", get(|| async { "OK" }))
-        .route("/api/runs", post(runs::create::<S, C, B>))
-        .route("/api/runs/{id}", get(runs::show::<S, C, B>))
-        .route("/api/runs/{id}/log", get(checks::run_log::<S, C, B>))
-        .route("/api/runs/{id}/checks", get(checks::list::<S, C, B>))
+        .route("/api/runs", post(runs::create::<S, C, B, R>))
+        .route("/api/runs/{id}", get(runs::show::<S, C, B, R>))
+        .route("/api/runs/{id}/log", get(checks::run_log::<S, C, B, R>))
+        .route("/api/runs/{id}/checks", get(checks::list::<S, C, B, R>))
         .route(
             "/api/runs/{id}/checks/{attr}/log",
-            get(checks::log::<S, C, B>),
+            get(checks::log::<S, C, B, R>),
         )
-        .route("/api/repos/{owner}/{name}/runs", get(runs::list::<S, C, B>))
+        .route(
+            "/api/repos/{owner}/{name}/runs",
+            get(runs::list::<S, C, B, R>),
+        )
         .with_state(service)
 }

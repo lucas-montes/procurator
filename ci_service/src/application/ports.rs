@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 
 use crate::domain::check::{Check, CheckId, CheckStatus, Derivation, NewCheck, Systems};
 use crate::domain::log::{LogLine, LogOrigin, NewLogLine};
+use crate::domain::repo_config::{CheckSelection, RunSettings, Timeouts};
 use crate::domain::run::{NewRun, RepoName, Run, RunId, RunStatus};
 
 /// Run store failure (the backend's message).
@@ -119,6 +120,18 @@ pub trait RunStore: Send + Sync + 'static {
         machine: Option<&str>,
     ) -> impl Future<Output = Result<bool, StoreError>> + Send;
 
+    /// Queue a failed check for another try: back to queued, one more try,
+    /// no machine. `false` when it is missing or did not fail.
+    fn retry_check(&self, id: CheckId) -> impl Future<Output = Result<bool, StoreError>> + Send;
+
+    /// Move every check of a run that is not over yet to `status`.
+    /// Returns how many.
+    fn close_open_checks(
+        &self,
+        run: RunId,
+        status: CheckStatus,
+    ) -> impl Future<Output = Result<u64, StoreError>> + Send;
+
     /// A run's checks, in evaluation order.
     fn checks(&self, run: RunId) -> impl Future<Output = Result<Vec<Check>, StoreError>> + Send;
 
@@ -204,6 +217,11 @@ pub enum BuildEvent {
         /// The line.
         text: String,
     },
+    /// The build tagged `build` ran into a time limit.
+    TimedOut {
+        /// The [`BuildEvent::Started`] tag.
+        build: u64,
+    },
     /// A message about the whole build (e.g. why a derivation failed).
     Message(String),
 }
@@ -213,20 +231,52 @@ pub trait Builder: Send + Sync + 'static {
     /// The systems the CI host or one of its remote builders can build.
     fn systems(&self) -> impl Future<Output = Result<Systems, BuilderError>> + Send;
 
-    /// Evaluate a run's checks.
+    /// Evaluate the selected attributes of a run's commit.
     fn evaluate(
         &self,
         run: &NewRun,
+        selection: &CheckSelection,
     ) -> impl Future<Output = Result<Vec<Evaluated>, BuilderError>> + Send;
 
-    /// Build `targets` in one go, keeping on after failures, and send
-    /// progress to `events`. Returns, per target in order, whether all its
-    /// outputs now exist.
+    /// Build `targets` in one go, keeping on after failures, under the
+    /// per-derivation limits of `timeouts`, and send progress to `events`.
+    /// Returns, per target in order, whether all its outputs now exist.
     fn build(
         &self,
         targets: &[&Derivation],
+        timeouts: Timeouts,
         events: mpsc::Sender<BuildEvent>,
     ) -> impl Future<Output = Result<Vec<bool>, BuilderError>> + Send;
+}
+
+/// Why a repo config could not be read.
+#[derive(Debug)]
+pub enum RepoConfigError {
+    /// `procurator.nix` is invalid. The repo's fault: the run fails.
+    Invalid(String),
+    /// Git or Nix could not be run. Not the repo's fault: the run errors.
+    Unavailable(String),
+}
+
+impl fmt::Display for RepoConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Invalid(detail) => detail.fmt(f),
+            Self::Unavailable(detail) => write!(f, "repo config unavailable: {detail}"),
+        }
+    }
+}
+
+impl std::error::Error for RepoConfigError {}
+
+/// Reads `procurator.nix`.
+pub trait ConfigSource: Send + Sync + 'static {
+    /// The per-run settings of a run's commit, before the service's caps.
+    /// No `procurator.nix` means the defaults.
+    fn run_settings(
+        &self,
+        run: &NewRun,
+    ) -> impl Future<Output = Result<RunSettings, RepoConfigError>> + Send;
 }
 
 /// Wall clock.

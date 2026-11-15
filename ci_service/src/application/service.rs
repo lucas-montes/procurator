@@ -10,34 +10,40 @@ mod tests;
 use std::future::Future;
 
 use super::ServiceError;
-use super::ports::{Builder, Clock, RunQuery, RunStore};
+use super::ports::{Builder, Clock, ConfigSource, RunQuery, RunStore};
 use crate::domain::check::Check;
 use crate::domain::log::{LogLine, LogOrigin};
+use crate::domain::repo_config::Limits;
 use crate::domain::run::{NewRun, RepoName, Run, RunId, RunStatus};
 
 /// Largest page of runs a caller can ask for.
 const MAX_PAGE: u32 = 100;
 
 /// The CI application: every use case, over swappable ports.
-pub struct Service<S, C, B> {
+pub struct Service<S, C, B, R> {
     store: S,
     clock: C,
     builder: B,
+    config: R,
+    limits: Limits,
 }
 
-impl<S, C, B> Service<S, C, B>
+impl<S, C, B, R> Service<S, C, B, R>
 where
     S: RunStore,
     C: Clock,
     B: Builder,
+    R: ConfigSource,
 {
-    /// Assemble the service.
+    /// Assemble the service. `limits` caps what any repo config asks for.
     #[must_use]
-    pub fn new(store: S, clock: C, builder: B) -> Self {
+    pub fn new(store: S, clock: C, builder: B, config: R, limits: Limits) -> Self {
         Self {
             store,
             clock,
             builder,
+            config,
+            limits,
         }
     }
 

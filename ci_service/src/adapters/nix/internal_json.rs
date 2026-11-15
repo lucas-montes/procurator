@@ -24,6 +24,8 @@ pub enum NixLog<'a> {
     },
     /// One line of the build tagged `id`.
     BuildLine { id: u64, text: Cow<'a, str> },
+    /// Activity `id` ended (a build, if `id` started as one).
+    Stopped { id: u64 },
     /// An error or warning, ANSI colours removed.
     Message(String),
     /// Progress and bookkeeping nobody reads.
@@ -91,6 +93,7 @@ pub fn parse(line: &str) -> NixLog<'_> {
             Some(text) => NixLog::BuildLine { id: event.id, text },
             None => NixLog::Ignored,
         },
+        ("stop", _) => NixLog::Stopped { id: event.id },
         ("msg", _) if event.level <= MAX_SHOWN_LEVEL => match event.msg {
             Some(msg) => NixLog::Message(strip_ansi(&msg)),
             None => NixLog::Ignored,
@@ -170,7 +173,7 @@ mod tests {
         let progress = r#"@nix {"action":"result","fields":[101,0],"id":21,"type":106}"#;
         assert_eq!(parse(progress), NixLog::Ignored);
         let stop = r#"@nix {"action":"stop","id":25}"#;
-        assert_eq!(parse(stop), NixLog::Ignored);
+        assert_eq!(parse(stop), NixLog::Stopped { id: 25 });
         assert_eq!(
             parse("plain text"),
             NixLog::Message(String::from("plain text"))

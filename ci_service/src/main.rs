@@ -7,12 +7,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ci_service::adapters::http::router;
-use ci_service::adapters::nix::NixBuilder;
+use ci_service::adapters::nix::{GitConfigSource, NixBuilder};
 use ci_service::adapters::sqlite::SqliteRunStore;
 use ci_service::adapters::system::SystemClock;
 use ci_service::application::ports::StoreError;
 use ci_service::application::{Service, ServiceError};
 use ci_service::config::{Config, ConfigError};
+use ci_service::domain::repo_config::Limits;
 use tokio::task::JoinSet;
 use tracing_subscriber::EnvFilter;
 
@@ -70,12 +71,20 @@ async fn run(config: Config) -> Result<(), MainError> {
     let store = SqliteRunStore::open(&config.database_url)
         .await
         .map_err(MainError::Store)?;
-    let builder = NixBuilder::new(
-        PathBuf::from(&config.repos_base_path),
-        config.eval_workers,
-        &config.allowed_uris,
+    let repos = PathBuf::from(&config.repos_base_path);
+    let builder = NixBuilder::new(repos.clone(), config.eval_workers, &config.allowed_uris);
+    let limits = Limits::new(
+        config.max_reruns,
+        config.max_check_timeout,
+        config.max_run_timeout,
     );
-    let service = Arc::new(Service::new(store, SystemClock, builder));
+    let service = Arc::new(Service::new(
+        store,
+        SystemClock,
+        builder,
+        GitConfigSource::new(repos),
+        limits,
+    ));
 
     // Why: no worker is running yet, so every `running` row is a leftover.
     let recovered = service.recover().await.map_err(MainError::Recover)?;

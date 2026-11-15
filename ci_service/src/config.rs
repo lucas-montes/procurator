@@ -15,8 +15,12 @@ pub struct Config {
     pub domain: String,
     /// Where bare git repositories are served from (git-server root).
     pub repos_base_path: String,
-    /// Retry budget for failed build jobs.
-    pub max_retries: i64,
+    /// Most reruns a repo may ask for.
+    pub max_reruns: u32,
+    /// Most seconds a repo may let one derivation build.
+    pub max_check_timeout: u64,
+    /// Most seconds a repo may let one run take.
+    pub max_run_timeout: u64,
     /// Delay between build-queue polls, in milliseconds.
     pub worker_poll_interval_ms: u64,
     /// Runs carried out at the same time.
@@ -62,8 +66,12 @@ struct FileConfig {
     domain: String,
     #[serde(default = "default_repos_base_path")]
     repos_base_path: String,
-    #[serde(default = "default_max_retries")]
-    max_retries: i64,
+    #[serde(default = "default_max_reruns")]
+    max_reruns: u32,
+    #[serde(default = "default_max_check_timeout")]
+    max_check_timeout: u64,
+    #[serde(default = "default_max_run_timeout")]
+    max_run_timeout: u64,
     #[serde(default = "default_worker_poll_interval_ms")]
     worker_poll_interval_ms: u64,
     #[serde(default = "default_one")]
@@ -81,7 +89,9 @@ impl Default for FileConfig {
             bind_address: default_bind_address(),
             domain: default_domain(),
             repos_base_path: default_repos_base_path(),
-            max_retries: default_max_retries(),
+            max_reruns: default_max_reruns(),
+            max_check_timeout: default_max_check_timeout(),
+            max_run_timeout: default_max_run_timeout(),
             worker_poll_interval_ms: default_worker_poll_interval_ms(),
             max_concurrent_runs: default_one(),
             eval_workers: default_one(),
@@ -97,7 +107,9 @@ impl From<FileConfig> for Config {
             bind_address: fc.bind_address,
             domain: fc.domain,
             repos_base_path: fc.repos_base_path,
-            max_retries: fc.max_retries,
+            max_reruns: fc.max_reruns,
+            max_check_timeout: fc.max_check_timeout,
+            max_run_timeout: fc.max_run_timeout,
             worker_poll_interval_ms: fc.worker_poll_interval_ms,
             max_concurrent_runs: fc.max_concurrent_runs,
             eval_workers: fc.eval_workers,
@@ -150,6 +162,11 @@ impl Config {
                 "max_concurrent_runs and eval_workers must be at least 1",
             )));
         }
+        if self.max_check_timeout == 0 || self.max_run_timeout == 0 {
+            return Err(ConfigError::Invalid(String::from(
+                "max_check_timeout and max_run_timeout must be at least 1",
+            )));
+        }
         if self.worker_poll_interval_ms == 0 {
             return Err(ConfigError::Invalid(String::from(
                 "worker_poll_interval_ms must be at least 1",
@@ -184,8 +201,18 @@ fn default_repos_base_path() -> String {
     String::from("/var/lib/git-server")
 }
 
-fn default_max_retries() -> i64 {
+fn default_max_reruns() -> u32 {
     3
+}
+
+/// Four hours.
+fn default_max_check_timeout() -> u64 {
+    4 * 3600
+}
+
+/// Six hours.
+fn default_max_run_timeout() -> u64 {
+    6 * 3600
 }
 
 fn default_worker_poll_interval_ms() -> u64 {
@@ -232,7 +259,9 @@ mod tests {
         assert_eq!(cfg.bind_address, "0.0.0.0:8082");
         assert_eq!(cfg.database_url, "sqlite:///var/lib/procurator-ci/ci.db");
         assert_eq!(cfg.repos_base_path, "/var/lib/git-server");
-        assert_eq!(cfg.max_retries, 3);
+        assert_eq!(cfg.max_reruns, 3);
+        assert_eq!(cfg.max_check_timeout, 14_400);
+        assert_eq!(cfg.max_run_timeout, 21_600);
         assert_eq!(cfg.worker_poll_interval_ms, 1000);
         assert_eq!(cfg.max_concurrent_runs, 1);
         assert_eq!(cfg.eval_workers, 1);
@@ -248,7 +277,9 @@ database_url = "sqlite:///tmp/ci.db"
 bind_address = "127.0.0.1:9000"
 domain = "lab"
 repos_base_path = "/srv/git"
-max_retries = 5
+max_reruns = 5
+max_check_timeout = 600
+max_run_timeout = 1200
 worker_poll_interval_ms = 250
 max_concurrent_runs = 2
 eval_workers = 4
@@ -260,7 +291,9 @@ allowed_uris = ["git+ssh://git.lab/"]
         assert_eq!(cfg.database_url, "sqlite:///tmp/ci.db");
         assert_eq!(cfg.domain, "lab");
         assert_eq!(cfg.repos_base_path, "/srv/git");
-        assert_eq!(cfg.max_retries, 5);
+        assert_eq!(cfg.max_reruns, 5);
+        assert_eq!(cfg.max_check_timeout, 600);
+        assert_eq!(cfg.max_run_timeout, 1200);
         assert_eq!(cfg.worker_poll_interval_ms, 250);
         assert_eq!(cfg.max_concurrent_runs, 2);
         assert_eq!(cfg.eval_workers, 4);

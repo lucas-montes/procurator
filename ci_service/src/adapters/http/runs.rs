@@ -9,7 +9,7 @@ use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
 use super::error::HttpError;
-use crate::application::ports::{Builder, Clock, RunStore};
+use crate::application::ports::{Builder, Clock, ConfigSource, RunStore};
 use crate::application::{Service, ServiceError};
 use crate::domain::run::{CommitHash, GitRef, NewRun, Pusher, RepoName, Run, RunId};
 
@@ -95,14 +95,15 @@ pub struct ListParams {
 }
 
 /// `POST /api/runs`: queue a run. Answers 202 with the run id.
-pub async fn create<S, C, B>(
-    State(service): State<Arc<Service<S, C, B>>>,
+pub async fn create<S, C, B, R>(
+    State(service): State<Arc<Service<S, C, B, R>>>,
     Json(body): Json<CreateBody>,
 ) -> Result<Response, HttpError>
 where
     S: RunStore,
     C: Clock,
     B: Builder,
+    R: ConfigSource,
 {
     let request = body.into_request()?;
     let id = service.enqueue(request).await?;
@@ -115,22 +116,23 @@ where
 }
 
 /// `GET /api/runs/{id}`: one run.
-pub async fn show<S, C, B>(
-    State(service): State<Arc<Service<S, C, B>>>,
+pub async fn show<S, C, B, R>(
+    State(service): State<Arc<Service<S, C, B, R>>>,
     Path(id): Path<i64>,
 ) -> Result<Response, HttpError>
 where
     S: RunStore,
     C: Clock,
     B: Builder,
+    R: ConfigSource,
 {
     let run = service.run(RunId::new(id)).await?;
     Ok(Json(RunBody::from(&run)).into_response())
 }
 
 /// `GET /api/repos/{owner}/{name}/runs`: a repo's runs, newest first.
-pub async fn list<S, C, B>(
-    State(service): State<Arc<Service<S, C, B>>>,
+pub async fn list<S, C, B, R>(
+    State(service): State<Arc<Service<S, C, B, R>>>,
     Path((owner, name)): Path<(String, String)>,
     Query(params): Query<ListParams>,
 ) -> Result<Response, HttpError>
@@ -138,6 +140,7 @@ where
     S: RunStore,
     C: Clock,
     B: Builder,
+    R: ConfigSource,
 {
     let repo = RepoName::parse(format!("{owner}/{name}")).map_err(ServiceError::from)?;
     let before = params.before.map(RunId::new);
@@ -161,14 +164,15 @@ mod tests {
 
     use crate::adapters::http::router;
     use crate::adapters::memory::MemoryRunStore;
-    use crate::adapters::scripted::{ScriptedBuilder, derivation};
+    use crate::adapters::scripted::{FixedConfig, ScriptedBuilder, derivation};
     use crate::adapters::system::SystemClock;
     use crate::application::Service;
     use crate::application::ports::BuildEvent;
+    use crate::domain::repo_config::Limits;
 
     const DRV: &str = "/nix/store/u-unit.drv";
 
-    fn service() -> Arc<Service<MemoryRunStore, SystemClock, ScriptedBuilder>> {
+    fn service() -> Arc<Service<MemoryRunStore, SystemClock, ScriptedBuilder, FixedConfig>> {
         let evaluation = vec![derivation(
             "checks.x86_64-linux.unit",
             "x86_64-linux",
@@ -189,7 +193,13 @@ mod tests {
         let builder = ScriptedBuilder::new(&["x86_64-linux"], Ok(evaluation))
             .with_events(events)
             .passing(&[DRV]);
-        Arc::new(Service::new(MemoryRunStore::new(), SystemClock, builder))
+        Arc::new(Service::new(
+            MemoryRunStore::new(),
+            SystemClock,
+            builder,
+            FixedConfig::default(),
+            Limits::new(1, 60, 60),
+        ))
     }
 
     fn app() -> axum::Router {
@@ -223,6 +233,7 @@ mod tests {
         assert_eq!(check["attr"], "checks.x86_64-linux.unit");
         assert_eq!(check["status"], "passed");
         assert_eq!(check["machine"], "local");
+        assert_eq!(check["tries"], 1);
         assert_eq!(check["drv_path"], DRV);
 
         let uri = format!("/api/runs/{id}/checks/checks.x86_64-linux.unit/log");

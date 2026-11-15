@@ -21,7 +21,81 @@ pub async fn check<S: RunStore>(store: &S) {
     lifecycle(store).await;
     // Why: expects nothing queued before it; listing leaves runs queued.
     checks_and_logs(store).await;
+    retries_and_closing(store).await;
     listing(store).await;
+}
+
+async fn retries_and_closing<S: RunStore>(store: &S) {
+    let run = store
+        .insert(request("lucas/retry", None), 60)
+        .await
+        .unwrap();
+    store.claim_next(61).await.unwrap().unwrap();
+    let systems = Systems::new(vec![String::from("x")]);
+    let new = (0..3)
+        .map(|i| {
+            NewCheck::evaluated(
+                format!("checks.x.c{i}"),
+                String::from("x"),
+                Derivation::new(format!("/nix/store/{i}-c.drv"), Vec::new()),
+                false,
+                &systems,
+            )
+        })
+        .collect();
+    let checks = store.insert_checks(run, new).await.unwrap();
+    assert!(checks.iter().all(|check| check.tries() == 1));
+    let (flaky, open, building) = (checks[0].id(), checks[1].id(), checks[2].id());
+
+    assert!(
+        !store.retry_check(flaky).await.unwrap(),
+        "only failed checks are retried"
+    );
+    store
+        .update_check(flaky, CheckStatus::Building, Some("local"))
+        .await
+        .unwrap();
+    store
+        .update_check(flaky, CheckStatus::Failed, None)
+        .await
+        .unwrap();
+    assert!(store.retry_check(flaky).await.unwrap());
+    assert!(!store.retry_check(flaky).await.unwrap(), "now queued");
+    store
+        .update_check(building, CheckStatus::Building, None)
+        .await
+        .unwrap();
+
+    let stored = store.checks(run).await.unwrap();
+    assert_eq!(
+        (stored[0].status(), stored[0].tries(), stored[0].machine()),
+        (CheckStatus::Queued, 2, None)
+    );
+
+    store
+        .update_check(flaky, CheckStatus::Passed, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .close_open_checks(run, CheckStatus::TimedOut)
+            .await
+            .unwrap(),
+        2
+    );
+    let closed = store.checks(run).await.unwrap();
+    let statuses: Vec<CheckStatus> = closed.iter().map(Check::status).collect();
+    assert_eq!(
+        statuses,
+        [
+            CheckStatus::Passed,
+            CheckStatus::TimedOut,
+            CheckStatus::TimedOut
+        ]
+    );
+    assert_eq!(closed[0].tries(), 2);
+    assert_eq!(closed[1].id(), open);
+    assert!(store.finish(run, RunStatus::TimedOut, 62).await.unwrap());
 }
 
 async fn checks_and_logs<S: RunStore>(store: &S) {
