@@ -1,6 +1,6 @@
 # CI Service — Spec
 
-Status: agreed on 2026-11-14. Build steps 1–3 are done (see "Build
+Status: agreed on 2026-11-14. Build steps 1–4 are done (see "Build
 order"); "Current state" at the end describes the scaffold they replaced.
 
 ## Purpose
@@ -386,8 +386,20 @@ src/  (root `procurator` crate: the monolith's composition root)
    (cache in step 4, webhooks in step 5, retention in step 6, deploy in
    step 8). Timed-out checks are not rerun. If the builder breaks mid-run,
    open checks are closed as `failed` and the run is `errored`.
-4. **Cache.** Substituter and netrc wiring in the NixOS module, push after
-   build, public or private cache by visibility.
+4. **Cache.** ✅ Done 2026-11-16. After building, the outputs of every
+   derivation that started building in the run (dependencies and remote
+   builds included) that exist, plus the paths they reference that this host
+   created (`ultimate`), go up with `nix copy --no-recursive` and the netrc
+   (`cache_base_url`, `netrc_file`). Downloaded paths are never re-uploaded.
+   Push failures are a run-log warning, never a failed run. With no
+   visibility model yet, the target is the owner's private cache
+   (`<private_cache_prefix><owner>`) unless `ci.cache` on the default branch
+   head (`HEAD` of the bare repo) names the public cache or that same private
+   cache; any other name is refused with a warning. The NixOS module gets
+   `cache.{url,publicCache,privateCachePrefix,netrcFile}` and, when
+   `cache.substitute`, adds the public cache plus `cache.readCaches` to the
+   host's substituters with `cache.trustedPublicKeys`. Visibility-based
+   choice waits for the `Access` port (step 6).
 5. **Events.** Outbox, dispatcher, webhook adapter, `SecretStore`.
 6. **Monolith, access and live logs.** Composition root in the root
    `procurator` crate mounting ci_service, repohub and cache. `RepohubAccess`
@@ -456,9 +468,8 @@ security options are passed on every `nix-eval-jobs` call by the adapter.
 
 ## Current state (2026-11-14)
 
-The scaffold that steps 1 and 2 replaced. Items still open: cache settings
-(step 4), notifications (step 5), and the deploy call (step 8). The rest is
-fixed.
+The scaffold that steps 1–4 replaced. Items still open: notifications
+(step 5) and the deploy call (step 8). The rest is fixed.
 
 - `builds.rs::git_url` produces `/path/repo.git#<sha>`, which Nix reads as an
   output attribute. Every build fails with "could not find a flake.nix file".

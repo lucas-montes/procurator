@@ -9,7 +9,9 @@ use crate::application::ServiceError;
 use crate::application::ports::{BuildEvent, BuilderError, Clock, Evaluated};
 use crate::domain::check::{CheckStatus, LOCAL_MACHINE};
 use crate::domain::log::LogOrigin;
-use crate::domain::repo_config::{CheckSelection, Limits, RunSettings, Timeouts};
+use crate::domain::repo_config::{
+    CachePolicy, CheckSelection, Limits, RepoSettings, RunSettings, Timeouts,
+};
 use crate::domain::run::{CommitHash, GitRef, NewRun, RepoName, RunId, RunStatus};
 
 /// A clock tests move by hand.
@@ -51,9 +53,89 @@ fn with_config(
     Service<MemoryRunStore, &'static TestClock, ScriptedBuilder, FixedConfig>,
     &'static TestClock,
 ) {
+    with_cache(builder, config, limits, None)
+}
+
+fn with_cache(
+    builder: ScriptedBuilder,
+    config: FixedConfig,
+    limits: Limits,
+    cache: Option<CachePolicy>,
+) -> (
+    Service<MemoryRunStore, &'static TestClock, ScriptedBuilder, FixedConfig>,
+    &'static TestClock,
+) {
     let clock: &'static TestClock = Box::leak(Box::new(TestClock(AtomicI64::new(100))));
-    let service = Service::new(MemoryRunStore::new(), clock, builder, config, limits);
+    let store = MemoryRunStore::new();
+    let service = Service::new(store, clock, builder, config, limits, cache);
     (service, clock)
+}
+
+fn policy() -> CachePolicy {
+    CachePolicy::new(String::from("public"), String::from("private-"))
+}
+
+#[tokio::test]
+async fn what_a_run_built_is_pushed_to_the_owners_cache() {
+    let (service, _) = with_cache(
+        mixed_builder(),
+        FixedConfig::default(),
+        limits(),
+        Some(policy()),
+    );
+    let id = service.enqueue(request("lucas/dummy")).await.unwrap();
+    assert!(service.work_next().await.unwrap());
+
+    assert_eq!(
+        service.builder.pushed(),
+        [(
+            String::from("private-lucas"),
+            vec![String::from(DEP), String::from(FAIL), String::from(PASS)]
+        )],
+        "every derivation that started, dependencies included, once each"
+    );
+    let log = service.run_log(id).await.unwrap();
+    assert_eq!(
+        lines(&log).last(),
+        Some(&"pushed 3 paths to cache private-lucas")
+    );
+}
+
+#[tokio::test]
+async fn the_default_branch_picks_the_cache_but_not_someone_elses() {
+    for (requested, expected) in [("public", Some("public")), ("private-alice", None)] {
+        let repo = RepoSettings::new(Some(String::from(requested)));
+        let config = FixedConfig::default().with_repo(repo);
+        let (service, _) = with_cache(mixed_builder(), config, limits(), Some(policy()));
+        let id = service.enqueue(request("lucas/dummy")).await.unwrap();
+        assert!(service.work_next().await.unwrap());
+
+        let pushed: Vec<String> = service
+            .builder
+            .pushed()
+            .into_iter()
+            .map(|(cache, _)| cache)
+            .collect();
+        assert_eq!(
+            pushed,
+            expected.into_iter().map(String::from).collect::<Vec<_>>()
+        );
+        let log = service.run_log(id).await.unwrap();
+        let last = lines(&log).last().copied().unwrap_or_default();
+        if expected.is_none() {
+            assert!(last.starts_with("warning: not pushed to a cache"), "{last}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn nothing_built_means_nothing_pushed() {
+    let evaluation = vec![derivation("checks.x.a", "x86_64-linux", PASS, true)];
+    let builder = ScriptedBuilder::new(&["x86_64-linux"], Ok(evaluation));
+    let (service, _) = with_cache(builder, FixedConfig::default(), limits(), Some(policy()));
+    service.enqueue(request("lucas/dummy")).await.unwrap();
+    assert!(service.work_next().await.unwrap());
+    assert!(service.builder.pushed().is_empty());
 }
 
 #[tokio::test]

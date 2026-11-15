@@ -10,8 +10,8 @@ use crate::application::ports::{
     BuildEvent, Builder, BuilderError, ConfigSource, Evaluated, RepoConfigError,
 };
 use crate::domain::check::{Derivation, Systems};
-use crate::domain::repo_config::{CheckSelection, RunSettings, Timeouts};
-use crate::domain::run::NewRun;
+use crate::domain::repo_config::{CheckSelection, RepoSettings, RunSettings, Timeouts};
+use crate::domain::run::{NewRun, RepoName};
 
 /// What the builder answers, and what it was asked.
 #[derive(Debug, Default)]
@@ -25,6 +25,7 @@ pub struct ScriptedBuilder {
     hang: bool,
     built: Mutex<Vec<String>>,
     asked: Mutex<Vec<(CheckSelection, Option<Timeouts>)>>,
+    pushed: Mutex<Vec<(String, Vec<String>)>>,
 }
 
 impl ScriptedBuilder {
@@ -70,6 +71,11 @@ impl ScriptedBuilder {
     /// The `.drv` paths asked to be built, in order, one per try.
     pub fn built(&self) -> Vec<String> {
         lock(&self.built).clone()
+    }
+
+    /// Each push: the cache and the derivations.
+    pub fn pushed(&self) -> Vec<(String, Vec<String>)> {
+        lock(&self.pushed).clone()
     }
 
     /// The selection evaluated and the timeouts of each build, in order.
@@ -141,23 +147,41 @@ impl Builder for ScriptedBuilder {
             Ok(results)
         }
     }
+
+    fn push(
+        &self,
+        drvs: &[&str],
+        cache: &str,
+    ) -> impl Future<Output = Result<usize, BuilderError>> + Send {
+        let drvs: Vec<String> = drvs.iter().map(|&drv| String::from(drv)).collect();
+        let count = drvs.len();
+        lock(&self.pushed).push((String::from(cache), drvs));
+        std::future::ready(Ok(count))
+    }
 }
 
 /// A [`ConfigSource`] that always answers the same.
 #[derive(Debug)]
-pub struct FixedConfig(Result<RunSettings, String>);
+pub struct FixedConfig(Result<RunSettings, String>, RepoSettings);
 
 impl FixedConfig {
     /// Every run gets `settings`.
     #[must_use]
     pub fn settings(settings: RunSettings) -> Self {
-        Self(Ok(settings))
+        Self(Ok(settings), RepoSettings::default())
     }
 
     /// Every run's `procurator.nix` is invalid for `reason`.
     #[must_use]
     pub fn invalid(reason: &str) -> Self {
-        Self(Err(String::from(reason)))
+        Self(Err(String::from(reason)), RepoSettings::default())
+    }
+
+    /// Every repo's default branch has these repo-level settings.
+    #[must_use]
+    pub fn with_repo(mut self, repo: RepoSettings) -> Self {
+        self.1 = repo;
+        self
     }
 }
 
@@ -177,5 +201,12 @@ impl ConfigSource for FixedConfig {
             Err(reason) => Err(RepoConfigError::Invalid(reason.clone())),
         };
         std::future::ready(answer)
+    }
+
+    fn repo_settings(
+        &self,
+        _repo: &RepoName,
+    ) -> impl Future<Output = Result<RepoSettings, RepoConfigError>> + Send {
+        std::future::ready(Ok(self.1.clone()))
     }
 }

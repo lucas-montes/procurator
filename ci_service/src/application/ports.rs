@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 
 use crate::domain::check::{Check, CheckId, CheckStatus, Derivation, NewCheck, Systems};
 use crate::domain::log::{LogLine, LogOrigin, NewLogLine};
-use crate::domain::repo_config::{CheckSelection, RunSettings, Timeouts};
+use crate::domain::repo_config::{CheckSelection, RepoSettings, RunSettings, Timeouts};
 use crate::domain::run::{NewRun, RepoName, Run, RunId, RunStatus};
 
 /// Run store failure (the backend's message).
@@ -247,6 +247,15 @@ pub trait Builder: Send + Sync + 'static {
         timeouts: Timeouts,
         events: mpsc::Sender<BuildEvent>,
     ) -> impl Future<Output = Result<Vec<bool>, BuilderError>> + Send;
+
+    /// Upload to `cache` the outputs of `drvs` (derivations this run built)
+    /// that exist, plus the paths they reference that were created here.
+    /// Never their downloaded dependencies. Returns how many paths.
+    fn push(
+        &self,
+        drvs: &[&str],
+        cache: &str,
+    ) -> impl Future<Output = Result<usize, BuilderError>> + Send;
 }
 
 /// Why a repo config could not be read.
@@ -277,6 +286,13 @@ pub trait ConfigSource: Send + Sync + 'static {
         &self,
         run: &NewRun,
     ) -> impl Future<Output = Result<RunSettings, RepoConfigError>> + Send;
+
+    /// The repo-level settings, from the head of the default branch.
+    /// No `procurator.nix` there (or no default branch) means the defaults.
+    fn repo_settings(
+        &self,
+        repo: &RepoName,
+    ) -> impl Future<Output = Result<RepoSettings, RepoConfigError>> + Send;
 }
 
 /// Wall clock.

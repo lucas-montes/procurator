@@ -17,7 +17,7 @@ use crate::application::ports::{
 };
 use crate::domain::check::{Check, CheckId, CheckStatus, LOCAL_MACHINE, NewCheck};
 use crate::domain::log::{LogOrigin, NewLogLine};
-use crate::domain::repo_config::{RunSettings, Timeouts};
+use crate::domain::repo_config::{RepoSettings, RunSettings, Timeouts};
 use crate::domain::run::{Run, RunId, RunStatus};
 
 /// Build events buffered between the builder and the log writer.
@@ -205,8 +205,46 @@ where
             .filter(|check| check.status() != CheckStatus::Queued)
             .map(Check::status)
             .collect();
-        finals.extend(self.build_with_reruns(id, queued, settings).await?);
+        let mut built = Vec::new();
+        finals.extend(
+            self.build_with_reruns(id, queued, settings, &mut built)
+                .await?,
+        );
+        if !built.is_empty() {
+            self.push(run, &built).await?;
+        }
         Ok(CheckStatus::run_outcome(finals))
+    }
+
+    /// Upload what this run built to the repo's cache. Failures are logged
+    /// and never fail the run.
+    /// Why: the outputs are already checked; the cache only makes the next
+    /// run and deploys faster.
+    async fn push(&self, run: &Run, built: &[String]) -> Result<(), StoreError> {
+        let Some(policy) = &self.cache else {
+            return Ok(());
+        };
+        let id = run.id();
+        let repo = run.request().repo();
+        let requested = match self.config.repo_settings(repo).await {
+            Ok(settings) => settings,
+            Err(error) => {
+                let message = format!("warning: default branch config ignored: {error}");
+                self.log_text(id, LogOrigin::Run, &message).await?;
+                RepoSettings::default()
+            }
+        };
+        let message = match policy.choose(repo.owner(), requested.cache()) {
+            Err(error) => format!("warning: not pushed to a cache: {error}"),
+            Ok(cache) => {
+                let drvs: Vec<&str> = built.iter().map(String::as_str).collect();
+                match self.builder.push(&drvs, &cache).await {
+                    Ok(paths) => format!("pushed {paths} paths to cache {cache}"),
+                    Err(error) => format!("warning: push to cache {cache} failed: {error}"),
+                }
+            }
+        };
+        self.log_text(id, LogOrigin::Run, &message).await
     }
 
     /// Store why checks failed to evaluate or were skipped.
@@ -248,6 +286,7 @@ where
         run: RunId,
         mut pending: Vec<&Check>,
         settings: &RunSettings,
+        built: &mut Vec<String>,
     ) -> Result<Vec<CheckStatus>, Fault> {
         let reruns = settings.reruns();
         let mut finals = Vec::with_capacity(pending.len());
@@ -255,7 +294,9 @@ where
             if pending.is_empty() {
                 break;
             }
-            let statuses = self.build(run, &pending, settings.timeouts()).await?;
+            let statuses = self
+                .build(run, &pending, settings.timeouts(), built)
+                .await?;
             let mut failed = Vec::new();
             for (check, status) in pending.into_iter().zip(statuses) {
                 if status == CheckStatus::Failed && attempt < reruns {
@@ -280,6 +321,8 @@ where
             }
             pending = failed;
         }
+        built.sort_unstable();
+        built.dedup();
         Ok(finals)
     }
 
@@ -289,6 +332,7 @@ where
         run: RunId,
         queued: &[&Check],
         timeouts: Timeouts,
+        started: &mut Vec<String>,
     ) -> Result<Vec<CheckStatus>, Fault> {
         let targets: Vec<_> = queued
             .iter()
@@ -297,7 +341,7 @@ where
         let (events, received) = mpsc::channel(EVENT_BUFFER);
         let (built, recorded) = tokio::join!(
             self.builder.build(&targets, timeouts, events),
-            self.record(run, queued, received)
+            self.record(run, queued, received, started)
         );
         let timed_out = recorded?;
         let built = built?;
@@ -319,12 +363,14 @@ where
 
     /// Store build events until the builder is done: lines tagged with their
     /// derivation, checks marked `building` on the machine that took them.
-    /// Returns the checks whose build hit a time limit.
+    /// Returns the checks whose build hit a time limit, and adds every
+    /// derivation that started building to `started`.
     async fn record(
         &self,
         run: RunId,
         queued: &[&Check],
         mut received: mpsc::Receiver<BuildEvent>,
+        started: &mut Vec<String>,
     ) -> Result<HashSet<CheckId>, StoreError> {
         let checks: HashMap<&str, CheckId> = queued
             .iter()
@@ -384,6 +430,7 @@ where
             }
             batch.clear();
         }
+        started.extend(builds.into_values());
         Ok(timed_out)
     }
 

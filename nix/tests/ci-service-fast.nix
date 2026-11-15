@@ -55,7 +55,9 @@ let  # ── 1. Defaults ──────────────────
       defaults.config.systemd.services."procurator-ci".path
       [ pkgsStub.nix pkgsStub.git pkgsStub.nix-eval-jobs ]
     && assertEq "joins the git group"
-      defaults.config.users.users."procurator-ci".extraGroups [ "git" ];
+      defaults.config.users.users."procurator-ci".extraGroups [ "git" ]
+    && assert' "no cache by default" (!(defaultsJson ? cache_base_url) && !(defaultsJson ? netrc_file))
+    && assertEq "no substituters by default" defaults.config.nix.settings { };
 
   # ── 2. Explicit overrides ──────────────────────────────────────────
   explicit = evalCi {
@@ -72,6 +74,12 @@ let  # ── 1. Defaults ──────────────────
     evalWorkers = 4;
     allowedUris = [ "git+ssh://git.lab/" ];
     reposGroup = null;
+    cache = {
+      url = "http://cache.lab:8081";
+      netrcFile = "/run/secrets/ci-netrc";
+      readCaches = [ "private-lucas" ];
+      trustedPublicKeys = [ "cache.local:abc=" ];
+    };
   };
   explicitJson = ciJson explicit;
 
@@ -88,7 +96,15 @@ let  # ── 1. Defaults ──────────────────
     && assertEq "max_concurrent_runs" explicitJson.max_concurrent_runs 3
     && assertEq "eval_workers" explicitJson.eval_workers 4
     && assertEq "allowed_uris" explicitJson.allowed_uris [ "git+ssh://git.lab/" ]
-    && assertEq "no extra group" explicit.config.users.users."procurator-ci".extraGroups [ ];
+    && assertEq "no extra group" explicit.config.users.users."procurator-ci".extraGroups [ ]
+    && assertEq "cache_base_url" explicitJson.cache_base_url "http://cache.lab:8081"
+    && assertEq "netrc_file" explicitJson.netrc_file "/run/secrets/ci-netrc"
+    && assertEq "public_cache" explicitJson.public_cache "public"
+    && assertEq "private_cache_prefix" explicitJson.private_cache_prefix "private-"
+    && assertEq "substituters"
+      explicit.config.nix.settings.extra-substituters
+      [ "http://cache.lab:8081/public" "http://cache.lab:8081/private-lucas" ]
+    && assertEq "trusted keys" explicit.config.nix.settings.extra-trusted-public-keys [ "cache.local:abc=" ];
 
   # ── 3. User/group/workspace wiring ─────────────────────────────────
   wiring = defaults;

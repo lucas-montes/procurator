@@ -205,9 +205,108 @@ impl RunSettings {
     }
 }
 
+/// The repo-level part of a repo config, read from the default branch head.
+/// Why: a feature branch must not reroute where its outputs go.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RepoSettings {
+    cache: Option<String>,
+}
+
+impl RepoSettings {
+    /// Describe the repo-level settings. `cache` is `ci.cache`.
+    #[must_use]
+    pub fn new(cache: Option<String>) -> Self {
+        Self { cache }
+    }
+
+    /// The cache the repo asked for, if any.
+    #[must_use]
+    pub fn cache(&self) -> Option<&str> {
+        self.cache.as_deref()
+    }
+}
+
+/// A whole parsed `procurator.nix`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RepoConfig {
+    run: RunSettings,
+    repo: RepoSettings,
+}
+
+impl RepoConfig {
+    /// Combine both parts.
+    #[must_use]
+    pub fn new(run: RunSettings, repo: RepoSettings) -> Self {
+        Self { run, repo }
+    }
+
+    /// The per-run part.
+    #[must_use]
+    pub fn into_run(self) -> RunSettings {
+        self.run
+    }
+
+    /// The repo-level part.
+    #[must_use]
+    pub fn into_repo(self) -> RepoSettings {
+        self.repo
+    }
+}
+
+/// Which cache a repo's built outputs go to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachePolicy {
+    public: String,
+    private_prefix: String,
+}
+
+impl CachePolicy {
+    /// Caches are `public` and `<private_prefix><owner>`.
+    #[must_use]
+    pub fn new(public: String, private_prefix: String) -> Self {
+        Self {
+            public,
+            private_prefix,
+        }
+    }
+
+    /// The cache for an `owner`'s repo that asked for `requested`.
+    /// Why: with no visibility known yet, outputs default to the owner's
+    /// private cache, so nothing private leaks; a repo may opt into the
+    /// public cache, but never into another owner's private one.
+    ///
+    /// # Errors
+    ///
+    /// When `requested` is neither the public cache nor the owner's.
+    pub fn choose(&self, owner: &str, requested: Option<&str>) -> Result<String, InvalidConfig> {
+        let own = format!("{}{owner}", self.private_prefix);
+        match requested {
+            None => Ok(own),
+            Some(name) if name == own || name == self.public => Ok(String::from(name)),
+            Some(name) => Err(InvalidConfig::new(format!(
+                "ci.cache {name:?} must be {:?} or {own:?}",
+                self.public
+            ))),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{CheckSelection, Limits, RunSettings, Timeouts};
+    use super::{CachePolicy, CheckSelection, Limits, RunSettings, Timeouts};
+
+    #[test]
+    fn outputs_go_to_the_owners_cache_unless_the_repo_opts_into_public() {
+        let policy = CachePolicy::new(String::from("public"), String::from("private-"));
+        assert_eq!(policy.choose("lucas", None).unwrap(), "private-lucas");
+        assert_eq!(policy.choose("lucas", Some("public")).unwrap(), "public");
+        assert_eq!(
+            policy.choose("lucas", Some("private-lucas")).unwrap(),
+            "private-lucas"
+        );
+        assert!(policy.choose("lucas", Some("private-alice")).is_err());
+        assert!(policy.choose("lucas", Some("other")).is_err());
+    }
 
     #[test]
     fn attribute_lists_are_validated() {

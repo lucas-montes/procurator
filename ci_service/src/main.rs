@@ -13,7 +13,7 @@ use ci_service::adapters::system::SystemClock;
 use ci_service::application::ports::StoreError;
 use ci_service::application::{Service, ServiceError};
 use ci_service::config::{Config, ConfigError};
-use ci_service::domain::repo_config::Limits;
+use ci_service::domain::repo_config::{CachePolicy, Limits};
 use tokio::task::JoinSet;
 use tracing_subscriber::EnvFilter;
 
@@ -72,7 +72,15 @@ async fn run(config: Config) -> Result<(), MainError> {
         .await
         .map_err(MainError::Store)?;
     let repos = PathBuf::from(&config.repos_base_path);
-    let builder = NixBuilder::new(repos.clone(), config.eval_workers, &config.allowed_uris);
+    let mut builder = NixBuilder::new(repos.clone(), config.eval_workers, &config.allowed_uris);
+    let mut cache = None;
+    if let Some(base) = &config.cache_base_url {
+        builder = builder.with_cache(base, config.netrc_file.as_ref().map(PathBuf::from));
+        cache = Some(CachePolicy::new(
+            config.public_cache.clone(),
+            config.private_cache_prefix.clone(),
+        ));
+    }
     let limits = Limits::new(
         config.max_reruns,
         config.max_check_timeout,
@@ -84,6 +92,7 @@ async fn run(config: Config) -> Result<(), MainError> {
         builder,
         GitConfigSource::new(repos),
         limits,
+        cache,
     ));
 
     // Why: no worker is running yet, so every `running` row is a leftover.

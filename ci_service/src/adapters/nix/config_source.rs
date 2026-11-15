@@ -17,8 +17,8 @@ use tokio::process::Command;
 use super::internal_json::strip_ansi;
 use super::repos::bare_repo;
 use crate::application::ports::{ConfigSource, RepoConfigError};
-use crate::domain::repo_config::{CheckSelection, RunSettings, Timeouts};
-use crate::domain::run::NewRun;
+use crate::domain::repo_config::{CheckSelection, RepoConfig, RepoSettings, RunSettings, Timeouts};
+use crate::domain::run::{NewRun, RepoName};
 
 /// The file, at the repository root.
 const FILE: &str = "procurator.nix";
@@ -48,7 +48,7 @@ const EVAL_OPTIONS: [&str; 12] = [
 #[derive(Debug)]
 pub struct GitConfigSource {
     repos: PathBuf,
-    parsed: Mutex<HashMap<String, RunSettings>>,
+    parsed: Mutex<HashMap<String, RepoConfig>>,
 }
 
 impl GitConfigSource {
@@ -61,17 +61,17 @@ impl GitConfigSource {
         }
     }
 
-    fn cached(&self, blob: &str) -> Option<RunSettings> {
+    fn cached(&self, blob: &str) -> Option<RepoConfig> {
         let parsed = self.parsed.lock().unwrap_or_else(PoisonError::into_inner);
         parsed.get(blob).cloned()
     }
 
-    fn remember(&self, blob: String, settings: RunSettings) {
+    fn remember(&self, blob: String, config: RepoConfig) {
         let mut parsed = self.parsed.lock().unwrap_or_else(PoisonError::into_inner);
         if parsed.len() >= CACHE_ENTRIES {
             parsed.clear();
         }
-        parsed.insert(blob, settings);
+        parsed.insert(blob, config);
     }
 }
 
@@ -217,15 +217,16 @@ struct DeployDto {
     branch: Option<String>,
 }
 
-/// Validate evaluated JSON into the per-run settings.
-fn parse(json: &str) -> Result<RunSettings, RepoConfigError> {
+/// Validate evaluated JSON into a repo config.
+fn parse(json: &str) -> Result<RepoConfig, RepoConfigError> {
     let invalid = |reason: String| RepoConfigError::Invalid(format!("{FILE}: {reason}"));
     // Why: serde also reads a struct from a list; the file must be a set.
     if !json.trim_start().starts_with('{') {
         return Err(invalid(String::from("must be an attribute set")));
     }
     let file: FileDto = serde_json::from_str(json).map_err(|e| invalid(e.to_string()))?;
-    let ci = file.ci;
+    let mut ci = file.ci;
+    let repo = RepoSettings::new(ci.cache.take());
     let checks = match ci.checks {
         None => CheckSelection::All,
         Some(ChecksDto::Keyword(keyword)) if keyword == "all" => CheckSelection::All,
@@ -248,7 +249,45 @@ fn parse(json: &str) -> Result<RunSettings, RepoConfigError> {
         )
         .map_err(|e| RepoConfigError::Invalid(e.to_string()))?,
     };
-    Ok(RunSettings::new(checks, ci.reruns.unwrap_or(0), timeouts))
+    let run = RunSettings::new(checks, ci.reruns.unwrap_or(0), timeouts);
+    Ok(RepoConfig::new(run, repo))
+}
+
+impl GitConfigSource {
+    /// The config of `procurator.nix` at `rev` (a commit or ref) of a bare
+    /// repo; the defaults when the file or `rev` does not exist.
+    async fn config_at(&self, repo: &Path, rev: &str) -> Result<RepoConfig, RepoConfigError> {
+        let spec = format!("{rev}:{FILE}");
+        let found = git(repo, &["rev-parse", "--verify", "--quiet", &spec]).await?;
+        let Some(blob) = found else {
+            return Ok(RepoConfig::default());
+        };
+        let blob = String::from(String::from_utf8_lossy(&blob).trim());
+        if let Some(config) = self.cached(&blob) {
+            return Ok(config);
+        }
+
+        let size = git(repo, &["cat-file", "-s", &blob])
+            .await?
+            .unwrap_or_default();
+        let size: u64 = String::from_utf8_lossy(&size)
+            .trim()
+            .parse()
+            .unwrap_or(u64::MAX);
+        if size > MAX_BYTES {
+            return Err(RepoConfigError::Invalid(format!(
+                "{FILE}: larger than {MAX_BYTES} bytes"
+            )));
+        }
+        let text = git(repo, &["cat-file", "blob", &blob])
+            .await?
+            .unwrap_or_default();
+        let text = String::from_utf8(text)
+            .map_err(|_| RepoConfigError::Invalid(format!("{FILE}: not UTF-8")))?;
+        let config = parse(&evaluate(&text).await?)?;
+        self.remember(blob, config.clone());
+        Ok(config)
+    }
 }
 
 impl ConfigSource for GitConfigSource {
@@ -258,36 +297,21 @@ impl ConfigSource for GitConfigSource {
     ) -> impl Future<Output = Result<RunSettings, RepoConfigError>> + Send {
         async move {
             let repo = bare_repo(&self.repos, run.repo()).map_err(RepoConfigError::Unavailable)?;
-            let spec = format!("{}:{FILE}", run.commit().as_str());
-            let found = git(&repo, &["rev-parse", "--verify", "--quiet", &spec]).await?;
-            let Some(blob) = found else {
-                return Ok(RunSettings::default());
-            };
-            let blob = String::from(String::from_utf8_lossy(&blob).trim());
-            if let Some(settings) = self.cached(&blob) {
-                return Ok(settings);
-            }
+            let config = self.config_at(&repo, run.commit().as_str()).await?;
+            Ok(config.into_run())
+        }
+    }
 
-            let size = git(&repo, &["cat-file", "-s", &blob])
-                .await?
-                .unwrap_or_default();
-            let size: u64 = String::from_utf8_lossy(&size)
-                .trim()
-                .parse()
-                .unwrap_or(u64::MAX);
-            if size > MAX_BYTES {
-                return Err(RepoConfigError::Invalid(format!(
-                    "{FILE}: larger than {MAX_BYTES} bytes"
-                )));
-            }
-            let text = git(&repo, &["cat-file", "blob", &blob])
-                .await?
-                .unwrap_or_default();
-            let text = String::from_utf8(text)
-                .map_err(|_| RepoConfigError::Invalid(format!("{FILE}: not UTF-8")))?;
-            let settings = parse(&evaluate(&text).await?)?;
-            self.remember(blob, settings.clone());
-            Ok(settings)
+    fn repo_settings(
+        &self,
+        repo: &RepoName,
+    ) -> impl Future<Output = Result<RepoSettings, RepoConfigError>> + Send {
+        async move {
+            let path = bare_repo(&self.repos, repo).map_err(RepoConfigError::Unavailable)?;
+            // Why: HEAD of a bare repo names the default branch; the hook
+            // points it at the first branch pushed.
+            let config = self.config_at(&path, "HEAD").await?;
+            Ok(config.into_repo())
         }
     }
 }
@@ -296,12 +320,19 @@ impl ConfigSource for GitConfigSource {
 mod tests {
     use super::parse;
     use crate::application::ports::RepoConfigError;
-    use crate::domain::repo_config::{CheckSelection, RunSettings, Timeouts};
+    use crate::domain::repo_config::{CheckSelection, RepoConfig, Timeouts};
 
     #[test]
     fn empty_means_defaults() {
-        assert_eq!(parse("{}").unwrap(), RunSettings::default());
-        assert_eq!(parse(r#"{"ci":{}}"#).unwrap(), RunSettings::default());
+        assert_eq!(parse("{}").unwrap(), RepoConfig::default());
+        assert_eq!(parse(r#"{"ci":{}}"#).unwrap(), RepoConfig::default());
+    }
+
+    #[test]
+    fn the_cache_is_a_repo_level_setting() {
+        let config = parse(r#"{"ci":{"cache":"public","reruns":1}}"#).unwrap();
+        assert_eq!(config.clone().into_repo().cache(), Some("public"));
+        assert_eq!(config.into_run().reruns(), 1);
     }
 
     #[test]
@@ -317,7 +348,7 @@ mod tests {
             },
             "deploy": {"url": null, "branch": "main"}
         }"#;
-        let settings = parse(json).unwrap();
+        let settings = parse(json).unwrap().into_run();
         assert_eq!(settings.reruns(), 2);
         assert_eq!(settings.timeouts(), Timeouts::new(600, 60, 7200).unwrap());
         assert_eq!(
@@ -328,7 +359,10 @@ mod tests {
             ])
         );
         assert_eq!(
-            parse(r#"{"ci":{"checks":"all"}}"#).unwrap().checks(),
+            parse(r#"{"ci":{"checks":"all"}}"#)
+                .unwrap()
+                .into_run()
+                .checks(),
             &CheckSelection::All
         );
     }

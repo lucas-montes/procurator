@@ -12,7 +12,9 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
-use tokio::io::{AsyncBufReadExt as _, AsyncRead, AsyncReadExt as _, BufReader};
+use tokio::io::{
+    AsyncBufReadExt as _, AsyncRead, AsyncReadExt as _, AsyncWriteExt as _, BufReader,
+};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 
@@ -59,6 +61,121 @@ pub struct NixBuilder {
     repos: PathBuf,
     eval_workers: u32,
     allowed_uris: String,
+    cache: Option<CacheTarget>,
+}
+
+/// Where pushes go: caches are `<base>/<name>`, authenticated by a netrc.
+#[derive(Debug)]
+struct CacheTarget {
+    base: String,
+    netrc: Option<PathBuf>,
+}
+
+/// The part of `nix path-info --json` this adapter reads.
+#[derive(Deserialize)]
+struct PathInfo {
+    #[serde(default)]
+    ultimate: bool,
+}
+
+/// One entry of the list form of `nix path-info --json` (Nix before 2.19).
+#[derive(Deserialize)]
+struct ListedPathInfo<'a> {
+    #[serde(borrow)]
+    path: Cow<'a, str>,
+    #[serde(default)]
+    ultimate: bool,
+}
+
+/// `nix path-info --json`: keyed by path since Nix 2.19, a list before.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum PathInfos<'a> {
+    #[serde(borrow)]
+    Keyed(BTreeMap<Cow<'a, str>, Option<PathInfo>>),
+    #[serde(borrow)]
+    Listed(Vec<ListedPathInfo<'a>>),
+}
+
+/// Paths this host created itself (built or added), per `ultimate`.
+fn created_here(json: &str) -> Result<HashSet<String>, BuilderError> {
+    let infos: PathInfos<'_> = serde_json::from_str(json)
+        .map_err(|e| BuilderError::Unavailable(format!("nix path-info: {e}")))?;
+    Ok(match infos {
+        PathInfos::Keyed(infos) => infos
+            .into_iter()
+            .filter(|(_, info)| info.as_ref().is_some_and(|info| info.ultimate))
+            .map(|(path, _)| path.into_owned())
+            .collect(),
+        PathInfos::Listed(infos) => infos
+            .into_iter()
+            .filter(|info| info.ultimate)
+            .map(|info| info.path.into_owned())
+            .collect(),
+    })
+}
+
+/// One path per line, for `--stdin`.
+fn lines<'a>(paths: impl Iterator<Item = &'a str>) -> String {
+    let mut out = String::new();
+    for path in paths {
+        out.push_str(path);
+        out.push('\n');
+    }
+    out
+}
+
+/// Run a command, feeding it `input`; its stdout.
+fn run(
+    command: &mut Command,
+    input: String,
+) -> impl Future<Output = Result<String, BuilderError>> + Send + '_ {
+    async move {
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| BuilderError::Unavailable(format!("{command:?}: {e}")))?;
+        let stdin = child.stdin.take();
+        let feed = async move {
+            if let Some(mut stdin) = stdin {
+                let _ = stdin.write_all(input.as_bytes()).await;
+            }
+        };
+        // Why: feed and read at once, so neither pipe can fill up and stall.
+        let ((), output) = tokio::join!(feed, child.wait_with_output());
+        let output = output.map_err(|e| BuilderError::Unavailable(format!("{command:?}: {e}")))?;
+        if !output.status.success() {
+            return Err(BuilderError::Unavailable(format!(
+                "{}: {}",
+                command.as_std().get_program().to_string_lossy(),
+                internal_json::strip_ansi(&String::from_utf8_lossy(&output.stderr)).trim_end()
+            )));
+        }
+        String::from_utf8(output.stdout)
+            .map_err(|e| BuilderError::Unavailable(format!("command output: {e}")))
+    }
+}
+
+/// `nix-store --query <flag>` over `paths`, in batches; every printed path.
+fn store_query<'a>(
+    flag: &'a str,
+    paths: &'a [&'a str],
+) -> impl Future<Output = Result<Vec<String>, BuilderError>> + Send + 'a {
+    async move {
+        let mut found = Vec::new();
+        for chunk in paths.chunks(PATHS_PER_CALL) {
+            let mut command = Command::new("nix-store");
+            command.args(["--query", flag]).args(chunk);
+            let stdout = run(&mut command, String::new()).await?;
+            found.extend(stdout.lines().map(String::from));
+        }
+        found.sort_unstable();
+        found.dedup();
+        Ok(found)
+    }
 }
 
 impl NixBuilder {
@@ -72,7 +189,19 @@ impl NixBuilder {
             eval_workers: eval_workers.max(1),
             // Why: Nix takes the list space-separated.
             allowed_uris: allowed_uris.join(" "),
+            cache: None,
         }
+    }
+
+    /// Push to caches at `<base>/<name>`, sending the token in `netrc` (a
+    /// Nix netrc file) when given.
+    #[must_use]
+    pub fn with_cache(mut self, base: &str, netrc: Option<PathBuf>) -> Self {
+        self.cache = Some(CacheTarget {
+            base: String::from(base.trim_end_matches('/')),
+            netrc,
+        });
+        self
     }
 
     /// The flake reference of a run's commit.
@@ -442,6 +571,56 @@ impl Builder for NixBuilder {
                 .collect())
         }
     }
+
+    fn push(
+        &self,
+        drvs: &[&str],
+        cache: &str,
+    ) -> impl Future<Output = Result<usize, BuilderError>> + Send {
+        async move {
+            let Some(target) = &self.cache else {
+                return Err(BuilderError::Unavailable(String::from(
+                    "no cache_base_url configured",
+                )));
+            };
+            // Outputs of what was built that exist (failed builds have none).
+            let outputs = store_query("--outputs", drvs).await?;
+            let outputs: Vec<&str> = outputs.iter().map(String::as_str).collect();
+            let invalid = invalid_paths(&outputs).await?;
+            let built: Vec<&str> = outputs
+                .into_iter()
+                .filter(|path| !invalid.contains(*path))
+                .collect();
+            if built.is_empty() {
+                return Ok(0);
+            }
+            // Why: also send what those outputs reference that was created
+            // here (a flake's own source, say), never what was downloaded:
+            // that is already in another cache.
+            let closure = store_query("--requisites", &built).await?;
+            let mut info = Command::new("nix");
+            info.args(["path-info", "--json", "--stdin"]);
+            let json = run(&mut info, lines(closure.iter().map(String::as_str))).await?;
+            let created = created_here(&json)?;
+            let mut push: Vec<&str> = closure
+                .iter()
+                .map(String::as_str)
+                .filter(|path| created.contains(*path))
+                .chain(built.iter().copied())
+                .collect();
+            push.sort_unstable();
+            push.dedup();
+
+            let url = format!("{}/{cache}", target.base);
+            let mut copy = Command::new("nix");
+            copy.args(["copy", "--no-recursive", "--stdin", "--to", &url]);
+            if let Some(netrc) = &target.netrc {
+                copy.arg("--option").arg("netrc-file").arg(netrc);
+            }
+            run(&mut copy, lines(push.iter().copied())).await?;
+            Ok(push.len())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -495,6 +674,20 @@ mod tests {
             Evaluated::Failed { attr, system, .. }
                 if attr == "checks.aarch64-linux.it's.sub" && system == "aarch64-linux"
         ));
+    }
+
+    #[test]
+    fn only_paths_created_here_are_pushed() {
+        let keyed = r#"{"/nix/store/a-built":{"ultimate":true,"narSize":1},"/nix/store/b-glibc":{"ultimate":false},"/nix/store/c-gone":null}"#;
+        let listed =
+            r#"[{"path":"/nix/store/a-built","ultimate":true},{"path":"/nix/store/b-glibc"}]"#;
+        for json in [keyed, listed] {
+            let created = super::created_here(json).unwrap();
+            assert_eq!(
+                created.into_iter().collect::<Vec<_>>(),
+                ["/nix/store/a-built"]
+            );
+        }
     }
 
     #[test]

@@ -29,6 +29,15 @@ pub struct Config {
     pub eval_workers: u32,
     /// URI prefixes evaluation may fetch from (Nix `allowed-uris`).
     pub allowed_uris: Vec<String>,
+    /// Base URL of the Procurator cache (`<base>/<cache name>`); `None`
+    /// means built outputs are not pushed.
+    pub cache_base_url: Option<String>,
+    /// Name of the public cache.
+    pub public_cache: String,
+    /// Prefix of each owner's private cache (`<prefix><owner>`).
+    pub private_cache_prefix: String,
+    /// Nix netrc file holding the CI's cache token.
+    pub netrc_file: Option<String>,
 }
 
 /// Concrete config errors. Why: no `anyhow`, callers match on variants.
@@ -80,6 +89,14 @@ struct FileConfig {
     eval_workers: u32,
     #[serde(default = "default_allowed_uris")]
     allowed_uris: Vec<String>,
+    #[serde(default)]
+    cache_base_url: Option<String>,
+    #[serde(default = "default_public_cache")]
+    public_cache: String,
+    #[serde(default = "default_private_cache_prefix")]
+    private_cache_prefix: String,
+    #[serde(default)]
+    netrc_file: Option<String>,
 }
 
 impl Default for FileConfig {
@@ -96,6 +113,10 @@ impl Default for FileConfig {
             max_concurrent_runs: default_one(),
             eval_workers: default_one(),
             allowed_uris: default_allowed_uris(),
+            cache_base_url: None,
+            public_cache: default_public_cache(),
+            private_cache_prefix: default_private_cache_prefix(),
+            netrc_file: None,
         }
     }
 }
@@ -114,6 +135,10 @@ impl From<FileConfig> for Config {
             max_concurrent_runs: fc.max_concurrent_runs,
             eval_workers: fc.eval_workers,
             allowed_uris: fc.allowed_uris,
+            cache_base_url: fc.cache_base_url,
+            public_cache: fc.public_cache,
+            private_cache_prefix: fc.private_cache_prefix,
+            netrc_file: fc.netrc_file,
         }
     }
 }
@@ -181,6 +206,30 @@ impl Config {
                 "allowed_uris entries must not contain whitespace",
             )));
         }
+        self.validate_cache()
+    }
+
+    fn validate_cache(&self) -> Result<(), ConfigError> {
+        if let Some(url) = &self.cache_base_url
+            && !(url.starts_with("http://") || url.starts_with("https://"))
+        {
+            return Err(ConfigError::Invalid(String::from(
+                "cache_base_url must start with http:// or https://",
+            )));
+        }
+        // Why: cache names are `[a-z0-9-]`, as the cache service requires.
+        let cache_name = |name: &str| {
+            name.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        };
+        if self.public_cache.is_empty()
+            || !cache_name(&self.public_cache)
+            || !cache_name(&self.private_cache_prefix)
+        {
+            return Err(ConfigError::Invalid(String::from(
+                "public_cache and private_cache_prefix must use only a-z, 0-9 and -",
+            )));
+        }
         Ok(())
     }
 }
@@ -221,6 +270,14 @@ fn default_worker_poll_interval_ms() -> u64 {
 
 fn default_one() -> u32 {
     1
+}
+
+fn default_public_cache() -> String {
+    String::from("public")
+}
+
+fn default_private_cache_prefix() -> String {
+    String::from("private-")
 }
 
 /// Where flake inputs usually come from.
@@ -284,6 +341,10 @@ worker_poll_interval_ms = 250
 max_concurrent_runs = 2
 eval_workers = 4
 allowed_uris = ["git+ssh://git.lab/"]
+cache_base_url = "http://cache.lab:8081"
+public_cache = "shared"
+private_cache_prefix = "p-"
+netrc_file = "/run/secrets/ci-netrc"
 "#,
         );
         let cfg = Config::from_file(&path).expect("full config must parse");
@@ -298,6 +359,10 @@ allowed_uris = ["git+ssh://git.lab/"]
         assert_eq!(cfg.max_concurrent_runs, 2);
         assert_eq!(cfg.eval_workers, 4);
         assert_eq!(cfg.allowed_uris, ["git+ssh://git.lab/"]);
+        assert_eq!(cfg.cache_base_url.as_deref(), Some("http://cache.lab:8081"));
+        assert_eq!(cfg.public_cache, "shared");
+        assert_eq!(cfg.private_cache_prefix, "p-");
+        assert_eq!(cfg.netrc_file.as_deref(), Some("/run/secrets/ci-netrc"));
         let _ = std::fs::remove_file(path);
     }
 
@@ -329,6 +394,12 @@ allowed_uris = ["git+ssh://git.lab/"]
                 "max_concurrent_runs",
             ),
             ("spaceuri", "allowed_uris = [\"a b\"]\n", "allowed_uris"),
+            (
+                "cacheurl",
+                "cache_base_url = \"cache.lab\"\n",
+                "cache_base_url",
+            ),
+            ("cachename", "public_cache = \"Public\"\n", "public_cache"),
         ] {
             let path = temp_path(name, body);
             let err = Config::from_file(&path).unwrap_err().to_string();

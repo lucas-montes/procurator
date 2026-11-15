@@ -57,6 +57,10 @@ rec {
       lib.mkOption { type = lib.types.attrsOf lib.types.unspecified; default = {}; };
     options.networking =
       lib.mkOption { type = lib.types.attrsOf lib.types.unspecified; default = {}; };
+    # Why: ci-service sets nix.settings (substituters); `nix.package` stays
+    # unset so modules fall back to pkgs.nix.
+    options.nix.settings =
+      lib.mkOption { type = lib.types.attrsOf lib.types.unspecified; default = {}; };
     options.assertions = lib.mkOption {
       type = lib.types.listOf (lib.types.submodule {
         options = {

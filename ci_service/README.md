@@ -66,6 +66,16 @@ Needs `nix`, `nix-store` and `nix-eval-jobs` on `PATH`, and bare repos at
 cargo run -p ci_service -- --config ./ci_service/example.toml
 ```
 
+## Cache
+
+With `cache_base_url` set, what a run built (checks and their
+dependencies, never downloaded paths) is pushed with `nix copy` using the
+token in `netrc_file`. It goes to the owner's private cache
+(`private-<owner>`) unless the default branch's `procurator.nix` sets
+`ci.cache = "public"`. A failed push is a warning in the run log, not a
+failed run. The token needs `write` on the public cache and on each owner's
+private cache, and each private cache must exist on the cache service.
+
 ## Repo config: `procurator.nix`
 
 Optional, at the repo root, read from the commit being checked. It is a
@@ -90,8 +100,8 @@ used by later steps.
 
 ## Status
 
-Build steps 1–3 of the spec are done: queued runs are worked by
+Build steps 1–4 of the spec are done: queued runs are worked by
 `max_concurrent_runs` workers, `procurator.nix` picks the checks, reruns
-and timeouts, every check is evaluated, cached or built, and each check's
-log is stored. Not yet: pushing built outputs to the cache (step 4),
+and timeouts, every check is evaluated, cached or built, each check's log
+is stored, and what was built is pushed to the cache. Not yet:
 notifications (step 5), live log streaming and access control (step 6).

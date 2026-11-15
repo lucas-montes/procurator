@@ -199,6 +199,7 @@ mod tests {
             builder,
             FixedConfig::default(),
             Limits::new(1, 60, 60),
+            None,
         ))
     }
 
