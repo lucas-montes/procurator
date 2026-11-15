@@ -18,6 +18,7 @@ Quick navigation for AI sessions working on Procurator.
 - [plans/](plans/) - Implementation plans and task tracking
 - [specs/](specs/) - Technical specifications (e.g. Nix schema)
   - [specs/ci-service.md](specs/ci-service.md) — CI service target design: flake checks, per-check logs, cache reuse, `procurator.nix` config, ports, security
+  - [specs/log-events.md](specs/log-events.md) — Log convention (`log.schema = 1`): message, state and change lines the console parses
 - [tmp/](tmp/) - Session scratch space
 
 ## Codebase Map
@@ -49,6 +50,15 @@ Quick navigation for AI sessions working on Procurator.
   - `ci_service/src/application/` - `Service` use cases and `ports.rs` (`RunStore`, `Clock`)
   - `ci_service/src/adapters/` - `sqlite.rs`, `memory.rs` (held to `store_contract.rs`), `system.rs`, `http/`
 
+### Console (`console/`)
+Read-only web UI built only from the services' own JSON logs (no RPC, no pushed telemetry). See `console/README.md`.
+- `console/src/sources/` - Log sources: `file.rs` (tracing-appender files, rotation), `gateway.rs` (journal-gatewayd, cursor resume), `journal_local.rs` (`journalctl -f`), `journal_entry.rs` (journal export JSON)
+- `console/src/parse.rs` - Parses lines per `specs/log-events.md` (lenient for plain lines)
+- `console/src/model.rs` - Single-owner live model: machines/VMs from state lines, live message/log fan-out, snapshot JSON
+- `console/src/http.rs` - axum: UI shell, `/api/model`, one SSE `/api/stream`
+- `console/assets/` - `index.html`, `app.js` (routing, map, pages), `app.css`
+- Service side: `control_plane/src/{logging,msglog}.rs`, `worker/src/{logging,msglog,metrics}.rs` write the convention lines; `nix/modules/{console,journal-gateway}.nix`
+
 ### Cache (`cache/`)
 Embeddable artifact cache in a hexagonal layout: named public/private caches, token auth, Nix front-end only. Plain HTTP, no TLS.
 - `cache/src/domain/` - Pure rules: `cache.rs` (names, visibility, spec), `digest.rs` (SHA-256, nix32), `access.rs` (principals, grants, authorize), `nix/` (narinfo, NAR file names, signing)
@@ -58,7 +68,7 @@ Embeddable artifact cache in a hexagonal layout: named public/private caches, to
 - `cache/tests/` - `http.rs` (in-process router tests), `nix_e2e.rs` (real `nix copy`, `--ignored`)
 
 ## Current Work
-- **Pending plan:** `plans/control-plane-web-console.md` (T01–T19 pending; separate `console` service that builds a live map of machines/VMs/units and real-time messages purely by parsing each service's JSON `tracing` logs (file / journal-gatewayd / journalctl sources), plus a control board using capnp for actions and machine/unit/VM pages; log convention in `specs/log-events.md`)
+- **Plan:** `plans/control-plane-web-console.md` (T01–T14, T16 done; T15 inside-VM data deferred pending discussion): read-only `console` service, live map/machine/unit/VM/sources pages from JSON `tracing` logs (file / journal-gatewayd / journalctl); convention in `specs/log-events.md`
 - **Completed plan:** `plans/cache-hexagonal-rewrite.md` (T01–T14 done; cache rewritten as a hexagonal library with named public/private caches and token auth)
 - **Pending plan:** `plans/rust-log-env-var.md` (T01 done, T02 pending)
 - **Completed plan:** `plans/control-plane-pull-assignments.md` (T01–T09 done; control-plane pull loop, worker poll/reconcile/heartbeat, Nix inventory, cross-crate e2e)

@@ -2,11 +2,13 @@ mod ch;
 mod config;
 mod database;
 mod heartbeat;
+pub mod logging;
+mod metrics;
+mod msglog;
 mod proxy;
 mod pull;
 mod server;
 mod vmm;
-
 
 #[cfg(test)]
 mod test_support;
@@ -87,6 +89,12 @@ async fn run<F>(
         reader_registry.clone(),
         applied.clone(),
     ));
+    let state_log_handle = local_set.spawn_local(heartbeat::run_state_log_loop(
+        poll_config.worker_id.clone(),
+        poll_config.heartbeat_interval,
+        applied.clone(),
+        reader_registry.clone(),
+    ));
     let heartbeat_handle = local_set.spawn_local(heartbeat::run_heartbeat_loop(
         poll_config,
         reader_registry,
@@ -97,7 +105,7 @@ async fn run<F>(
         res = supervisor_task => tracing::error!(?res, "supervisor exited"),
         res = proxy_task      => tracing::error!(?res, "proxy exited"),
         res = local_set.run_until(async {
-            let _ = tokio::join!(rpc_handle, poll_handle, heartbeat_handle);
+            let _ = tokio::join!(rpc_handle, poll_handle, heartbeat_handle, state_log_handle);
         }) => tracing::error!(?res, "local tasks exited"),
     }
 }

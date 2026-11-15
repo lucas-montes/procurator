@@ -9,7 +9,7 @@ tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 capnp.workspace = true
 capnp-rpc.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["time"] }
 tokio-util.workspace = true
 uuid.workspace = true
 commands.workspace = true

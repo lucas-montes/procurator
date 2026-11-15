@@ -65,6 +65,13 @@ pub struct Config {
     /// Deterministic worker inventory; empty when unconfigured.
     #[serde(default)]
     pub workers: Vec<WorkerEntry>,
+    /// Period of the state log lines (see `context/specs/log-events.md`).
+    #[serde(default = "default_state_log_interval_millis")]
+    pub state_log_interval_millis: std::num::NonZeroU64,
+}
+
+fn default_state_log_interval_millis() -> std::num::NonZeroU64 {
+    std::num::NonZeroU64::new(10_000).unwrap_or(std::num::NonZeroU64::MIN)
 }
 
 impl Config {

@@ -181,7 +181,7 @@ impl VmFactory for Factory {
             NetConfigRef::new(&tap_name, lease.mac()),
         );
 
-        let client = Client::new(vm_dir.socket_path);
+        let client = Client::new(vm_dir.socket_path, vm_id.as_str());
 
         client.create(&vm_config).await.map_err(|e| {
             error!(vm_id = %vm_id, ?e, "vm.create API call failed");

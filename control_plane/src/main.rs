@@ -1,26 +1,16 @@
 use std::path::PathBuf;
 
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::fmt::layer()
-                .json()
-                // .with_writer(non_blocking)
-                .log_internal_errors(true)
-                .with_target(false)
-                .flatten_event(true)
-                .with_span_list(false),
-        )
-        .init();
-
     let config_path = std::env::args().nth(1).map(PathBuf::from);
     let Some(config_path) = config_path else {
-        tracing::error!("Config path must be provided as the first argument");
+        eprintln!("Config path must be provided as the first argument");
         std::process::exit(1);
     };
+
+    // Logging first, from the config's `log` section, so every later line
+    // (including config errors) uses the configured format and destination.
+    let _log_guard = control_plane::logging::init(&config_path, "info");
 
     // Fail-fast: unreadable, unparsable, or invalid inventory (duplicate or
     // blank worker ids) exits here. Peer discovery from the `role`
@@ -43,6 +33,7 @@ async fn main() {
         config.addr,
         Vec::new(),
         declared,
+        std::time::Duration::from_millis(config.state_log_interval_millis.get()),
     )
     .await;
 }

@@ -23,6 +23,7 @@ use tokio_util::compat::TokioAsyncReadCompatExt;
 
 use super::{
     heartbeat::{HeartbeatReport, PushClient, PushError},
+    msglog::{Endpoint, Msg},
     vmm::{Command, CreateCommand, Error as VmmError, Factory, Reader, Registry},
 };
 
@@ -435,13 +436,33 @@ where
 {
     let mut failures: u32 = 0;
     loop {
+        // The control plane logs every poll it answers; this side only logs
+        // the ones lost in transport.
+        let mut msg = Msg::start(
+            "poll",
+            "getAssignment",
+            Endpoint::Myself,
+            Endpoint::ControlPlane,
+        )
+        .worker(worker_id);
         match client.fetch(worker_id, applied.get().unwrap_or(0)).await {
             Ok(assignment) => {
+                msg.discard();
                 failures = 0;
                 if applied.get() != Some(assignment.generation) {
                     match reconciler.reconcile(&assignment.desired, registry).await {
                         Ok(outcome) => {
                             applied.set(assignment.generation);
+                            tracing::info!(
+                                log.schema = 1_u64,
+                                log.event = "change",
+                                change = "reconciled",
+                                worker = worker_id,
+                                generation = assignment.generation,
+                                created = outcome.created.len(),
+                                deleted = outcome.deleted.len(),
+                                "change"
+                            );
                             tracing::info!(
                                 worker = worker_id,
                                 generation = assignment.generation,
@@ -461,11 +482,14 @@ where
                 sleep(poll_interval).await;
             }
             Err(PullError::Rejected(message)) => {
+                msg.discard();
                 failures += 1;
                 tracing::warn!(worker = worker_id, %message, "Assignment rejected");
                 sleep(backoff_delay(failures, poll_interval)).await;
             }
             Err(PullError::Transport(reason)) => {
+                msg.error(&reason);
+                drop(msg);
                 tracing::warn!(worker = worker_id, %reason, "Master connection lost");
                 return TransportLost;
             }
@@ -502,6 +526,9 @@ pub async fn run_poll_loop<F>(
                 sleep(config.poll_interval).await;
             }
             Err(err) => {
+                Msg::start("poll", "connect", Endpoint::Myself, Endpoint::ControlPlane)
+                    .worker(&config.worker_id)
+                    .error(&err);
                 failures += 1;
                 tracing::warn!(
                     master = %config.master_addr,

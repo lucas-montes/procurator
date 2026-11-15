@@ -3,7 +3,7 @@ mod interfaces;
 mod registry;
 mod supervisor;
 
-pub use interfaces::{Factory, Handle, HandleError};
+pub use interfaces::{Factory, Handle, HandleError, VmStats};
 /// Writer-side registry for tests (production code never names it, so the
 /// re-export stays test-gated to keep strict lints clean).
 #[cfg(test)]

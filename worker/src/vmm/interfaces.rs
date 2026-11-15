@@ -29,6 +29,83 @@ pub trait Factory: Clone + 'static + std::fmt::Debug {
         Self: Sized;
 }
 
+/// Point-in-time resource sample of one VM. Counters are cumulative; the
+/// console derives rates from consecutive samples.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VmStats {
+    uptime_s: u64,
+    cpu_ms: u64,
+    rss_bytes: u64,
+    net_rx: u64,
+    net_tx: u64,
+    disk_read: u64,
+    disk_write: u64,
+}
+
+impl VmStats {
+    /// Process-level sample (uptime, VMM CPU time, VMM resident memory).
+    #[must_use]
+    pub fn new(uptime_s: u64, cpu_ms: u64, rss_bytes: u64) -> Self {
+        Self {
+            uptime_s,
+            cpu_ms,
+            rss_bytes,
+            ..Self::default()
+        }
+    }
+
+    /// Adds guest device counters (bytes).
+    #[must_use]
+    pub fn with_counters(
+        mut self,
+        net_rx: u64,
+        net_tx: u64,
+        disk_read: u64,
+        disk_write: u64,
+    ) -> Self {
+        self.net_rx = net_rx;
+        self.net_tx = net_tx;
+        self.disk_read = disk_read;
+        self.disk_write = disk_write;
+        self
+    }
+
+    #[must_use]
+    pub fn uptime_s(&self) -> u64 {
+        self.uptime_s
+    }
+
+    #[must_use]
+    pub fn cpu_ms(&self) -> u64 {
+        self.cpu_ms
+    }
+
+    #[must_use]
+    pub fn rss_bytes(&self) -> u64 {
+        self.rss_bytes
+    }
+
+    #[must_use]
+    pub fn net_rx(&self) -> u64 {
+        self.net_rx
+    }
+
+    #[must_use]
+    pub fn net_tx(&self) -> u64 {
+        self.net_tx
+    }
+
+    #[must_use]
+    pub fn disk_read(&self) -> u64 {
+        self.disk_read
+    }
+
+    #[must_use]
+    pub fn disk_write(&self) -> u64 {
+        self.disk_write
+    }
+}
+
 #[derive(Debug)]
 pub enum HandleError {
     Start(String),
@@ -57,6 +134,10 @@ where
     Self: Sized,
 {
     fn ip(&self) -> &str;
+
+    /// Resource sample written in the worker state lines. Backends without
+    /// metrics keep the default (all zeros).
+    fn stats(&self) -> impl Future<Output = VmStats> + Send;
 
     fn start(&self) -> impl Future<Output = Result<(), HandleError>> + Send;
 

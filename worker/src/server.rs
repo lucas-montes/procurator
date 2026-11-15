@@ -6,7 +6,10 @@ use capnp_rpc::{RpcSystem, rpc_twoparty_capnp, twoparty};
 use futures::AsyncReadExt;
 use tracing::{debug, error, info, instrument, warn};
 
-use super::vmm::{Command, Factory, Handle, Reader, Registry};
+use super::{
+    msglog::logged,
+    vmm::{Command, Factory, Handle, Reader, Registry},
+};
 
 #[derive(Clone)]
 pub struct Server<F: Factory> {
@@ -14,6 +17,8 @@ pub struct Server<F: Factory> {
     factory: F,
     tx: Sender<Command<F>>,
     listen_addr: SocketAddr,
+    /// Remote address of the connection this bootstrap capability serves.
+    peer: Option<SocketAddr>,
 }
 
 impl<F: Factory> Server<F> {
@@ -28,6 +33,7 @@ impl<F: Factory> Server<F> {
             factory,
             tx,
             listen_addr,
+            peer: None,
         }
     }
 
@@ -45,11 +51,14 @@ impl<F: Factory> Server<F> {
                 error!(addr = %addr, ?err, "Failed to bind worker TCP listener");
             })?;
 
-        let client: commands::worker_capnp::worker::Client<F::BackendConfig> =
-            capnp_rpc::new_client(self);
-
         loop {
             let (stream, peer_addr) = listener.accept().await?;
+            // One bootstrap capability per connection so message lines
+            // name the caller.
+            let mut connection = self.clone();
+            connection.peer = Some(peer_addr);
+            let client: commands::worker_capnp::worker::Client<F::BackendConfig> =
+                capnp_rpc::new_client(connection);
             debug!(peer_addr = %peer_addr, "New connection");
             stream.set_nodelay(true)?;
             let (reader, writer) =
@@ -61,7 +70,7 @@ impl<F: Factory> Server<F> {
                 ReaderOptions::default(),
             );
 
-            let rpc_system = RpcSystem::new(Box::new(network), Some(client.clone().client));
+            let rpc_system = RpcSystem::new(Box::new(network), Some(client.client));
             debug!(peer_addr = %peer_addr, "Spawning RPC system task for connection");
             tokio::task::spawn_local(rpc_system);
         }
@@ -77,7 +86,7 @@ impl<F: Factory> commands::worker_capnp::worker::Server<F::BackendConfig> for Se
         let factory = self.factory.clone();
         let tx = self.tx.clone();
 
-        capnp::capability::Promise::from_future(async move {
+        logged("createVm", self.peer, async move {
             debug!("Received create_vm RPC request");
 
             let vm_spec = request
@@ -133,7 +142,7 @@ impl<F: Factory> commands::worker_capnp::worker::Server<F::BackendConfig> for Se
         let tx = self.tx.clone();
         let state = self.state.clone();
 
-        capnp::capability::Promise::from_future(async move {
+        logged("deleteVm", self.peer, async move {
             debug!("Received delete_vm RPC request");
             let vm_id = request
                 .get()
@@ -175,7 +184,7 @@ impl<F: Factory> commands::worker_capnp::worker::Server<F::BackendConfig> for Se
         warn!("list_vms RPC called");
         let state = self.state.clone();
         let worker_id = self.listen_addr.to_string();
-        capnp::capability::Promise::from_future(async move {
+        logged("listVms", self.peer, async move {
             let data = state.get().await;
 
             let mut vms = response
@@ -217,7 +226,7 @@ impl<F: Factory> commands::worker_capnp::worker::Server<F::BackendConfig> for Se
         _: commands::worker_capnp::worker::PauseVmResults<F::BackendConfig>,
     ) -> capnp::capability::Promise<(), capnp::Error> {
         let state = self.state.clone();
-        capnp::capability::Promise::from_future(async move {
+        logged("pauseVm", self.peer, async move {
             let vm_id = request
                 .get()
                 .and_then(commands::worker_capnp::worker::pause_vm_params::Reader::get_id)
@@ -252,7 +261,7 @@ impl<F: Factory> commands::worker_capnp::worker::Server<F::BackendConfig> for Se
         _: commands::worker_capnp::worker::ResumeVmResults<F::BackendConfig>,
     ) -> capnp::capability::Promise<(), capnp::Error> {
         let state = self.state.clone();
-        capnp::capability::Promise::from_future(async move {
+        logged("resumeVm", self.peer, async move {
             let vm_id = request
                 .get()
                 .and_then(commands::worker_capnp::worker::resume_vm_params::Reader::get_id)
@@ -288,7 +297,7 @@ impl<F: Factory> commands::worker_capnp::worker::Server<F::BackendConfig> for Se
         mut response: commands::worker_capnp::worker::SnapshotVmResults<F::BackendConfig>,
     ) -> capnp::capability::Promise<(), capnp::Error> {
         let state = self.state.clone();
-        capnp::capability::Promise::from_future(async move {
+        logged("snapshotVm", self.peer, async move {
             let params = request.get()?;
             let vm_id = params
                 .get_id()
@@ -349,7 +358,7 @@ impl<F: Factory> commands::worker_capnp::worker::Server<F::BackendConfig> for Se
         mut response: commands::worker_capnp::worker::BackupDiskResults<F::BackendConfig>,
     ) -> capnp::capability::Promise<(), capnp::Error> {
         let state = self.state.clone();
-        capnp::capability::Promise::from_future(async move {
+        logged("backupDisk", self.peer, async move {
             let params = request.get()?;
             let vm_id = params
                 .get_id()
@@ -408,7 +417,7 @@ impl<F: Factory> commands::worker_capnp::worker::Server<F::BackendConfig> for Se
         debug!("read RPC called");
         let state = self.state.clone();
         let worker_id = self.listen_addr.to_string();
-        capnp::capability::Promise::from_future(async move {
+        logged("read", self.peer, async move {
             let data = state.get().await;
 
             let mut worker = response.get().init_data();

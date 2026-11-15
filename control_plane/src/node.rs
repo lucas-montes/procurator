@@ -5,9 +5,17 @@
 //! is directly unit-testable; [`Node`] only pumps channel messages through it
 //! and always replies exactly once, so Cap'n Proto callers (T04) never hang.
 
-use std::{collections::HashMap, net::SocketAddr};
+use std::{
+    collections::HashMap,
+    fmt::{Display, Formatter},
+    net::SocketAddr,
+    time::Duration,
+};
 
-use tokio::sync::mpsc::Receiver;
+use tokio::{
+    sync::mpsc::Receiver,
+    time::{MissedTickBehavior, interval},
+};
 
 use crate::{
     dto::{
@@ -100,12 +108,22 @@ impl NodeState {
                 ordered.push(entry.clone());
             }
         }
+        let count = u64::try_from(ordered.len()).unwrap_or(u64::MAX);
         self.store.publish(generation, ordered);
         self.active = Some(ActiveState {
             generation,
             commit: commit.to_string(),
             intent_hash: intent_hash.to_string(),
         });
+        tracing::info!(
+            log.schema = 1_u64,
+            log.event = "change",
+            change = "generation",
+            generation = generation.value(),
+            commit,
+            count,
+            "change"
+        );
         Ok(generation)
     }
 
@@ -164,6 +182,36 @@ impl NodeState {
         ClusterSnapshot::new(generation, commit, intent_hash, total, up_to_date, workers)
     }
 
+    /// Writes the `cluster` and per-worker `desired` state lines (see
+    /// `context/specs/log-events.md`).
+    pub fn log_state(&self) {
+        let known = self.registry.known_workers();
+        let (generation, commit) = self.active.as_ref().map_or((0, ""), |active| {
+            (active.generation.value(), active.commit.as_str())
+        });
+        tracing::info!(
+            log.schema = 1_u64,
+            log.event = "state",
+            scope = "cluster",
+            generation,
+            commit,
+            count = u64::try_from(known.len()).unwrap_or(u64::MAX),
+            "state"
+        );
+        for worker in &known {
+            let assignment = self.store.assignment_for(worker, 0);
+            tracing::info!(
+                log.schema = 1_u64,
+                log.event = "state",
+                scope = "desired",
+                worker = worker.as_str(),
+                vms = %JoinedKeys(assignment.vms()),
+                count = u64::try_from(assignment.vms().len()).unwrap_or(u64::MAX),
+                "state"
+            );
+        }
+    }
+
     fn view_for(&self, worker: &WorkerId) -> Option<WorkerStatusView> {
         let snapshot = self.registry.snapshot(worker)?;
         // Desired slice as the worker itself would poll it. Generations
@@ -189,6 +237,21 @@ impl NodeState {
     }
 }
 
+/// Comma-separated VM keys, written without an intermediate `String`.
+struct JoinedKeys<'a>(&'a [crate::store::AssignedVm]);
+
+impl Display for JoinedKeys<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        for (index, vm) in self.0.iter().enumerate() {
+            if index > 0 {
+                f.write_str(",")?;
+            }
+            f.write_str(vm.key().as_str())?;
+        }
+        Ok(())
+    }
+}
+
 /// Order-insensitive key-set equality for drift comparison.
 fn same_keys(left: &[VmKey], right: &[VmKey]) -> bool {
     if left.len() != right.len() {
@@ -207,6 +270,9 @@ pub struct Node {
     receiver: Receiver<NodeMessage>,
     peers_addr: Vec<SocketAddr>,
     state: NodeState,
+    /// Period of the state lines written even when nothing changes, so a
+    /// log reader can rebuild the state from a short window.
+    state_log_interval: Duration,
 }
 
 impl Node {
@@ -222,15 +288,35 @@ impl Node {
             receiver,
             peers_addr,
             state: NodeState::new(declared),
+            state_log_interval: Duration::from_secs(10),
         }
+    }
+
+    /// Overrides the period of the state lines (default 10 s).
+    #[must_use]
+    pub fn with_state_log_interval(mut self, period: Duration) -> Self {
+        self.state_log_interval = period;
+        self
     }
 
     /// Main loop that processes messages from the server and sends command to the workers and orchestrates tasks
     pub async fn run(mut self) {
         tracing::info!(peers=?self.peers_addr, "Node started with peers");
-        while let Some(message) = self.receiver.recv().await {
-            let reply = self.handle(message.event());
-            message.reply(reply);
+        let mut ticker = interval(self.state_log_interval);
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                received = self.receiver.recv() => {
+                    let Some(message) = received else { break };
+                    let reply = self.handle(message.event());
+                    let published = matches!(reply, Ok(NodeReply::Published(_)));
+                    message.reply(reply);
+                    if published {
+                        self.state.log_state();
+                    }
+                }
+                _ = ticker.tick() => self.state.log_state(),
+            }
         }
     }
 

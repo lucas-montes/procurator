@@ -39,3 +39,11 @@
 - **Flake**: A Nix expression with inputs/outputs (defined in `flake.nix`)
 - **Derivation**: A build action in Nix
 - **Substituter**: A binary cache server for Nix store paths
+
+## Console & log convention
+- **Console**: The read-only `console` service; builds its whole view by parsing the services' own logs (see `specs/log-events.md`)
+- **Log source**: Where the console reads one service's logs: `file`, `journal_gateway` (systemd-journal-gatewayd) or `journal_local` (`journalctl -f`)
+- **Message line**: A log line with `log.event = "msg"` describing one message between components (from, to, method, outcome, latency); written once, by the callee when it is ours, else by the caller
+- **State line**: A periodic `log.event = "state"` line (`cluster`/`desired` from the control plane, `worker`/`vm` from workers) from which the console rebuilds current state
+- **Change line**: A `log.event = "change"` line for a discrete event (new generation, VM created/deleted/failed, reconciled)
+- **Bootstrap window**: The recent lines each source reads back at console startup to rebuild state; never streamed to the UI (live-only view)

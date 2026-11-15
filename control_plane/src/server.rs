@@ -25,15 +25,31 @@ use tracing::{debug, info, instrument};
 use crate::{
     directory::{NoWorkerDirectory, WorkerDirectory},
     dto::{NodeEvent, NodeMessenger, NodeReply, ObservedReport, RequestError},
+    msglog::{Endpoint, Msg},
     registry::WorkerId,
     store::{DesiredEntry, Generation, VmKey},
 };
 
-#[derive(Clone)]
 pub struct Server<T> {
     messenger: NodeMessenger,
     directory: Arc<dyn WorkerDirectory>,
+    /// Remote address of the connection this bootstrap capability serves,
+    /// used as `client:<addr>` in message lines.
+    peer: Option<SocketAddr>,
     _phantom: std::marker::PhantomData<T>,
+}
+
+// Manual impl: a derive would require `T: Clone`, which backend markers
+// don't implement.
+impl<T> Clone for Server<T> {
+    fn clone(&self) -> Self {
+        Self {
+            messenger: self.messenger.clone(),
+            directory: Arc::clone(&self.directory),
+            peer: self.peer,
+            _phantom: std::marker::PhantomData,
+        }
+    }
 }
 
 impl<T: capnp::traits::Owned + 'static> Server<T> {
@@ -41,8 +57,13 @@ impl<T: capnp::traits::Owned + 'static> Server<T> {
         Server {
             messenger: messenger.into(),
             directory: Arc::new(NoWorkerDirectory),
+            peer: None,
             _phantom: std::marker::PhantomData,
         }
+    }
+
+    fn caller(&self) -> Endpoint {
+        Endpoint::Client(self.peer)
     }
 
     /// Serves `getWorker` lookups from `directory` (e.g. a push transport's
@@ -59,10 +80,14 @@ impl<T: capnp::traits::Owned + 'static> Server<T> {
         info!(addr = %addr, "Starting server");
         let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-        let client: commands::master_capnp::master::Client<T> = capnp_rpc::new_client(self);
-
         loop {
             let (stream, peer_addr) = listener.accept().await?;
+            // One bootstrap capability per connection so handlers know
+            // which peer they serve.
+            let mut connection = self.clone();
+            connection.peer = Some(peer_addr);
+            let client: commands::master_capnp::master::Client<T> =
+                capnp_rpc::new_client(connection);
             debug!(peer_addr = %peer_addr, "New connection");
             stream.set_nodelay(true)?;
             let (reader, writer) =
@@ -74,9 +99,7 @@ impl<T: capnp::traits::Owned + 'static> Server<T> {
                 ReaderOptions::default(),
             );
 
-            // TODO: Determine which client to provide based on connection context
-            // For now, defaulting to master_control for CLI connections
-            let rpc_system = RpcSystem::new(Box::new(network), Some(client.clone().client));
+            let rpc_system = RpcSystem::new(Box::new(network), Some(client.client));
 
             tokio::task::spawn_local(rpc_system);
         }
@@ -114,12 +137,15 @@ impl<T: capnp::traits::Owned + 'static> commands::master_capnp::master::Server<T
         mut results: commands::master_capnp::master::PublishStateResults<T>,
     ) -> ::capnp::capability::Promise<(), ::capnp::Error> {
         let messenger = self.messenger.clone();
+        let mut msg = Msg::start("publish", "publishState", self.caller(), Endpoint::Myself);
         ::capnp::capability::Promise::from_future(async move {
             let params = params.get()?;
             let commit = read_text(params.get_commit()?)?;
             let generation = Generation::new(params.get_generation());
             let intent_hash = read_text(params.get_intent_hash()?)?;
             let wire_specs = params.get_vm_specs()?;
+            msg.set_generation(generation.value());
+            msg.set_count(usize::try_from(wire_specs.len()).unwrap_or(usize::MAX));
 
             info!(
                 generation = generation.value(),
@@ -143,6 +169,7 @@ impl<T: capnp::traits::Owned + 'static> commands::master_capnp::master::Server<T
                             .get()
                             .get_result()?
                             .set_err(format!("{err}").as_str())?;
+                        msg.rejected(&err);
                         return Ok(());
                     }
                 };
@@ -154,6 +181,7 @@ impl<T: capnp::traits::Owned + 'static> commands::master_capnp::master::Server<T
                             .get()
                             .get_result()?
                             .set_err(format!("{err}").as_str())?;
+                        msg.rejected(&err);
                         return Ok(());
                     }
                 };
@@ -177,10 +205,12 @@ impl<T: capnp::traits::Owned + 'static> commands::master_capnp::master::Server<T
                         .get()
                         .get_result()?
                         .set_err(format!("{node_err}").as_str())?;
+                    msg.rejected(&node_err);
                     return Ok(());
                 }
                 Ok(NodeReply::Published(active)) => {
                     debug!(generation = active.value(), "Publish stored");
+                    msg.ok();
                     let _ = results.get().get_result()?.init_ok();
                 }
                 Ok(unexpected) => {
@@ -199,6 +229,7 @@ impl<T: capnp::traits::Owned + 'static> commands::master_capnp::master::Server<T
         mut results: commands::master_capnp::master::GetAssignmentResults<T>,
     ) -> ::capnp::capability::Promise<(), ::capnp::Error> {
         let messenger = self.messenger.clone();
+        let mut msg = Msg::start("poll", "getAssignment", self.caller(), Endpoint::Myself);
         ::capnp::capability::Promise::from_future(async move {
             let params = params.get()?;
             let raw_id = read_text(params.get_worker_id()?)?;
@@ -213,9 +244,11 @@ impl<T: capnp::traits::Owned + 'static> commands::master_capnp::master::Server<T
                         .get()
                         .get_result()?
                         .set_err(format!("{err}").as_str())?;
+                    msg.rejected(&err);
                     return Ok(());
                 }
             };
+            msg.set_caller_worker(worker_id.as_str());
 
             let reply = messenger
                 .request(NodeEvent::GetAssignment {
@@ -230,6 +263,7 @@ impl<T: capnp::traits::Owned + 'static> commands::master_capnp::master::Server<T
                         .get()
                         .get_result()?
                         .set_err(format!("{node_err}").as_str())?;
+                    msg.rejected(&node_err);
                     return Ok(());
                 }
                 Ok(NodeReply::Assignment(assignment)) => assignment,
@@ -239,6 +273,12 @@ impl<T: capnp::traits::Owned + 'static> commands::master_capnp::master::Server<T
                     )));
                 }
             };
+
+            let served = assignment.generation().map_or(0, Generation::value);
+            msg.set_generation(served);
+            msg.set_count(assignment.vms().len());
+            msg.set_unchanged(assignment.vms().is_empty() && served == last_seen_generation);
+            msg.ok();
 
             let mut ok = results.get().get_result()?.init_ok();
             ok.set_generation(assignment.generation().map_or(0, Generation::value));
@@ -281,6 +321,7 @@ impl<T: capnp::traits::Owned + 'static> commands::master_capnp::master::Server<T
         mut results: commands::master_capnp::master::PushDataResults<T>,
     ) -> ::capnp::capability::Promise<(), ::capnp::Error> {
         let messenger = self.messenger.clone();
+        let mut msg = Msg::start("heartbeat", "pushData", self.caller(), Endpoint::Myself);
         ::capnp::capability::Promise::from_future(async move {
             let params = params.get()?;
             let raw_id = read_text(params.get_worker_id()?)?;
@@ -293,9 +334,11 @@ impl<T: capnp::traits::Owned + 'static> commands::master_capnp::master::Server<T
                         .get()
                         .get_result()?
                         .set_err(format!("{err}").as_str())?;
+                    msg.rejected(&err);
                     return Ok(());
                 }
             };
+            msg.set_caller_worker(worker_id.as_str());
 
             let wire_vms = params.get_running_vms()?;
             let mut running = Vec::new();
@@ -308,10 +351,13 @@ impl<T: capnp::traits::Owned + 'static> commands::master_capnp::master::Server<T
                             .get()
                             .get_result()?
                             .set_err(format!("{err}").as_str())?;
+                        msg.rejected(&err);
                         return Ok(());
                     }
                 }
             }
+            msg.set_generation(observed_generation);
+            msg.set_count(running.len());
             let metrics = params.get_metrics()?;
             debug!(
                 worker = %worker_id,
@@ -338,8 +384,10 @@ impl<T: capnp::traits::Owned + 'static> commands::master_capnp::master::Server<T
                         .get()
                         .get_result()?
                         .set_err(format!("{node_err}").as_str())?;
+                    msg.rejected(&node_err);
                 }
                 Ok(NodeReply::Observed) => {
+                    msg.ok();
                     let _ = results.get().get_result()?.init_ok();
                 }
                 Ok(unexpected) => {
@@ -358,6 +406,12 @@ impl<T: capnp::traits::Owned + 'static> commands::master_capnp::master::Server<T
         mut results: commands::master_capnp::master::GetClusterStatusResults<T>,
     ) -> ::capnp::capability::Promise<(), ::capnp::Error> {
         let messenger = self.messenger.clone();
+        let mut msg = Msg::start(
+            "status",
+            "getClusterStatus",
+            self.caller(),
+            Endpoint::Myself,
+        );
         ::capnp::capability::Promise::from_future(async move {
             params.get()?;
             debug!("Getting cluster status");
@@ -378,6 +432,9 @@ impl<T: capnp::traits::Owned + 'static> commands::master_capnp::master::Server<T
                 }
             };
 
+            msg.set_generation(snapshot.generation().map_or(0, Generation::value));
+            msg.set_count(snapshot.workers().len());
+            msg.ok();
             let mut status = results.get().init_status();
             status.set_active_generation(snapshot.generation().map_or(0, Generation::value));
             status.set_active_commit(snapshot.commit());
@@ -419,6 +476,7 @@ impl<T: capnp::traits::Owned + 'static> commands::master_capnp::master::Server<T
     ) -> ::capnp::capability::Promise<(), ::capnp::Error> {
         let messenger = self.messenger.clone();
         let directory = self.directory.clone();
+        let mut msg = Msg::start("status", "getWorker", self.caller(), Endpoint::Myself);
         ::capnp::capability::Promise::from_future(async move {
             let params = params.get()?;
             let raw_id = read_text(params.get_worker_id()?)?;
@@ -426,6 +484,7 @@ impl<T: capnp::traits::Owned + 'static> commands::master_capnp::master::Server<T
 
             let worker_id =
                 WorkerId::new(raw_id).map_err(|err| capnp::Error::failed(format!("{err}")))?;
+            msg.set_worker(worker_id.as_str());
             let reply = messenger
                 .request(NodeEvent::GetWorker {
                     worker_id: worker_id.clone(),
@@ -450,6 +509,7 @@ impl<T: capnp::traits::Owned + 'static> commands::master_capnp::master::Server<T
                 .lookup(&worker_id)
                 .map_err(|err| capnp::Error::failed(format!("{err}")))?;
             results.get().set_worker(client);
+            msg.ok();
             Ok(())
         })
     }

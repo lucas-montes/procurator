@@ -43,10 +43,20 @@ let
           proxyJwtHs256Secret = "system-eval-secret";
         };
 
-        services.procurator.cache.enable = true;
+        services.procurator.cache = {
+          enable = true;
+          caches.public = { visibility = "public"; signKeyFile = "/run/secrets/public.key"; };
+        };
         services.procurator.ci.enable = true;
         services.procurator.repohub.enable = true;
         services.procurator.gitServer.enable = true;
+
+        services.procurator.journalGateway.enable = true;
+        services.procurator.console = {
+          enable = true;
+          local.controlPlane = true;
+          local.workers = [ "worker-1" ];
+        };
       }
     ];
   };
@@ -59,6 +69,7 @@ let
     "procurator-ci"
     "procurator-repohub"
     "procurator-worker"
+    "procurator-console"
   ];
 
   users = [
@@ -72,6 +83,7 @@ let
     { unit = "procurator-ci"; bin = "ci_service --config"; }
     { unit = "procurator-repohub"; bin = "repohub --config"; }
     { unit = "procurator-worker"; bin = "worker"; }
+    { unit = "procurator-console"; bin = "console"; }
   ];
 
   assert' = msg: cond:
@@ -89,7 +101,7 @@ let
 
 in
 assertionsClear
-&& assert' "all five service units exist"
+&& assert' "all service units exist"
   (builtins.all (u: cfg.systemd.services ? ${u}) services)
 && assert' "ExecStart binaries match the implemented crates"
   (builtins.all
@@ -104,3 +116,4 @@ assertionsClear
   (lib.any (r: builtins.match "d /var/lib/procurator-cache(/nar)? .*" r != null) cfg.systemd.tmpfiles.rules)
 && assert' "worker gets CAP_NET_ADMIN for TAP devices"
   (lib.elem "CAP_NET_ADMIN" cfg.systemd.services."procurator-worker".serviceConfig.AmbientCapabilities)
+&& assert' "journal gateway enabled for the console" cfg.services.journald.gateway.enable

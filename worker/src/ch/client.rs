@@ -13,13 +13,16 @@ use serde::{Serialize, de::DeserializeOwned};
 use tracing::{debug, info};
 
 use super::{dtos::VmConfigRef, errors::Error};
+use crate::msglog::{Endpoint, Msg};
 
 /// Stateless HTTP client to a single CH unix socket.
 pub struct Client {
     /// Path to the unix socket for the cloud-hypervisor API
     socket_path: PathBuf,
     /// HTTP client configured for unix socket communication
-    client: HyperClient<UnixConnector, Full<Bytes>>,
+    http: HyperClient<UnixConnector, Full<Bytes>>,
+    /// VM this process runs, named in message lines as `vmm:<id>`.
+    vm_id: String,
 }
 
 // Request structure used to serialize snapshot requests to the CH API.
@@ -30,18 +33,33 @@ struct SnapshotRequest<'a> {
 
 impl Client {
     /// Create a new Client VMM instance
-    pub fn new(socket_path: impl Into<PathBuf>) -> Self {
+    pub fn new(socket_path: impl Into<PathBuf>, vm_id: impl Into<String>) -> Self {
         let client: HyperClient<UnixConnector, Full<Bytes>> = HyperClient::unix();
 
         Self {
             socket_path: socket_path.into(),
-            client,
+            http: client,
+            vm_id: vm_id.into(),
         }
     }
 
-    /// Build the unix socket URI for a given API endpoint
-    fn build_uri(&self, endpoint: &str) -> hyper::Uri {
-        UnixUri::new(&self.socket_path, endpoint).into()
+    /// Calls `/api/v1/<action>` and writes its message line (the callee
+    /// is not ours, so the caller logs it).
+    async fn call<R: DeserializeOwned>(
+        &self,
+        method: Method,
+        action: &'static str,
+        body: Bytes,
+    ) -> Result<R, Error> {
+        let mut msg =
+            Msg::start("vmm", action, Endpoint::Myself, Endpoint::Vmm(&self.vm_id)).vm(&self.vm_id);
+        let uri: Uri = UnixUri::new(&self.socket_path, &format!("/api/v1/{action}")).into();
+        let result = request::<R>(uri, body, method, &self.http).await;
+        match &result {
+            Ok(_) => msg.ok(),
+            Err(err) => msg.error(err),
+        }
+        result
     }
 
     /// Kill the client and VM returning the socket path for cleanup.
@@ -55,9 +73,9 @@ impl Client {
         let body = serde_json::to_string(config)?;
         debug!(config_json = %body, "vm.create request");
 
-        let uri = self.build_uri("/api/v1/vm.create");
-        let resp =
-            request::<serde_json::Value>(uri, Bytes::from(body), Method::PUT, &self.client).await?;
+        let resp: serde_json::Value = self
+            .call(Method::PUT, "vm.create", Bytes::from(body))
+            .await?;
 
         info!(?resp, "vm.create succeeded");
         Ok(())
@@ -65,18 +83,14 @@ impl Client {
 
     pub async fn boot(&self) -> Result<(), Error> {
         debug!("vm.boot request");
-        let uri = self.build_uri("/api/v1/vm.boot");
-        let resp =
-            request::<serde_json::Value>(uri, Bytes::new(), Method::PUT, &self.client).await?;
+        let resp: serde_json::Value = self.call(Method::PUT, "vm.boot", Bytes::new()).await?;
 
         info!(?resp, "vm.boot succeeded");
         Ok(())
     }
 
     pub async fn delete(&self) -> Result<(), Error> {
-        let uri = self.build_uri("/api/v1/vm.delete");
-        let resp =
-            request::<serde_json::Value>(uri, Bytes::new(), Method::PUT, &self.client).await?;
+        let resp: serde_json::Value = self.call(Method::PUT, "vm.delete", Bytes::new()).await?;
 
         info!(?resp, "vm.delete succeeded");
         Ok(())
@@ -84,9 +98,7 @@ impl Client {
 
     /// Pause the VM. Required before taking a snapshot or doing a consistent disk copy.
     pub async fn pause(&self) -> Result<(), Error> {
-        let uri = self.build_uri("/api/v1/vm.pause");
-        let resp =
-            request::<serde_json::Value>(uri, Bytes::new(), Method::PUT, &self.client).await?;
+        let resp: serde_json::Value = self.call(Method::PUT, "vm.pause", Bytes::new()).await?;
 
         info!(?resp, "vm.pause succeeded");
         Ok(())
@@ -94,12 +106,16 @@ impl Client {
 
     /// Resume a previously paused VM.
     pub async fn resume(&self) -> Result<(), Error> {
-        let uri = self.build_uri("/api/v1/vm.resume");
-        let resp =
-            request::<serde_json::Value>(uri, Bytes::new(), Method::PUT, &self.client).await?;
+        let resp: serde_json::Value = self.call(Method::PUT, "vm.resume", Bytes::new()).await?;
 
         info!(?resp, "vm.resume succeeded");
         Ok(())
+    }
+
+    /// Cumulative per-device counters (`vm.counters`): net `rx_bytes` /
+    /// `tx_bytes`, block `read_bytes` / `write_bytes`, keyed by device id.
+    pub async fn counters(&self) -> Result<serde_json::Value, Error> {
+        self.call(Method::GET, "vm.counters", Bytes::new()).await
     }
 
     /// Take a CH snapshot (memory + device state) into `destination_url`.
@@ -112,9 +128,9 @@ impl Client {
         let body = serde_json::to_string(&req)?;
         debug!(%destination_url, "vm.snapshot request");
 
-        let uri = self.build_uri("/api/v1/vm.snapshot");
-        let resp =
-            request::<serde_json::Value>(uri, Bytes::from(body), Method::PUT, &self.client).await?;
+        let resp: serde_json::Value = self
+            .call(Method::PUT, "vm.snapshot", Bytes::from(body))
+            .await?;
 
         info!(?resp, "vm.snapshot succeeded");
         Ok(())

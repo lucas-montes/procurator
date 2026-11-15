@@ -7,6 +7,8 @@ use crate::{node::Node, registry::DeclaredWorker, server::Server};
 pub mod config;
 pub mod directory;
 mod dto;
+pub mod logging;
+mod msglog;
 mod node;
 pub mod registry;
 mod scheduler;
@@ -18,10 +20,11 @@ pub async fn main<T: capnp::traits::Owned + 'static>(
     addr: SocketAddr,
     peers_addr: Vec<SocketAddr>,
     declared: Vec<DeclaredWorker>,
+    state_log_interval: std::time::Duration,
 ) {
     let (tx, rx) = channel(100);
 
-    let node = Node::new(rx, peers_addr, declared);
+    let node = Node::new(rx, peers_addr, declared).with_state_log_interval(state_log_interval);
     let server: Server<T> = Server::new(tx);
 
     tracing::info!(?addr, "Starting control plane server",);

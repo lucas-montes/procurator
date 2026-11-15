@@ -582,6 +582,8 @@ mod tests {
     use serde::Serialize;
     use tokio::{net::TcpListener, sync::RwLock, time::sleep};
 
+    use crate::vmm::VmStats;
+
     use super::*;
 
     #[derive(Clone)]
@@ -590,6 +592,10 @@ mod tests {
     }
 
     impl crate::vmm::Handle for FakeVmHandle {
+        fn stats(&self) -> impl Future<Output = VmStats> + Send {
+            std::future::ready(VmStats::default())
+        }
+
         fn ip(&self) -> &str {
             &self.ip
         }

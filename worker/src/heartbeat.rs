@@ -16,6 +16,8 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 use super::{
+    metrics,
+    msglog::{Endpoint, Msg},
     pull::{AppliedGeneration, PollConfig, RpcPullClient, TransportLost, backoff_delay},
     vmm::{Factory, Handle, Reader, Registry},
 };
@@ -117,8 +119,18 @@ where
     let mut failures: u32 = 0;
     loop {
         let report = build_report(worker_id, applied.get(), registry).await;
+        // The control plane logs every heartbeat it receives; this side only
+        // logs the ones lost in transport.
+        let mut msg = Msg::start(
+            "heartbeat",
+            "pushData",
+            Endpoint::Myself,
+            Endpoint::ControlPlane,
+        )
+        .worker(worker_id);
         match sink.push(&report).await {
             Ok(()) => {
+                msg.discard();
                 failures = 0;
                 tracing::debug!(
                     worker = worker_id,
@@ -128,17 +140,80 @@ where
                 );
             }
             Err(PushError::Rejected(message)) => {
+                msg.discard();
                 failures += 1;
                 tracing::warn!(worker = worker_id, %message, "Heartbeat rejected");
                 sleep(backoff_delay(failures, interval)).await;
                 continue;
             }
             Err(PushError::Transport(reason)) => {
+                msg.error(&reason);
+                drop(msg);
                 tracing::warn!(worker = worker_id, %reason, "Master connection lost");
                 return TransportLost;
             }
         }
         sleep(interval).await;
+    }
+}
+
+/// Writes the worker state lines every `interval`, independently of the
+/// control-plane connection, so the console sees this worker even when the
+/// control plane is down (see `context/specs/log-events.md`).
+pub async fn run_state_log_loop<F: Factory>(
+    worker_id: String,
+    interval: Duration,
+    applied: AppliedGeneration,
+    registry: Registry<F, Reader>,
+) {
+    loop {
+        log_state(&worker_id, applied.get().unwrap_or(0), &registry).await;
+        sleep(interval).await;
+    }
+}
+
+async fn log_state<F: Factory>(worker_id: &str, generation: u64, registry: &Registry<F, Reader>) {
+    let host = metrics::host().await;
+    let guard = registry.clone().get().await;
+    tracing::info!(
+        log.schema = 1_u64,
+        log.event = "state",
+        scope = "worker",
+        worker = worker_id,
+        generation,
+        count = u64::try_from(guard.len()).unwrap_or(u64::MAX),
+        host.mem_total = host.mem_total(),
+        host.mem_available = host.mem_available(),
+        host.load1 = host.load1(),
+        host.cpus = host.cpus(),
+        "state"
+    );
+    let mut vms: Vec<(&String, &F::VmHandle)> = guard.iter().collect();
+    vms.sort_by(|left, right| left.0.cmp(right.0));
+    for (vm, handle) in vms {
+        let status = if handle.health().await.is_ok() {
+            "running"
+        } else {
+            "failed"
+        };
+        let sample = handle.stats().await;
+        tracing::info!(
+            log.schema = 1_u64,
+            log.event = "state",
+            scope = "vm",
+            worker = worker_id,
+            vm = vm.as_str(),
+            status,
+            ip = handle.ip(),
+            uptime_s = sample.uptime_s(),
+            cpu_ms = sample.cpu_ms(),
+            rss_bytes = sample.rss_bytes(),
+            net_rx = sample.net_rx(),
+            net_tx = sample.net_tx(),
+            disk_read = sample.disk_read(),
+            disk_write = sample.disk_write(),
+            "state"
+        );
     }
 }
 
@@ -168,6 +243,14 @@ pub async fn run_heartbeat_loop<F>(
                 sleep(config.heartbeat_interval).await;
             }
             Err(err) => {
+                Msg::start(
+                    "heartbeat",
+                    "connect",
+                    Endpoint::Myself,
+                    Endpoint::ControlPlane,
+                )
+                .worker(&config.worker_id)
+                .error(&err);
                 failures += 1;
                 tracing::warn!(
                     master = %config.master_addr,

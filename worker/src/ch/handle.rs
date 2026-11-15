@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Instant};
 
 use tokio::process::Child;
 use tracing::{debug, error, warn};
@@ -6,7 +6,8 @@ use tracing::{debug, error, warn};
 use crate::{
     ch::ip_allocator::IpAllocator,
     ch::tap::{Persisted, Tap},
-    vmm::{Handle as VmHandle, HandleError},
+    metrics,
+    vmm::{Handle as VmHandle, HandleError, VmStats},
 };
 
 use super::client::Client;
@@ -34,6 +35,8 @@ pub struct Handle {
     vm_id: String,
     lease_allocator: IpAllocator,
     ip: String,
+    /// When the handle was created, for uptime in state lines.
+    created: Instant,
 }
 
 impl Handle {
@@ -57,6 +60,7 @@ impl Handle {
             vm_id,
             lease_allocator,
             ip,
+            created: Instant::now(),
         }
     }
 
@@ -104,6 +108,28 @@ impl VmHandle for Handle {
     //TODO: maybe we could fetch if from the IpAllocator instead of saving it in the handle itself.
     fn ip(&self) -> &str {
         &self.ip
+    }
+
+    async fn stats(&self) -> VmStats {
+        let uptime_s = self.created.elapsed().as_secs();
+        let (cpu_ms, rss_bytes) = match self.child.id() {
+            Some(pid) => (
+                metrics::process_cpu_ms(pid).await,
+                metrics::process_rss_bytes(pid).await,
+            ),
+            None => (0, 0),
+        };
+        let stats = VmStats::new(uptime_s, cpu_ms, rss_bytes);
+        match self.client.counters().await {
+            Ok(counters) => {
+                let (net_rx, net_tx, disk_read, disk_write) = metrics::sum_counters(&counters);
+                stats.with_counters(net_rx, net_tx, disk_read, disk_write)
+            }
+            Err(err) => {
+                debug!(vm_id = %self.vm_id, error = %err, "vm.counters unavailable");
+                stats
+            }
+        }
     }
 
     async fn start(&self) -> Result<(), HandleError> {

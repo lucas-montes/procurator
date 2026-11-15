@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use crate::{
     database::Database,
-    vmm::{CreateCommand, Error as VmmError, Factory, Handle, HandleError},
+    vmm::{CreateCommand, Error as VmmError, Factory, Handle, HandleError, VmStats},
 };
 
 /// Fake backend config: empty, deserializes from `{}`.
@@ -50,6 +50,10 @@ impl FakeHandle {
 }
 
 impl Handle for FakeHandle {
+    fn stats(&self) -> impl Future<Output = VmStats> + Send {
+        std::future::ready(VmStats::default())
+    }
+
     fn ip(&self) -> &str {
         &self.ip
     }

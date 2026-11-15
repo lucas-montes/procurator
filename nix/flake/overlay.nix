@@ -1,5 +1,5 @@
 # flake.output "overlays.default": adds every Procurator Rust package to
-# `pkgs` (pkgs.cache, pkgs.ci_service, pkgs.worker, pkgs.cli,
+# `pkgs` (pkgs.cache, pkgs.ci_service, pkgs.worker, pkgs.cli, pkgs.console,
 # pkgs.control_plane, pkgs.repohub) so the NixOS modules' package defaults
 # resolve for consumers of `nixosModules.procurator` without extra wiring:
 #

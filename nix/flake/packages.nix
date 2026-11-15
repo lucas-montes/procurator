@@ -43,5 +43,6 @@ in {
   worker = mkRustPackage "worker";
   cli = mkRustPackage "cli";
   control_plane = mkRustPackage "control_plane";
+  console = mkRustPackage "console";
   repohub = mkRustPackage "repohub";
 }

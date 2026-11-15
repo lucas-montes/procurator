@@ -34,6 +34,8 @@ in {
     ./worker
     ./cluster.nix
     ./control-plane.nix
+    ./console.nix
+    ./journal-gateway.nix
     ./ci-service.nix
     ./cache.nix
     ./repohub

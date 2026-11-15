@@ -74,11 +74,24 @@ impl<F: Factory> Supervisor<F> {
         if let Err(err) = handle.start().await {
             //TODO: let's do something more clever here and find how to keep track of what is needed to recreate the vm if we need to
             // maybe save the config in sqlite
-            tracing::error!(id = %id, error = %err, "Failed to start VM");
+            tracing::error!(
+                log.schema = 1_u64,
+                log.event = "change",
+                change = "vm_start_failed",
+                vm = %id,
+                msg.reason = %err,
+                "Failed to start VM"
+            );
             return;
         }
 
-        tracing::info!(id = %id, "VM started successfully");
+        tracing::info!(
+            log.schema = 1_u64,
+            log.event = "change",
+            change = "vm_created",
+            vm = %id,
+            "VM started successfully"
+        );
 
         //TODO: this takes a lock and releases it very quickly.
         // The vm should already be running at this point so we could have a buffer, keep them in the buffer and then save them all at once
@@ -94,7 +107,13 @@ impl<F: Factory> Supervisor<F> {
                 //TODO: here we could maybe use the factory to do the cleanup and avoid charging the handle with so much state
                 tracing::error!(id = %id, error = %err, "Failed to delete VM");
             }
-            tracing::info!(id = %id, "VM deleted successfully");
+            tracing::info!(
+                log.schema = 1_u64,
+                log.event = "change",
+                change = "vm_deleted",
+                vm = %id,
+                "VM deleted successfully"
+            );
         } else {
             tracing::warn!(id = %id, "Received delete command for non-existent VM");
         }
