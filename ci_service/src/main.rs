@@ -4,13 +4,16 @@
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use ci_service::adapters::http::router;
+use ci_service::adapters::nix::NixBuilder;
 use ci_service::adapters::sqlite::SqliteRunStore;
 use ci_service::adapters::system::SystemClock;
 use ci_service::application::ports::StoreError;
 use ci_service::application::{Service, ServiceError};
 use ci_service::config::{Config, ConfigError};
+use tokio::task::JoinSet;
 use tracing_subscriber::EnvFilter;
 
 /// Startup failures.
@@ -67,7 +70,12 @@ async fn run(config: Config) -> Result<(), MainError> {
     let store = SqliteRunStore::open(&config.database_url)
         .await
         .map_err(MainError::Store)?;
-    let service = Arc::new(Service::new(store, SystemClock));
+    let builder = NixBuilder::new(
+        PathBuf::from(&config.repos_base_path),
+        config.eval_workers,
+        &config.allowed_uris,
+    );
+    let service = Arc::new(Service::new(store, SystemClock, builder));
 
     // Why: no worker is running yet, so every `running` row is a leftover.
     let recovered = service.recover().await.map_err(MainError::Recover)?;
@@ -83,8 +91,18 @@ async fn run(config: Config) -> Result<(), MainError> {
         .map_err(MainError::Bind)?;
     tracing::info!(
         bind_address = config.bind_address.as_str(),
+        workers = config.max_concurrent_runs,
         "serving CI API"
     );
+
+    // Why: dropping the set on return aborts the workers; a run cut off
+    // this way is requeued at the next start.
+    let mut workers = JoinSet::new();
+    let poll = Duration::from_millis(config.worker_poll_interval_ms);
+    for _ in 0..config.max_concurrent_runs {
+        let service = Arc::clone(&service);
+        workers.spawn(async move { service.work(poll).await });
+    }
     axum::serve(listener, router(service))
         .with_graceful_shutdown(shutdown_signal())
         .await

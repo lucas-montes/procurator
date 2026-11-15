@@ -16,7 +16,7 @@ let
   helpers = import ./lib.nix { inherit lib; };
   inherit (helpers) mkPkgsStub stubSystemd checkAssertions assert' assertEq assertThrows extractExecStartConfig;
 
-  pkgsStub = mkPkgsStub { packages = ["ci_service"]; inherit system; };
+  pkgsStub = mkPkgsStub { packages = ["ci_service" "nix" "nix-eval-jobs"]; inherit system; };
 
   evalCi = ciCfg:
     lib.evalModules {
@@ -45,7 +45,15 @@ let  # ── 1. Defaults ──────────────────
     && assertEq "domain" defaultsJson.domain "homelab"
     && assertEq "repos_base_path" defaultsJson.repos_base_path "/var/lib/git-server"
     && assertEq "max_retries" defaultsJson.max_retries 3
-    && assertEq "worker_poll_interval_ms" defaultsJson.worker_poll_interval_ms 1000;
+    && assertEq "worker_poll_interval_ms" defaultsJson.worker_poll_interval_ms 1000
+    && assertEq "max_concurrent_runs" defaultsJson.max_concurrent_runs 1
+    && assertEq "eval_workers" defaultsJson.eval_workers 1
+    && assert' "allowed_uris has github" (builtins.elem "github:" defaultsJson.allowed_uris)
+    && assertEq "path has nix, git, nix-eval-jobs"
+      defaults.config.systemd.services."procurator-ci".path
+      [ pkgsStub.nix pkgsStub.git pkgsStub.nix-eval-jobs ]
+    && assertEq "joins the git group"
+      defaults.config.users.users."procurator-ci".extraGroups [ "git" ];
 
   # ── 2. Explicit overrides ──────────────────────────────────────────
   explicit = evalCi {
@@ -56,6 +64,10 @@ let  # ── 1. Defaults ──────────────────
     reposBasePath = "/srv/git";
     maxRetries = 5;
     workerPollIntervalMillis = 250;
+    maxConcurrentRuns = 3;
+    evalWorkers = 4;
+    allowedUris = [ "git+ssh://git.lab/" ];
+    reposGroup = null;
   };
   explicitJson = ciJson explicit;
 
@@ -66,7 +78,11 @@ let  # ── 1. Defaults ──────────────────
     && assertEq "domain" explicitJson.domain "lab"
     && assertEq "repos_base_path" explicitJson.repos_base_path "/srv/git"
     && assertEq "max_retries" explicitJson.max_retries 5
-    && assertEq "worker_poll_interval_ms" explicitJson.worker_poll_interval_ms 250;
+    && assertEq "worker_poll_interval_ms" explicitJson.worker_poll_interval_ms 250
+    && assertEq "max_concurrent_runs" explicitJson.max_concurrent_runs 3
+    && assertEq "eval_workers" explicitJson.eval_workers 4
+    && assertEq "allowed_uris" explicitJson.allowed_uris [ "git+ssh://git.lab/" ]
+    && assertEq "no extra group" explicit.config.users.users."procurator-ci".extraGroups [ ];
 
   # ── 3. User/group/workspace wiring ─────────────────────────────────
   wiring = defaults;

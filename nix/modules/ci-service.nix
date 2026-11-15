@@ -14,6 +14,9 @@ let
     repos_base_path = cfg.reposBasePath;
     max_retries = cfg.maxRetries;
     worker_poll_interval_ms = cfg.workerPollIntervalMillis;
+    max_concurrent_runs = cfg.maxConcurrentRuns;
+    eval_workers = cfg.evalWorkers;
+    allowed_uris = cfg.allowedUris;
   };
 in {
   options.services.procurator.ci = {
@@ -69,6 +72,44 @@ in {
       description = "Delay between internal build-queue polls, in milliseconds.";
     };
 
+    maxConcurrentRuns = mkOption {
+      type = types.ints.positive;
+      default = 1;
+      description = "Runs carried out at the same time.";
+    };
+
+    evalWorkers = mkOption {
+      type = types.ints.positive;
+      default = 1;
+      description = "nix-eval-jobs worker processes per run (each may use up to 4 GiB).";
+    };
+
+    allowedUris = mkOption {
+      type = types.listOf types.str;
+      default = [ "github:" "gitlab:" "https://github.com/" "https://gitlab.com/" ];
+      description = ''
+        URI prefixes a pushed flake may fetch inputs from during evaluation
+        (Nix `allowed-uris`, with `restrict-eval` on). Add your own forges here.
+      '';
+    };
+
+    reposGroup = mkOption {
+      type = types.nullOr types.str;
+      default = "git";
+      description = ''
+        Group that can read the bare repositories under reposBasePath (the
+        git-server's `git` group). The service user joins it. null to manage
+        access yourself.
+      '';
+    };
+
+    nixEvalJobsPackage = mkOption {
+      type = types.package;
+      default = pkgs.nix-eval-jobs;
+      defaultText = literalExpression "pkgs.nix-eval-jobs";
+      description = "nix-eval-jobs, used to evaluate checks in parallel.";
+    };
+
     user = mkOption {
       type = types.str;
       default = "procurator-ci";
@@ -94,6 +135,7 @@ in {
       group = cfg.group;
       description = "Procurator CI service user";
       home = "/var/lib/procurator-ci";
+      extraGroups = optional (cfg.reposGroup != null) cfg.reposGroup;
     };
 
     users.groups.${cfg.group} = {};
@@ -107,6 +149,21 @@ in {
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" ];
 
+      # Why: the worker runs nix-eval-jobs, `nix build` and `nix-store`; Nix
+      # fetches the commit from the bare repo with git. Builds go through
+      # the daemon, which sends them to the host's remote builders
+      # (nix.buildMachines) and builds locally otherwise. The service user
+      # must not be in nix.settings.trusted-users.
+      path = [ (config.nix.package or pkgs.nix) pkgs.git cfg.nixEvalJobsPackage ];
+
+      environment = {
+        # Why: the repos belong to `git`; git refuses repos owned by
+        # another user unless they are marked safe.
+        GIT_CONFIG_COUNT = "1";
+        GIT_CONFIG_KEY_0 = "safe.directory";
+        GIT_CONFIG_VALUE_0 = "*";
+      };
+
       serviceConfig = {
         Type = "simple";
         User = cfg.user;
@@ -115,8 +172,9 @@ in {
         Restart = "on-failure";
         RestartSec = "10s";
 
-        # Why: CI writes only its DB/state dir. The repos root is read-only
-        # (git-server owns it); protect everything else.
+        # Why: CI writes only its DB/state dir (also its HOME, where Nix
+        # keeps its fetcher cache). The repos root is read-only (git-server
+        # owns it); protect everything else.
         NoNewPrivileges = true;
         PrivateTmp = true;
         ProtectSystem = "strict";

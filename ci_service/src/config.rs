@@ -19,6 +19,12 @@ pub struct Config {
     pub max_retries: i64,
     /// Delay between build-queue polls, in milliseconds.
     pub worker_poll_interval_ms: u64,
+    /// Runs carried out at the same time.
+    pub max_concurrent_runs: u32,
+    /// `nix-eval-jobs` worker processes per run.
+    pub eval_workers: u32,
+    /// URI prefixes evaluation may fetch from (Nix `allowed-uris`).
+    pub allowed_uris: Vec<String>,
 }
 
 /// Concrete config errors. Why: no `anyhow`, callers match on variants.
@@ -48,24 +54,24 @@ impl std::error::Error for ConfigError {}
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FileConfig {
-    /// Database connection URL.
     #[serde(default = "default_database_url")]
     database_url: String,
-    /// Bind address.
     #[serde(default = "default_bind_address")]
     bind_address: String,
-    /// Domain used in rendered links.
     #[serde(default = "default_domain")]
     domain: String,
-    /// Where bare git repositories are served from.
     #[serde(default = "default_repos_base_path")]
     repos_base_path: String,
-    /// Retry budget for failed build jobs.
     #[serde(default = "default_max_retries")]
     max_retries: i64,
-    /// Delay between build-queue polls, in milliseconds.
     #[serde(default = "default_worker_poll_interval_ms")]
     worker_poll_interval_ms: u64,
+    #[serde(default = "default_one")]
+    max_concurrent_runs: u32,
+    #[serde(default = "default_one")]
+    eval_workers: u32,
+    #[serde(default = "default_allowed_uris")]
+    allowed_uris: Vec<String>,
 }
 
 impl Default for FileConfig {
@@ -77,6 +83,25 @@ impl Default for FileConfig {
             repos_base_path: default_repos_base_path(),
             max_retries: default_max_retries(),
             worker_poll_interval_ms: default_worker_poll_interval_ms(),
+            max_concurrent_runs: default_one(),
+            eval_workers: default_one(),
+            allowed_uris: default_allowed_uris(),
+        }
+    }
+}
+
+impl From<FileConfig> for Config {
+    fn from(fc: FileConfig) -> Self {
+        Self {
+            database_url: fc.database_url,
+            bind_address: fc.bind_address,
+            domain: fc.domain,
+            repos_base_path: fc.repos_base_path,
+            max_retries: fc.max_retries,
+            worker_poll_interval_ms: fc.worker_poll_interval_ms,
+            max_concurrent_runs: fc.max_concurrent_runs,
+            eval_workers: fc.eval_workers,
+            allowed_uris: fc.allowed_uris,
         }
     }
 }
@@ -85,15 +110,7 @@ impl Default for Config {
     /// Config with the documented defaults (matches the TOML keys).
     /// Why: keeps `Config::default()` working for tests and dev runs.
     fn default() -> Self {
-        let fc = FileConfig::default();
-        Self {
-            database_url: fc.database_url,
-            bind_address: fc.bind_address,
-            domain: fc.domain,
-            repos_base_path: fc.repos_base_path,
-            max_retries: fc.max_retries,
-            worker_poll_interval_ms: fc.worker_poll_interval_ms,
-        }
+        FileConfig::default().into()
     }
 }
 
@@ -110,19 +127,7 @@ impl Config {
             .map_err(|e| ConfigError::NotFound(format!("{}: {e}", path.display())))?;
         let fc: FileConfig =
             toml::from_str(&raw).map_err(|e| ConfigError::Parse(format!("{e}")))?;
-        Self::load(fc)
-    }
-
-    /// Resolve the raw file into a validated [`Config`].
-    fn load(fc: FileConfig) -> Result<Self, ConfigError> {
-        let cfg = Self {
-            database_url: fc.database_url,
-            bind_address: fc.bind_address,
-            domain: fc.domain,
-            repos_base_path: fc.repos_base_path,
-            max_retries: fc.max_retries,
-            worker_poll_interval_ms: fc.worker_poll_interval_ms,
-        };
+        let cfg = Self::from(fc);
         cfg.validate()?;
         Ok(cfg)
     }
@@ -133,29 +138,50 @@ impl Config {
             .parse::<std::net::SocketAddr>()
             .map_err(|e| ConfigError::Invalid(format!("bind_address: {e}")))?;
         if self.database_url.trim().is_empty() {
-            return Err(ConfigError::Invalid("database_url is empty".to_string()));
+            return Err(ConfigError::Invalid(String::from("database_url is empty")));
         }
-        if self.repos_base_path.trim().is_empty() {
-            return Err(ConfigError::Invalid("repos_base_path is empty".to_string()));
+        if !Path::new(&self.repos_base_path).is_absolute() {
+            return Err(ConfigError::Invalid(String::from(
+                "repos_base_path must be an absolute path",
+            )));
+        }
+        if self.max_concurrent_runs == 0 || self.eval_workers == 0 {
+            return Err(ConfigError::Invalid(String::from(
+                "max_concurrent_runs and eval_workers must be at least 1",
+            )));
+        }
+        if self.worker_poll_interval_ms == 0 {
+            return Err(ConfigError::Invalid(String::from(
+                "worker_poll_interval_ms must be at least 1",
+            )));
+        }
+        if self
+            .allowed_uris
+            .iter()
+            .any(|uri| uri.contains(char::is_whitespace))
+        {
+            return Err(ConfigError::Invalid(String::from(
+                "allowed_uris entries must not contain whitespace",
+            )));
         }
         Ok(())
     }
 }
 
 fn default_database_url() -> String {
-    "sqlite:///var/lib/procurator-ci/ci.db".to_string()
+    String::from("sqlite:///var/lib/procurator-ci/ci.db")
 }
 
 fn default_bind_address() -> String {
-    "0.0.0.0:8082".to_string()
+    String::from("0.0.0.0:8082")
 }
 
 fn default_domain() -> String {
-    "homelab".to_string()
+    String::from("homelab")
 }
 
 fn default_repos_base_path() -> String {
-    "/var/lib/git-server".to_string()
+    String::from("/var/lib/git-server")
 }
 
 fn default_max_retries() -> i64 {
@@ -164,6 +190,23 @@ fn default_max_retries() -> i64 {
 
 fn default_worker_poll_interval_ms() -> u64 {
     1000
+}
+
+fn default_one() -> u32 {
+    1
+}
+
+/// Where flake inputs usually come from.
+fn default_allowed_uris() -> Vec<String> {
+    [
+        "github:",
+        "gitlab:",
+        "https://github.com/",
+        "https://gitlab.com/",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
 }
 
 #[cfg(test)]
@@ -191,6 +234,9 @@ mod tests {
         assert_eq!(cfg.repos_base_path, "/var/lib/git-server");
         assert_eq!(cfg.max_retries, 3);
         assert_eq!(cfg.worker_poll_interval_ms, 1000);
+        assert_eq!(cfg.max_concurrent_runs, 1);
+        assert_eq!(cfg.eval_workers, 1);
+        assert!(cfg.allowed_uris.iter().any(|uri| uri == "github:"));
     }
 
     #[test]
@@ -204,6 +250,9 @@ domain = "lab"
 repos_base_path = "/srv/git"
 max_retries = 5
 worker_poll_interval_ms = 250
+max_concurrent_runs = 2
+eval_workers = 4
+allowed_uris = ["git+ssh://git.lab/"]
 "#,
         );
         let cfg = Config::from_file(&path).expect("full config must parse");
@@ -213,6 +262,9 @@ worker_poll_interval_ms = 250
         assert_eq!(cfg.repos_base_path, "/srv/git");
         assert_eq!(cfg.max_retries, 5);
         assert_eq!(cfg.worker_poll_interval_ms, 250);
+        assert_eq!(cfg.max_concurrent_runs, 2);
+        assert_eq!(cfg.eval_workers, 4);
+        assert_eq!(cfg.allowed_uris, ["git+ssh://git.lab/"]);
         let _ = std::fs::remove_file(path);
     }
 
@@ -234,11 +286,22 @@ worker_poll_interval_ms = 250
     }
 
     #[test]
-    fn rejects_bad_bind_address() {
-        let path = temp_path("badaddr", "bind_address = \"nope\"\n");
-        let err = Config::from_file(&path).unwrap_err().to_string();
-        assert!(err.contains("bind_address"), "got: {err}");
-        let _ = std::fs::remove_file(path);
+    fn rejects_bad_values() {
+        for (name, body, needle) in [
+            ("badaddr", "bind_address = \"nope\"\n", "bind_address"),
+            ("relrepos", "repos_base_path = \"git\"\n", "repos_base_path"),
+            (
+                "noworkers",
+                "max_concurrent_runs = 0\n",
+                "max_concurrent_runs",
+            ),
+            ("spaceuri", "allowed_uris = [\"a b\"]\n", "allowed_uris"),
+        ] {
+            let path = temp_path(name, body);
+            let err = Config::from_file(&path).unwrap_err().to_string();
+            assert!(err.contains(needle), "{name}: got {err}");
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     #[test]

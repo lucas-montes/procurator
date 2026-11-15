@@ -9,7 +9,7 @@ use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
 use super::error::HttpError;
-use crate::application::ports::{Clock, RunStore};
+use crate::application::ports::{Builder, Clock, RunStore};
 use crate::application::{Service, ServiceError};
 use crate::domain::run::{CommitHash, GitRef, NewRun, Pusher, RepoName, Run, RunId};
 
@@ -95,13 +95,14 @@ pub struct ListParams {
 }
 
 /// `POST /api/runs`: queue a run. Answers 202 with the run id.
-pub async fn create<S, C>(
-    State(service): State<Arc<Service<S, C>>>,
+pub async fn create<S, C, B>(
+    State(service): State<Arc<Service<S, C, B>>>,
     Json(body): Json<CreateBody>,
 ) -> Result<Response, HttpError>
 where
     S: RunStore,
     C: Clock,
+    B: Builder,
 {
     let request = body.into_request()?;
     let id = service.enqueue(request).await?;
@@ -114,27 +115,29 @@ where
 }
 
 /// `GET /api/runs/{id}`: one run.
-pub async fn show<S, C>(
-    State(service): State<Arc<Service<S, C>>>,
+pub async fn show<S, C, B>(
+    State(service): State<Arc<Service<S, C, B>>>,
     Path(id): Path<i64>,
 ) -> Result<Response, HttpError>
 where
     S: RunStore,
     C: Clock,
+    B: Builder,
 {
     let run = service.run(RunId::new(id)).await?;
     Ok(Json(RunBody::from(&run)).into_response())
 }
 
 /// `GET /api/repos/{owner}/{name}/runs`: a repo's runs, newest first.
-pub async fn list<S, C>(
-    State(service): State<Arc<Service<S, C>>>,
+pub async fn list<S, C, B>(
+    State(service): State<Arc<Service<S, C, B>>>,
     Path((owner, name)): Path<(String, String)>,
     Query(params): Query<ListParams>,
 ) -> Result<Response, HttpError>
 where
     S: RunStore,
     C: Clock,
+    B: Builder,
 {
     let repo = RepoName::parse(format!("{owner}/{name}")).map_err(ServiceError::from)?;
     let before = params.before.map(RunId::new);
@@ -158,11 +161,82 @@ mod tests {
 
     use crate::adapters::http::router;
     use crate::adapters::memory::MemoryRunStore;
+    use crate::adapters::scripted::{ScriptedBuilder, derivation};
     use crate::adapters::system::SystemClock;
     use crate::application::Service;
+    use crate::application::ports::BuildEvent;
+
+    const DRV: &str = "/nix/store/u-unit.drv";
+
+    fn service() -> Arc<Service<MemoryRunStore, SystemClock, ScriptedBuilder>> {
+        let evaluation = vec![derivation(
+            "checks.x86_64-linux.unit",
+            "x86_64-linux",
+            DRV,
+            false,
+        )];
+        let events = vec![
+            BuildEvent::Started {
+                build: 1,
+                drv: String::from(DRV),
+                machine: String::new(),
+            },
+            BuildEvent::Line {
+                build: 1,
+                text: String::from("unit ok"),
+            },
+        ];
+        let builder = ScriptedBuilder::new(&["x86_64-linux"], Ok(evaluation))
+            .with_events(events)
+            .passing(&[DRV]);
+        Arc::new(Service::new(MemoryRunStore::new(), SystemClock, builder))
+    }
 
     fn app() -> axum::Router {
-        router(Arc::new(Service::new(MemoryRunStore::new(), SystemClock)))
+        router(service())
+    }
+
+    async fn text(app: &axum::Router, uri: &str) -> (StatusCode, String) {
+        let response = app.clone().oneshot(get(uri)).await.unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, String::from_utf8(bytes.to_vec()).unwrap())
+    }
+
+    #[tokio::test]
+    async fn a_worked_run_shows_checks_and_logs() {
+        let service = service();
+        let app = router(Arc::clone(&service));
+        let body =
+            format!(r#"{{"repo":"lucas/dummy","commit":"{COMMIT}","ref":"refs/heads/main"}}"#);
+        let (_, created) = send(&app, post(&body)).await;
+        let id = created["id"].as_i64().unwrap();
+        assert!(service.work_next().await.unwrap());
+
+        let (status, run) = send(&app, get(&format!("/api/runs/{id}"))).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(run["status"], "passed");
+
+        let (status, checks) = send(&app, get(&format!("/api/runs/{id}/checks"))).await;
+        assert_eq!(status, StatusCode::OK);
+        let check = &checks["checks"][0];
+        assert_eq!(check["attr"], "checks.x86_64-linux.unit");
+        assert_eq!(check["status"], "passed");
+        assert_eq!(check["machine"], "local");
+        assert_eq!(check["drv_path"], DRV);
+
+        let uri = format!("/api/runs/{id}/checks/checks.x86_64-linux.unit/log");
+        assert_eq!(
+            text(&app, &uri).await,
+            (StatusCode::OK, String::from("unit ok\n"))
+        );
+        let run_log = text(&app, &format!("/api/runs/{id}/log")).await;
+        assert_eq!(run_log, (StatusCode::OK, String::from("unit> unit ok\n")));
+
+        let missing = text(&app, &format!("/api/runs/{id}/checks/checks.nope/log")).await;
+        assert_eq!(missing.0, StatusCode::NOT_FOUND);
+        let (status, _) = send(&app, get("/api/runs/999/checks")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     async fn send(app: &axum::Router, request: Request<Body>) -> (StatusCode, Value) {

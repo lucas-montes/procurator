@@ -2,6 +2,8 @@
 //! Why: the memory and `SQLite` stores must be interchangeable.
 
 use crate::application::ports::{RunQuery, RunStore};
+use crate::domain::check::{Check, CheckStatus, Derivation, NewCheck, Systems};
+use crate::domain::log::{LogLine, LogOrigin, NewLogLine};
 use crate::domain::run::{CommitHash, GitRef, NewRun, Pusher, RepoName, RunId, RunStatus};
 
 fn request(repo: &str, pusher: Option<&str>) -> NewRun {
@@ -17,7 +19,162 @@ fn request(repo: &str, pusher: Option<&str>) -> NewRun {
 pub async fn check<S: RunStore>(store: &S) {
     round_trip(store).await;
     lifecycle(store).await;
+    // Why: expects nothing queued before it; listing leaves runs queued.
+    checks_and_logs(store).await;
     listing(store).await;
+}
+
+async fn checks_and_logs<S: RunStore>(store: &S) {
+    let run = store
+        .insert(request("lucas/checks", None), 50)
+        .await
+        .unwrap();
+    let other = store
+        .insert(request("lucas/other", None), 50)
+        .await
+        .unwrap();
+    store.claim_next(51).await.unwrap().unwrap();
+
+    let drv = Derivation::new(
+        String::from("/nix/store/aaaa-unit.drv"),
+        vec![
+            String::from("/nix/store/bbbb-unit"),
+            String::from("/nix/store/cccc-unit-doc"),
+        ],
+    );
+    let systems = Systems::new(vec![String::from("x86_64-linux")]);
+    let new = vec![
+        NewCheck::evaluated(
+            String::from("checks.x86_64-linux.unit"),
+            String::from("x86_64-linux"),
+            drv.clone(),
+            false,
+            &systems,
+        ),
+        NewCheck::eval_failed(
+            String::from("checks.x86_64-linux.bad"),
+            String::from("x86_64-linux"),
+        ),
+    ];
+    let inserted = store.insert_checks(run, new).await.unwrap();
+    assert_eq!(inserted.len(), 2);
+    assert_ne!(inserted[0].id(), inserted[1].id());
+    assert_eq!(
+        store.checks(run).await.unwrap(),
+        inserted,
+        "round trip, in order"
+    );
+    assert!(store.checks(other).await.unwrap().is_empty());
+
+    check_updates(store, run, &inserted, &drv).await;
+    logs_and_requeue(store, run, other, &drv, &inserted).await;
+}
+
+async fn check_updates<S: RunStore>(store: &S, run: RunId, inserted: &[Check], drv: &Derivation) {
+    let unit = inserted[0].id();
+    assert!(
+        store
+            .update_check(unit, CheckStatus::Building, Some("ssh-ng://mac"))
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .update_check(unit, CheckStatus::Passed, None)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .update_check(unit, CheckStatus::Failed, None)
+            .await
+            .unwrap(),
+        "a finished check does not move"
+    );
+    assert!(
+        !store
+            .update_check(inserted[1].id(), CheckStatus::Passed, None)
+            .await
+            .unwrap(),
+        "an eval failure is already over"
+    );
+    let stored = store.checks(run).await.unwrap();
+    assert_eq!(stored[0].status(), CheckStatus::Passed);
+    assert_eq!(stored[0].machine(), Some("ssh-ng://mac"));
+    assert_eq!(stored[0].derivation(), Some(drv));
+    assert_eq!(stored[1].derivation(), None);
+}
+
+async fn logs_and_requeue<S: RunStore>(
+    store: &S,
+    run: RunId,
+    other: RunId,
+    drv: &Derivation,
+    inserted: &[Check],
+) {
+    let lines = [
+        NewLogLine::new(LogOrigin::Run, "evaluating"),
+        NewLogLine::new(LogOrigin::Derivation("/nix/store/dddd-dep.drv"), "dep"),
+        NewLogLine::new(LogOrigin::Derivation(drv.path()), "unit 1"),
+        NewLogLine::new(LogOrigin::Check("checks.x86_64-linux.bad"), "error: x"),
+    ];
+    store.append_log(run, &lines).await.unwrap();
+    store
+        .append_log(
+            run,
+            &[NewLogLine::new(LogOrigin::Derivation(drv.path()), "unit 2")],
+        )
+        .await
+        .unwrap();
+    store
+        .append_log(other, &[NewLogLine::new(LogOrigin::Run, "elsewhere")])
+        .await
+        .unwrap();
+
+    let text = |lines: Vec<LogLine>| -> Vec<String> {
+        lines.iter().map(|line| String::from(line.text())).collect()
+    };
+    assert_eq!(
+        text(store.log(run, &[]).await.unwrap()),
+        ["evaluating", "dep", "unit 1", "error: x", "unit 2"]
+    );
+    let unit_log = store
+        .log(
+            run,
+            &[
+                LogOrigin::Check("checks.x86_64-linux.unit"),
+                LogOrigin::Derivation(drv.path()),
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(unit_log[0].origin(), LogOrigin::Derivation(drv.path()));
+    assert_eq!(text(unit_log), ["unit 1", "unit 2"]);
+
+    // An interrupted attempt leaves nothing behind once requeued.
+    assert_eq!(store.requeue_running().await.unwrap(), 1);
+    assert!(store.checks(run).await.unwrap().is_empty());
+    assert!(store.log(run, &[]).await.unwrap().is_empty());
+    assert_eq!(text(store.log(other, &[]).await.unwrap()), ["elsewhere"]);
+    let again = store.claim_next(52).await.unwrap().unwrap();
+    assert_eq!(again.id(), run);
+    let reinserted = store
+        .insert_checks(
+            run,
+            vec![NewCheck::eval_failed(
+                String::from("checks.x.y"),
+                String::from("x"),
+            )],
+        )
+        .await
+        .unwrap();
+    assert!(
+        reinserted[0].id() > inserted[1].id(),
+        "ids are never reused"
+    );
+    assert!(store.finish(run, RunStatus::Failed, 53).await.unwrap());
+    store.claim_next(54).await.unwrap().unwrap();
+    assert!(store.finish(other, RunStatus::Passed, 55).await.unwrap());
 }
 
 async fn round_trip<S: RunStore>(store: &S) {

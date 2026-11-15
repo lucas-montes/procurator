@@ -18,7 +18,7 @@ impl IntoResponse for HttpError {
     fn into_response(self) -> Response {
         let status = match &self.0 {
             ServiceError::Invalid(_) | ServiceError::NotFinal(_) => StatusCode::BAD_REQUEST,
-            ServiceError::NotFound => StatusCode::NOT_FOUND,
+            ServiceError::NotFound | ServiceError::CheckNotFound => StatusCode::NOT_FOUND,
             ServiceError::Conflict(_) => StatusCode::CONFLICT,
             ServiceError::Internal(detail) => {
                 // Why: internals go to the log, never to the client.

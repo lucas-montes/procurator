@@ -1,7 +1,7 @@
 # CI Service — Spec
 
-Status: agreed on 2026-11-14. Build step 1 is done (see "Build order");
-"Current state" at the end describes the scaffold it replaced.
+Status: agreed on 2026-11-14. Build steps 1 and 2 are done (see "Build
+order"); "Current state" at the end describes the scaffold they replaced.
 
 ## Purpose
 
@@ -19,7 +19,7 @@ repo), and the `deploy` section's schema beyond one on/off knob.
 | Topic | Decision |
 |---|---|
 | What runs | Every check in `checks.<system>.*`, or the attribute list in the repo config. |
-| Systems | Checks for a system with a builder go to that builder (local or remote, through Nix's `builders`). Checks with no builder are marked `skipped`. |
+| Who builds | Users' machines are the primary builders: `pcr vcs repo push` builds the commit's checks and uploads them to the cache before pushing, so CI usually only evaluates and finds every output cached. A check missing from the cache goes to a remote builder for its system when one is configured and reachable (Nix `builders`, set in the host's Nix config). Otherwise the CI host builds it. A check whose system neither a remote builder nor the CI host can build is `skipped`. (Decided 2026-11-15.) |
 | Concurrent pushes | Every push gets its own run. Runs never cancel each other. |
 | Reuse | No "skip this commit" shortcut. Every run evaluates, and anything already in the cache counts as passed without building. Results users pushed from their machines are trusted. |
 | Reruns, timeouts | Set in the repo config, capped by service-side limits. |
@@ -104,9 +104,11 @@ post-receive ──► POST /api/runs ──► RunStore (queued)
             Builder.evaluate ──► one Check per attribute
                                  (attr, system, drv, cache status)
                                         │
-                ├─ cached ──────────────► passed (cached), nothing downloaded
+                ├─ cached ──────────────► cached (counts as passed), nothing downloaded
                 ├─ no builder for system ► skipped
                 └─ rest ──► Builder.build (one nix build --keep-going)
+                                 │  remote builder for the system if configured,
+                                 │  otherwise the CI host
                                  │  per-check log lines ──► LogSink (store + live)
                                  ├─ failed ──► rebuild up to `reruns`
                                  └─ passed ──► push outputs to the cache
@@ -130,13 +132,19 @@ post-receive ──► POST /api/runs ──► RunStore (queued)
    `drvPath`, `outputs`, `cacheStatus`, or an evaluation error, which becomes a
    failed check with the error as its log.
 5. **Systems.** Compare each check's system with the systems available: the
-   local system plus `builders` from the Nix config. Unmatched checks become
-   `skipped: no builder for <system>`.
+   CI host's `system` and `extra-platforms` plus the systems of every machine
+   in `builders` (inline or `@file`), all read from `nix config show --json`.
+   Unmatched checks become `skipped: no builder for <system>`.
 6. **Build.**
    `nix build --keep-going --no-link --print-out-paths --log-format internal-json --timeout <check> --max-silent-time <silent> '<drv>^*' …`
    for every check not cached and not skipped, in one invocation. Nix then
    builds in parallel, downloads what is cached, builds shared dependencies
-   once and sends foreign systems to remote builders. `internal-json` events
+   once, and offers each derivation to the remote builders of its system
+   first, building on the CI host when none accepts and the host can build
+   that system. The build-start event names the machine (`""` = CI host),
+   which is stored on the check. Remote builders get
+   `builders-use-substitutes = true` so they download dependencies from the
+   cache instead of through the CI host. `internal-json` events
    carry the derivation being built. Map each log line to its check through the
    `drvPath` from step 4. A dependency's lines are streamed live at run level
    as "dependency `<name>`". When the run finishes they are attached to every
@@ -189,7 +197,7 @@ In `ci_service/src/application/ports.rs`. Async methods return
 | `Access` | authenticate the credential an HTTP request carries into a principal. Can principal X read repo Y? What are the repo's visibility, owner and default branch? | monolith: wraps repohub's application service. Split: repohub's HTTP API, or a JWT verifier. |
 | `ConfigSource` | `RepoConfig` for a commit (blob-id cache inside) | Git + `nix eval` |
 | `SecretStore` | resolves secret names (webhook URLs) | TOML/file now |
-| `Builder` | evaluate attributes, build drvs with streamed per-drv logs, push outputs | local nix daemon now, ephemeral VM later |
+| `Builder` | buildable systems, evaluate attributes, build drvs with streamed per-drv logs, push outputs | nix daemon (dispatching to remote builders from the host's Nix config) now, ephemeral VM later |
 | `Notifier` | deliver one event | webhook, deploy (monolith: calls the control plane's application service; split: POST to `deploy.url`) |
 | `Clock` | time, for timeouts and retention | system |
 
@@ -297,10 +305,10 @@ pulling from the cache.
 
 ## Service config (TOML)
 
-On top of today's keys, all of which must actually be used (`max_retries`,
-`worker_poll_interval_ms`, `repos_base_path` and `domain` currently are not):
+On top of today's keys, all of which must actually be used (`max_retries`
+and `domain` currently are not):
 
-- `max_concurrent_runs`, `eval_workers`
+- `max_concurrent_runs`, `eval_workers`, `allowed_uris` (done in step 2)
 - limits: `max_reruns`, `max_check_timeout`, `max_run_timeout`,
   `max_log_retention_days`
 - `default_log_retention_days`
@@ -355,10 +363,17 @@ src/  (root `procurator` crate: the monolith's composition root)
    `RunStore` on SQLite with the new schema, claim with `RETURNING` and
    stale-run recovery. Also the run API and the hook's new payload. `Check`
    types and store methods were left for step 2, where they are first used.
-2. **Evaluate and build.** `nix-eval-jobs` plus one `nix build`, internal-json
-   parser mapping lines to checks, per-check status and stored logs, security
-   options. Fixes the broken `path#sha` flake ref (use
-   `git+file://…?rev=`) and the lost stderr in `repo_outils::nix::run_command`.
+2. **Evaluate and build.** ✅ Done 2026-11-15. `nix-eval-jobs` plus one
+   `nix build`, internal-json parser mapping lines to derivations, per-check
+   status (with the machine that built it) and stored logs, security
+   options, buildable systems from `nix config show` (host + `builders`),
+   worker loop with `max_concurrent_runs`, NixOS module PATH, `git` group
+   and `safe.directory`. Uses `git+file://…?rev=`. `ci_service` no longer
+   uses `repo_outils`, so the lost stderr in `repo_outils::nix::run_command`
+   no longer matters here (`flake_check` has no callers left). Known gaps
+   until step 3: no timeouts (a hanging build blocks its worker), and when
+   the builder breaks mid-build the run is `errored` but its unbuilt checks
+   stay `queued`/`building`.
 3. **Repo config.** `procurator.nix` parse and validate, blob-id cache, split
    between per-run and repo-level settings, reruns and timeouts with caps.
 4. **Cache.** Substituter and netrc wiring in the NixOS module, push after
@@ -368,15 +383,19 @@ src/  (root `procurator` crate: the monolith's composition root)
    `procurator` crate mounting ci_service, repohub and cache. `RepohubAccess`
    in-process adapter, SSE endpoints, dependency logs attached to checks,
    retention task.
-7. **Systems.** Builder discovery, skipped checks.
+7. **Remote builders.** NixOS module options that fill `nix.buildMachines`
+   (with `distributedBuilds` and `builders-use-substitutes`) for the CI host,
+   plus a small builder-host module (SSH user, trusted key, cache as
+   substituter). Discovery and skipping already land in step 2.
 8. **Deploy.** In-process control-plane adapter for `run.succeeded`.
 9. **Split deployment** (when needed). Repohub-API or JWT `Access` adapter,
    HTTP deploy adapter.
 10. **Isolation.** VM `Builder` adapter.
 
-NixOS module, part of step 2: `path = [ config.nix.package pkgs.git nix-eval-jobs ]`,
-read access to the git-server repos for the CI user, and the security settings
-above.
+NixOS module, part of step 2 (done): `path = [ config.nix.package pkgs.git nix-eval-jobs ]`,
+read access to the git-server repos for the CI user (`reposGroup`, default
+`git`), `allowedUris`, `maxConcurrentRuns`, `evalWorkers`. The evaluation
+security options are passed on every `nix-eval-jobs` call by the adapter.
 
 ## Acceptance criteria
 
@@ -392,7 +411,9 @@ above.
 - AC4: `reruns = 2` builds a failing check 3 times and records 3 tries.
   `reruns` above `max_reruns` is capped.
 - AC5: A check for a system with no builder is `skipped` and does not fail the
-  run.
+  run. A check missing from the cache is built on a remote builder of its
+  system when one is configured, otherwise on the CI host, and the check
+  records which.
 - AC6: A user without access to the repo gets 403 on its runs and logs.
 - AC7: A webhook configured for `run.failed` receives exactly one POST per
   failed run. A webhook URL that is down is retried, then given up, without
@@ -425,9 +446,9 @@ above.
 
 ## Current state (2026-11-14)
 
-The scaffold that step 1 replaced. Items still open after step 1: the NixOS
-unit's PATH and cache settings (step 2/4), notifications (step 5), and the
-deploy call (step 8). The rest is fixed.
+The scaffold that steps 1 and 2 replaced. Items still open: cache settings
+(step 4), notifications (step 5), and the deploy call (step 8). The rest is
+fixed.
 
 - `builds.rs::git_url` produces `/path/repo.git#<sha>`, which Nix reads as an
   output attribute. Every build fails with "could not find a flake.nix file".

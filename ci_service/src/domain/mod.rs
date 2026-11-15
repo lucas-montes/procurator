@@ -1,3 +1,5 @@
-//! Pure rules of the CI service: no `async`, no IO, no framework types.
+//! Pure rules: no IO, no async runtime, no framework types.
 
+pub mod check;
+pub mod log;
 pub mod run;

@@ -7,6 +7,8 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, S
 use sqlx::{Row as _, SqlitePool};
 
 use crate::application::ports::{RunQuery, RunStore, StoreError};
+use crate::domain::check::{Check, CheckId, CheckStatus, Derivation, NewCheck};
+use crate::domain::log::{LogLine, LogOrigin, NewLogLine};
 use crate::domain::run::{
     CommitHash, GitRef, NewRun, Pusher, RepoName, Run, RunId, RunStatus, RunTimes,
 };
@@ -14,7 +16,7 @@ use crate::domain::run::{
 /// Tables and indexes, created on open.
 /// Why: the table is `runs`, not the scaffold's `builds`, so an old database
 /// opens cleanly; the old tables are simply ignored.
-const SCHEMA: [&str; 3] = [
+const SCHEMA: [&str; 6] = [
     "CREATE TABLE IF NOT EXISTS runs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         repo TEXT NOT NULL,
@@ -28,11 +30,36 @@ const SCHEMA: [&str; 3] = [
     )",
     "CREATE INDEX IF NOT EXISTS runs_status ON runs (status, id)",
     "CREATE INDEX IF NOT EXISTS runs_repo ON runs (repo, id)",
+    // Why: `outputs` is space-separated; store paths never contain spaces.
+    "CREATE TABLE IF NOT EXISTS checks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id INTEGER NOT NULL REFERENCES runs (id),
+        attr TEXT NOT NULL,
+        system TEXT NOT NULL,
+        drv_path TEXT,
+        outputs TEXT,
+        status TEXT NOT NULL,
+        machine TEXT,
+        UNIQUE (run_id, attr)
+    )",
+    "CREATE TABLE IF NOT EXISTS log_lines (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id INTEGER NOT NULL REFERENCES runs (id),
+        origin TEXT NOT NULL,
+        text TEXT NOT NULL
+    )",
+    "CREATE INDEX IF NOT EXISTS log_lines_run ON log_lines (run_id, origin, id)",
 ];
 
 /// Columns every query reads back, in [`run_from_row`]'s order.
 const COLUMNS: &str =
     "id, repo, commit_hash, git_ref, pusher, status, created_at, started_at, finished_at";
+
+/// Check columns, as [`check_from_row`] reads them.
+const CHECK_COLUMNS: &str = "id, run_id, attr, system, drv_path, outputs, status, machine";
+
+/// Statuses a check can still move from.
+const OPEN_CHECKS: &str = "('queued', 'building')";
 
 /// Runs stored in one `SQLite` file.
 #[derive(Debug)]
@@ -117,6 +144,37 @@ fn run_from_row(row: &SqliteRow) -> Result<Run, StoreError> {
     ))
 }
 
+/// Rebuild a check from a row selected with [`CHECK_COLUMNS`].
+fn check_from_row(row: &SqliteRow) -> Result<Check, StoreError> {
+    let get = |column: &str| {
+        row.try_get::<Option<String>, _>(column)
+            .map_err(StoreError::new)
+    };
+    let derivation = match (get("drv_path")?, get("outputs")?) {
+        (Some(path), outputs) => {
+            let outputs = outputs.as_deref().unwrap_or_default();
+            Some(Derivation::new(
+                path,
+                outputs.split_whitespace().map(String::from).collect(),
+            ))
+        }
+        (None, _) => None,
+    };
+    let status: &str = row.try_get("status").map_err(StoreError::new)?;
+    let check = NewCheck::from_parts(
+        row.try_get("attr").map_err(StoreError::new)?,
+        row.try_get("system").map_err(StoreError::new)?,
+        derivation,
+        CheckStatus::parse(status).map_err(StoreError::new)?,
+    );
+    Ok(Check::from_parts(
+        CheckId::new(row.try_get("id").map_err(StoreError::new)?),
+        RunId::new(row.try_get("run_id").map_err(StoreError::new)?),
+        check,
+        get("machine")?,
+    ))
+}
+
 impl RunStore for SqliteRunStore {
     fn insert(
         &self,
@@ -161,12 +219,24 @@ impl RunStore for SqliteRunStore {
 
     fn requeue_running(&self) -> impl Future<Output = Result<u64, StoreError>> + Send {
         async move {
+            let mut tx = self.pool.begin().await.map_err(StoreError::new)?;
+            for table in ["log_lines", "checks"] {
+                let sql = format!(
+                    "DELETE FROM {table}
+                     WHERE run_id IN (SELECT id FROM runs WHERE status = 'running')"
+                );
+                sqlx::query(&sql)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(StoreError::new)?;
+            }
             let result = sqlx::query(
                 "UPDATE runs SET status = 'queued', started_at = NULL WHERE status = 'running'",
             )
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(StoreError::new)?;
+            tx.commit().await.map_err(StoreError::new)?;
             Ok(result.rows_affected())
         }
     }
@@ -224,6 +294,119 @@ impl RunStore for SqliteRunStore {
                 .await
                 .map_err(StoreError::new)?;
             rows.iter().map(run_from_row).collect()
+        }
+    }
+
+    fn insert_checks(
+        &self,
+        run: RunId,
+        checks: Vec<NewCheck>,
+    ) -> impl Future<Output = Result<Vec<Check>, StoreError>> + Send {
+        async move {
+            let mut tx = self.pool.begin().await.map_err(StoreError::new)?;
+            let mut inserted = Vec::with_capacity(checks.len());
+            for check in checks {
+                let derivation = check.derivation();
+                let outputs = derivation.map(|drv| drv.outputs().join(" "));
+                let id: i64 = sqlx::query_scalar(
+                    "INSERT INTO checks (run_id, attr, system, drv_path, outputs, status)
+                     VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+                )
+                .bind(run.get())
+                .bind(check.attr())
+                .bind(check.system())
+                .bind(derivation.map(Derivation::path))
+                .bind(outputs)
+                .bind(check.status().as_str())
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(StoreError::new)?;
+                inserted.push(Check::from_parts(CheckId::new(id), run, check, None));
+            }
+            tx.commit().await.map_err(StoreError::new)?;
+            Ok(inserted)
+        }
+    }
+
+    fn update_check(
+        &self,
+        id: CheckId,
+        status: CheckStatus,
+        machine: Option<&str>,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send {
+        async move {
+            let sql = format!(
+                "UPDATE checks SET status = ?, machine = COALESCE(?, machine)
+                 WHERE id = ? AND status IN {OPEN_CHECKS}"
+            );
+            let result = sqlx::query(&sql)
+                .bind(status.as_str())
+                .bind(machine)
+                .bind(id.get())
+                .execute(&self.pool)
+                .await
+                .map_err(StoreError::new)?;
+            Ok(result.rows_affected() == 1)
+        }
+    }
+
+    fn checks(&self, run: RunId) -> impl Future<Output = Result<Vec<Check>, StoreError>> + Send {
+        async move {
+            let sql = format!("SELECT {CHECK_COLUMNS} FROM checks WHERE run_id = ? ORDER BY id");
+            let rows = sqlx::query(&sql)
+                .bind(run.get())
+                .fetch_all(&self.pool)
+                .await
+                .map_err(StoreError::new)?;
+            rows.iter().map(check_from_row).collect()
+        }
+    }
+
+    fn append_log(
+        &self,
+        run: RunId,
+        lines: &[NewLogLine<'_>],
+    ) -> impl Future<Output = Result<(), StoreError>> + Send {
+        async move {
+            // Why: one transaction per batch; a commit per line would make
+            // chatty builds wait on the disk.
+            let mut tx = self.pool.begin().await.map_err(StoreError::new)?;
+            for line in lines {
+                sqlx::query("INSERT INTO log_lines (run_id, origin, text) VALUES (?, ?, ?)")
+                    .bind(run.get())
+                    .bind(line.origin().key())
+                    .bind(line.text())
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(StoreError::new)?;
+            }
+            tx.commit().await.map_err(StoreError::new)
+        }
+    }
+
+    fn log(
+        &self,
+        run: RunId,
+        origins: &[LogOrigin<'_>],
+    ) -> impl Future<Output = Result<Vec<LogLine>, StoreError>> + Send {
+        async move {
+            let filter = if origins.is_empty() {
+                String::new()
+            } else {
+                let marks = vec!["?"; origins.len()].join(", ");
+                format!("AND origin IN ({marks})")
+            };
+            let sql =
+                format!("SELECT origin, text FROM log_lines WHERE run_id = ? {filter} ORDER BY id");
+            let mut query = sqlx::query_as::<_, (String, String)>(&sql).bind(run.get());
+            for origin in origins {
+                query = query.bind(origin.key());
+            }
+            let rows = query.fetch_all(&self.pool).await.map_err(StoreError::new)?;
+            Ok(rows
+                .into_iter()
+                .map(|(origin, text)| LogLine::new(origin, text))
+                .collect())
         }
     }
 }

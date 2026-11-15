@@ -12,6 +12,8 @@ pub enum ServiceError {
     Invalid(InvalidRun),
     /// No such run.
     NotFound,
+    /// The run has no check with that attribute.
+    CheckNotFound,
     /// The run is not in a status that allows this change.
     Conflict(RunStatus),
     /// A status that does not end a run was given to `finish`.
@@ -25,6 +27,7 @@ impl fmt::Display for ServiceError {
         match self {
             Self::Invalid(reason) => reason.fmt(f),
             Self::NotFound => f.write_str("run not found"),
+            Self::CheckNotFound => f.write_str("check not found"),
             Self::Conflict(status) => write!(f, "run is {}", status.as_str()),
             Self::NotFinal(status) => write!(f, "`{}` does not end a run", status.as_str()),
             Self::Internal(detail) => write!(f, "internal error: {detail}"),
