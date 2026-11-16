@@ -40,6 +40,10 @@ pub struct Config {
     pub netrc_file: Option<String>,
     /// TOML file of `name = "value"` secrets (webhook URLs).
     pub secrets_file: Option<String>,
+    /// Days run logs are kept when a repo does not say.
+    pub default_log_retention_days: u32,
+    /// Most days a repo may keep run logs (`ci.logRetentionDays`).
+    pub max_log_retention_days: u32,
 }
 
 /// Concrete config errors. Why: no `anyhow`, callers match on variants.
@@ -101,6 +105,10 @@ struct FileConfig {
     netrc_file: Option<String>,
     #[serde(default)]
     secrets_file: Option<String>,
+    #[serde(default = "default_log_retention_days")]
+    default_log_retention_days: u32,
+    #[serde(default = "default_max_log_retention_days")]
+    max_log_retention_days: u32,
 }
 
 impl Default for FileConfig {
@@ -122,6 +130,8 @@ impl Default for FileConfig {
             private_cache_prefix: default_private_cache_prefix(),
             netrc_file: None,
             secrets_file: None,
+            default_log_retention_days: default_log_retention_days(),
+            max_log_retention_days: default_max_log_retention_days(),
         }
     }
 }
@@ -145,6 +155,8 @@ impl From<FileConfig> for Config {
             private_cache_prefix: fc.private_cache_prefix,
             netrc_file: fc.netrc_file,
             secrets_file: fc.secrets_file,
+            default_log_retention_days: fc.default_log_retention_days,
+            max_log_retention_days: fc.max_log_retention_days,
         }
     }
 }
@@ -196,6 +208,13 @@ impl Config {
         if self.max_check_timeout == 0 || self.max_run_timeout == 0 {
             return Err(ConfigError::Invalid(String::from(
                 "max_check_timeout and max_run_timeout must be at least 1",
+            )));
+        }
+        if self.default_log_retention_days == 0
+            || self.default_log_retention_days > self.max_log_retention_days
+        {
+            return Err(ConfigError::Invalid(String::from(
+                "default_log_retention_days must be 1 to max_log_retention_days",
             )));
         }
         if self.worker_poll_interval_ms == 0 {
@@ -270,6 +289,14 @@ fn default_max_run_timeout() -> u64 {
     6 * 3600
 }
 
+fn default_log_retention_days() -> u32 {
+    30
+}
+
+fn default_max_log_retention_days() -> u32 {
+    365
+}
+
 fn default_worker_poll_interval_ms() -> u64 {
     1000
 }
@@ -329,6 +356,8 @@ mod tests {
         assert_eq!(cfg.max_concurrent_runs, 1);
         assert_eq!(cfg.eval_workers, 1);
         assert!(cfg.allowed_uris.iter().any(|uri| uri == "github:"));
+        assert_eq!(cfg.default_log_retention_days, 30);
+        assert_eq!(cfg.max_log_retention_days, 365);
     }
 
     #[test]
@@ -352,9 +381,13 @@ public_cache = "shared"
 private_cache_prefix = "p-"
 netrc_file = "/run/secrets/ci-netrc"
 secrets_file = "/run/secrets/ci-secrets.toml"
+default_log_retention_days = 14
+max_log_retention_days = 60
 "#,
         );
         let cfg = Config::from_file(&path).expect("full config must parse");
+        assert_eq!(cfg.default_log_retention_days, 14);
+        assert_eq!(cfg.max_log_retention_days, 60);
         assert_eq!(cfg.bind_address, "127.0.0.1:9000");
         assert_eq!(cfg.database_url, "sqlite:///tmp/ci.db");
         assert_eq!(cfg.domain, "lab");
@@ -411,6 +444,11 @@ secrets_file = "/run/secrets/ci-secrets.toml"
                 "cache_base_url",
             ),
             ("cachename", "public_cache = \"Public\"\n", "public_cache"),
+            (
+                "retention",
+                "default_log_retention_days = 400\n",
+                "default_log_retention_days",
+            ),
         ] {
             let path = temp_path(name, body);
             let err = Config::from_file(&path).unwrap_err().to_string();

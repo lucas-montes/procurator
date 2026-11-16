@@ -31,20 +31,24 @@ Hexagonal, like `cache`:
   covers check statuses, "cached, else buildable, else skipped", and a run's
   outcome; `log.rs` tags each line with its origin (run, check, derivation);
   `repo_config.rs` holds the per-run settings and the service's caps;
-  `event.rs` decides which events a finished run sends, and to whom.
+  `event.rs` decides which events a finished run sends, and to whom;
+  `access.rs` holds credentials and principals.
 - `src/application/`: `Service` with every use case, `service/pipeline.rs`
   (the worker: claim, read config, evaluate, build and rerun, record),
-  `service/outbox.rs` (the dispatcher), and `ports.rs` (`RunStore`,
-  `Builder`, `ConfigSource`, `Notifier`, `SecretStore`, `Clock`).
+  `service/logs.rs` (stored and followed logs), `service/live.rs` (the
+  per-run broadcast), `service/outbox.rs` (the dispatcher),
+  `service/retention.rs` (log expiry), and `ports.rs` (`RunStore`,
+  `Builder`, `ConfigSource`, `Notifier`, `SecretStore`, `Access`, `Clock`).
 - `src/adapters/`: `sqlite.rs` and `memory.rs` (run stores, both held to
   `store_contract.rs`), `nix/` (`NixBuilder`: `nix-eval-jobs`, one
   `nix build --keep-going`, internal-json log parsing, buildable systems from
   `nix config show`; `GitConfigSource`: `procurator.nix` by blob id),
   `webhook.rs` (`WebhookNotifier`), `secrets.rs` (`FileSecretStore`),
-  `system.rs` (clock), `http/` (axum router).
-- `src/main.rs`: composition root for a standalone deployment. In the
-  monolith, other crates hold `ci_service::application::Service` and call it
-  directly.
+  `access.rs` (`OpenAccess`), `system.rs` (clock), `http/` (axum router).
+- `src/runtime.rs`: the production wiring (SQLite, Nix, git, webhooks,
+  workers, dispatcher, log retention) from a `Config` and an `Access`
+  adapter. `src/main.rs` (standalone) and the root `procurator` crate (the
+  monolith: CI, repohub and cache in one process) both start it.
 
 ## HTTP API
 
@@ -53,12 +57,23 @@ Hexagonal, like `cache`:
 | POST | `/api/runs` | `{"repo":"owner/name","commit":"<sha>","ref":"refs/heads/main","pusher":"git"}` → 202 `{"id":1,"status":"queued"}` |
 | GET | `/api/runs/{id}` | one run |
 | GET | `/api/runs/{id}/checks` | checks with status, drv path and the machine that built them |
-| GET | `/api/runs/{id}/checks/{attr}/log` | one check's log, plain text |
+| GET | `/api/runs/{id}/checks/{attr}/log` | one check's log with the dependencies it needed built in the run, plain text, lines prefixed `<name>> ` |
 | GET | `/api/runs/{id}/log` | the whole run, dependency builds included, lines prefixed `<name>> ` |
 | GET | `/api/repos/{owner}/{name}/runs?before=<id>&limit=<n>` | newest first, default 20, max 100 |
 | GET | `/health` | `OK` |
 
 The post-receive hook lives in `nix/modules/repohub/post-receive`.
+
+Add `?follow=true` to either log endpoint for Server-Sent Events: the
+stored lines, then each line as it is built, then an `end` event when the
+run ends. Each event's `data` is `{"seq","origin","text"}` (origin is the
+derivation or check name, empty for the run) and its `id` is `seq`.
+
+Reads take an optional `Authorization: Bearer <token>`; an invalid one is
+401, a caller without access to the repo gets 403. The access check is in
+the application layer (the `Access` port), so in-process callers get the
+same answers. For now both binaries use `OpenAccess`: repohub has no
+credentials or permissions yet, so everyone reads everything.
 
 ## Run locally
 
@@ -114,14 +129,24 @@ unknown keys fail the run:
 The service caps these with `max_reruns`, `max_check_timeout` and
 `max_run_timeout`. A check's `tries` shows how many builds it took, so
 `passed` with `tries > 1` is a flaky check. The full schema (webhooks,
-retention, cache, deploy) is in the spec; those keys are validated now and
-used by later steps.
+retention, cache, deploy) is in the spec; `deploy` is validated now and
+used by a later step.
+
+## Log retention
+
+A finished run's logs are kept `ci.logRetentionDays` days (read from the
+default branch), else `default_log_retention_days` (30), never more than
+`max_log_retention_days` (365). An hourly task deletes expired lines; runs
+and checks stay, so history and flakiness survive.
 
 ## Status
 
-Build steps 1–5 of the spec are done: queued runs are worked by
+Build steps 1–6 of the spec are done: queued runs are worked by
 `max_concurrent_runs` workers, `procurator.nix` picks the checks, reruns
 and timeouts, every check is evaluated, cached or built, each check's log
-is stored, what was built is pushed to the cache, and events reach the
-repo's webhooks. Not yet: live log streaming, access control and the
-monolith (step 6), deploy (step 8).
+(with its dependencies) is stored and can be followed live, what was built
+is pushed to the cache, events reach the repo's webhooks, reads go through
+the `Access` port, old logs expire, and the root `procurator` binary runs
+CI, repohub and the cache in one process. Not yet: real access control
+(repohub has no credentials), the hook token, remote builder options
+(step 7), deploy (step 8).

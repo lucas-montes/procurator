@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
+use crate::domain::access::{Credential, Principal};
 use crate::domain::check::{Check, CheckId, CheckStatus, Derivation, NewCheck, Systems};
 use crate::domain::event::{Delivery, EventPayload, Target};
 use crate::domain::log::{LogLine, LogOrigin, NewLogLine};
@@ -96,19 +97,27 @@ pub trait RunStore: Send + Sync + 'static {
         status: RunStatus,
         now: i64,
     ) -> impl Future<Output = Result<bool, StoreError>> + Send {
-        self.finish_with_outbox(id, status, now, &[])
+        self.finish_with_outbox(id, status, now, &[], None)
     }
 
     /// End a running run and queue `outbox` deliveries, atomically: either
-    /// both happen or neither. `false` (and nothing queued) when the run is
-    /// missing or not running.
+    /// both happen or neither. With `keep_logs_until`, its log lines are
+    /// deleted by [`RunStore::delete_expired_logs`] from then on. `false`
+    /// (and nothing queued) when the run is missing or not running.
     fn finish_with_outbox(
         &self,
         id: RunId,
         status: RunStatus,
         now: i64,
         outbox: &[(Target, EventPayload)],
+        keep_logs_until: Option<i64>,
     ) -> impl Future<Output = Result<bool, StoreError>> + Send;
+
+    /// Delete the log lines (and derivation links) of every run whose logs
+    /// were kept until `now` or earlier. Runs and checks stay. Returns how
+    /// many lines.
+    fn delete_expired_logs(&self, now: i64)
+    -> impl Future<Output = Result<u64, StoreError>> + Send;
 
     /// Queue deliveries due now.
     fn queue_deliveries(
@@ -183,12 +192,26 @@ pub trait RunStore: Send + Sync + 'static {
     /// A run's checks, in evaluation order.
     fn checks(&self, run: RunId) -> impl Future<Output = Result<Vec<Check>, StoreError>> + Send;
 
-    /// Append lines to a run's log, in order.
+    /// Record that a check needs these derivations, so their build logs
+    /// show with its own. Recording a link twice is not an error.
+    fn link_derivations(
+        &self,
+        links: &[(CheckId, &str)],
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// The derivations linked to a check, in no particular order.
+    fn linked_derivations(
+        &self,
+        check: CheckId,
+    ) -> impl Future<Output = Result<Vec<String>, StoreError>> + Send;
+
+    /// Append lines to a run's log, in order. Returns the sequence number
+    /// ([`LogLine::seq`]) of the first; the others follow it one by one.
     fn append_log(
         &self,
         run: RunId,
         lines: &[NewLogLine<'_>],
-    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+    ) -> impl Future<Output = Result<i64, StoreError>> + Send;
 
     /// A run's log lines from the given origins, in order; every line when
     /// `origins` is empty.
@@ -285,6 +308,14 @@ pub trait Builder: Send + Sync + 'static {
         run: &NewRun,
         selection: &CheckSelection,
     ) -> impl Future<Output = Result<Vec<Evaluated>, BuilderError>> + Send;
+
+    /// The derivations `drv` needs built first, all the way down, without
+    /// `drv` itself.
+    /// Why: a dependency built in the run shows in each check's log.
+    fn requisites(
+        &self,
+        drv: &Derivation,
+    ) -> impl Future<Output = Result<Vec<String>, BuilderError>> + Send;
 
     /// Build `targets` in one go, keeping on after failures, under the
     /// per-derivation limits of `timeouts`, and send progress to `events`.
@@ -394,6 +425,44 @@ pub trait SecretStore: Send + Sync + 'static {
         &self,
         name: &str,
     ) -> impl Future<Output = Result<Option<String>, DeliveryError>> + Send;
+}
+
+/// Why a caller's access could not be decided.
+#[derive(Debug)]
+pub enum AccessError {
+    /// The credential is invalid or expired.
+    Unauthenticated,
+    /// The access backend could not answer.
+    Unavailable(String),
+}
+
+impl fmt::Display for AccessError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unauthenticated => f.write_str("invalid credential"),
+            Self::Unavailable(detail) => write!(f, "access check unavailable: {detail}"),
+        }
+    }
+}
+
+impl std::error::Error for AccessError {}
+
+/// Who may read which repo's runs and logs.
+/// Why: the repo host (repohub) owns users and permissions, not CI.
+pub trait Access: Send + Sync + 'static {
+    /// Who presented `credential`. No credential is not an error: it is
+    /// [`Principal::Anonymous`], which may still read public repos.
+    fn authenticate(
+        &self,
+        credential: Credential<'_>,
+    ) -> impl Future<Output = Result<Principal, AccessError>> + Send;
+
+    /// Whether `principal` may read `repo`'s runs and logs.
+    fn can_read(
+        &self,
+        principal: &Principal,
+        repo: &RepoName,
+    ) -> impl Future<Output = Result<bool, AccessError>> + Send;
 }
 
 /// Wall clock.

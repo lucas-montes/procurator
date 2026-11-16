@@ -13,3 +13,5 @@ pub mod adapters;
 pub mod application;
 pub mod config;
 pub mod domain;
+#[cfg(all(feature = "http", feature = "sqlite", feature = "webhook"))]
+pub mod runtime;

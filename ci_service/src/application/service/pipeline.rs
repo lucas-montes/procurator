@@ -12,8 +12,8 @@ use tokio::sync::mpsc;
 use super::Service;
 use crate::application::ServiceError;
 use crate::application::ports::{
-    BuildEvent, Builder, BuilderError, Clock, ConfigSource, Evaluated, Notifier, RepoConfigError,
-    RunStore, StoreError,
+    Access, BuildEvent, Builder, BuilderError, Clock, ConfigSource, Evaluated, Notifier,
+    RepoConfigError, RunStore, StoreError,
 };
 use crate::domain::check::{Check, CheckId, CheckStatus, LOCAL_MACHINE, NewCheck};
 use crate::domain::event::{EventKind, EventPayload, deliveries};
@@ -77,13 +77,14 @@ impl Fault {
     }
 }
 
-impl<S, C, B, R, N> Service<S, C, B, R, N>
+impl<S, C, B, R, N, A> Service<S, C, B, R, N, A>
 where
     S: RunStore,
     C: Clock,
     B: Builder,
     R: ConfigSource,
     N: Notifier,
+    A: Access,
 {
     /// Work runs off the queue forever, waiting `poll` whenever it is empty
     /// or the store fails. Drop the future to stop; a run cut off this way
@@ -116,33 +117,40 @@ where
             let Some(run) = self.claim_next().await? else {
                 return Ok(false);
             };
-            let id = run.id();
-            tracing::info!(run = %id, repo = run.request().repo().as_str(), "run started");
-            let repo = self.repo_settings(&run).await?;
-            self.announce(id, EventKind::RunStarted, RunStatus::Running, &repo)
-                .await?;
-            let result = self.execute(&run, &repo).await;
-            let status = match result {
-                Ok(status) => status,
-                Err(fault) => {
-                    let Some(status) = fault.outcome() else {
-                        // Why: best effort, so the run does not look stuck.
-                        let _ = self.finish(id, RunStatus::Errored).await;
-                        return Err(ServiceError::Internal(fault.message()));
-                    };
-                    // Why: checks the broken builder never finished must not
-                    // look like they are still building.
-                    self.store
-                        .close_open_checks(id, CheckStatus::Failed)
-                        .await?;
-                    self.log_text(id, LogOrigin::Run, &fault.message()).await?;
-                    status
-                }
-            };
-            self.conclude(&run, status, &repo).await?;
-            tracing::info!(run = %id, status = status.as_str(), "run finished");
-            Ok(true)
+            let result = self.carry_out(&run).await;
+            // Why: whatever happened, readers following the run see its end.
+            self.live.close(run.id());
+            result.map(|()| true)
         }
+    }
+
+    /// Carry out a claimed run, up to finishing it.
+    async fn carry_out(&self, run: &Run) -> Result<(), ServiceError> {
+        let id = run.id();
+        tracing::info!(run = %id, repo = run.request().repo().as_str(), "run started");
+        let repo = self.repo_settings(run).await?;
+        self.announce(id, EventKind::RunStarted, RunStatus::Running, &repo)
+            .await?;
+        let status = match self.execute(run, &repo).await {
+            Ok(status) => status,
+            Err(fault) => {
+                let Some(status) = fault.outcome() else {
+                    // Why: best effort, so the run does not look stuck.
+                    let _ = self.finish(id, RunStatus::Errored).await;
+                    return Err(ServiceError::Internal(fault.message()));
+                };
+                // Why: checks the broken builder never finished must not
+                // look like they are still building.
+                self.store
+                    .close_open_checks(id, CheckStatus::Failed)
+                    .await?;
+                self.log_text(id, LogOrigin::Run, &fault.message()).await?;
+                status
+            }
+        };
+        self.conclude(run, status, &repo).await?;
+        tracing::info!(run = %id, status = status.as_str(), "run finished");
+        Ok(())
     }
 
     /// The repo-level settings from the default branch. A broken config
@@ -180,9 +188,11 @@ where
             let events = EventPayload::for_finished(run, status, &checks, previous, on_default);
             deliveries(&events, repo.webhooks())
         };
+        let now = self.clock.now();
+        let keep_until = now + self.retention.seconds(repo.log_retention_days());
         let finished = self
             .store
-            .finish_with_outbox(id, status, self.clock.now(), &outbox)
+            .finish_with_outbox(id, status, now, &outbox, Some(keep_until))
             .await?;
         if finished {
             Ok(())
@@ -261,15 +271,46 @@ where
             .filter(|check| check.status() != CheckStatus::Queued)
             .map(Check::status)
             .collect();
+        let requisites = self.requisites(id, &queued).await?;
+        let mut dependents: HashMap<&str, Vec<CheckId>> = HashMap::new();
+        for (check, drvs) in &requisites {
+            for drv in drvs {
+                dependents.entry(drv.as_str()).or_default().push(*check);
+            }
+        }
         let mut built = Vec::new();
         finals.extend(
-            self.build_with_reruns(id, queued, settings, &mut built)
+            self.build_with_reruns(id, queued, settings, &dependents, &mut built)
                 .await?,
         );
         if !built.is_empty() {
             self.push(run, &built, repo).await?;
         }
         Ok(CheckStatus::run_outcome(finals))
+    }
+
+    /// What each queued check needs built first. A failure only costs that
+    /// check its dependency logs, with a warning in its log.
+    async fn requisites(
+        &self,
+        run: RunId,
+        queued: &[&Check],
+    ) -> Result<Vec<(CheckId, Vec<String>)>, StoreError> {
+        let mut requisites = Vec::with_capacity(queued.len());
+        for check in queued {
+            let Some(drv) = check.derivation() else {
+                continue;
+            };
+            match self.builder.requisites(drv).await {
+                Ok(drvs) => requisites.push((check.id(), drvs)),
+                Err(error) => {
+                    let message = format!("warning: dependency logs not attached: {error}");
+                    self.log_text(run, LogOrigin::Check(check.attr()), &message)
+                        .await?;
+                }
+            }
+        }
+        Ok(requisites)
     }
 
     /// Upload what this run built to the repo's cache. Failures are logged
@@ -324,10 +365,7 @@ where
                 lines.push(NewLogLine::new(origin, reason));
             }
         }
-        if lines.is_empty() {
-            return Ok(());
-        }
-        self.store.append_log(run, &lines).await
+        self.append(run, &lines).await
     }
 
     /// Build the queued checks, then the failed ones again up to
@@ -339,6 +377,7 @@ where
         run: RunId,
         mut pending: Vec<&Check>,
         settings: &RunSettings,
+        dependents: &HashMap<&str, Vec<CheckId>>,
         built: &mut Vec<String>,
     ) -> Result<Vec<CheckStatus>, Fault> {
         let reruns = settings.reruns();
@@ -348,7 +387,7 @@ where
                 break;
             }
             let statuses = self
-                .build(run, &pending, settings.timeouts(), built)
+                .build(run, &pending, settings.timeouts(), dependents, built)
                 .await?;
             let mut failed = Vec::new();
             for (check, status) in pending.into_iter().zip(statuses) {
@@ -369,9 +408,7 @@ where
                 self.store.retry_check(check.id()).await?;
                 lines.push(NewLogLine::new(LogOrigin::Check(check.attr()), note));
             }
-            if !lines.is_empty() {
-                self.store.append_log(run, &lines).await?;
-            }
+            self.append(run, &lines).await?;
             pending = failed;
         }
         built.sort_unstable();
@@ -385,6 +422,7 @@ where
         run: RunId,
         queued: &[&Check],
         timeouts: Timeouts,
+        dependents: &HashMap<&str, Vec<CheckId>>,
         started: &mut Vec<String>,
     ) -> Result<Vec<CheckStatus>, Fault> {
         let targets: Vec<_> = queued
@@ -394,7 +432,7 @@ where
         let (events, received) = mpsc::channel(EVENT_BUFFER);
         let (built, recorded) = tokio::join!(
             self.builder.build(&targets, timeouts, events),
-            self.record(run, queued, received, started)
+            self.record(run, queued, received, dependents, started)
         );
         let timed_out = recorded?;
         let built = built?;
@@ -415,14 +453,17 @@ where
     }
 
     /// Store build events until the builder is done: lines tagged with their
-    /// derivation, checks marked `building` on the machine that took them.
-    /// Returns the checks whose build hit a time limit, and adds every
-    /// derivation that started building to `started`.
+    /// derivation, checks marked `building` on the machine that took them,
+    /// each dependency linked to the checks that need it (before its first
+    /// line, so live readers of those checks see it). Returns the checks
+    /// whose build hit a time limit, and adds every derivation that started
+    /// building to `started`.
     async fn record(
         &self,
         run: RunId,
         queued: &[&Check],
         mut received: mpsc::Receiver<BuildEvent>,
+        dependents: &HashMap<&str, Vec<CheckId>>,
         started: &mut Vec<String>,
     ) -> Result<HashSet<CheckId>, StoreError> {
         let checks: HashMap<&str, CheckId> = queued
@@ -449,6 +490,11 @@ where
                         self.store
                             .update_check(check, CheckStatus::Building, Some(machine))
                             .await?;
+                    }
+                    if let Some(needers) = dependents.get(drv.as_str()) {
+                        let links: Vec<(CheckId, &str)> =
+                            needers.iter().map(|&check| (check, drv.as_str())).collect();
+                        self.store.link_derivations(&links).await?;
                     }
                     builds.insert(*build, mem::take(drv));
                 }
@@ -478,9 +524,7 @@ where
                     ),
                 }
             }
-            if !lines.is_empty() {
-                self.store.append_log(run, &lines).await?;
-            }
+            self.append(run, &lines).await?;
             batch.clear();
         }
         started.extend(builds.into_values());
@@ -498,6 +542,6 @@ where
             .lines()
             .map(|line| NewLogLine::new(origin, line))
             .collect();
-        self.store.append_log(run, &lines).await
+        self.append(run, &lines).await
     }
 }

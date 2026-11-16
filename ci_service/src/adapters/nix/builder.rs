@@ -521,6 +521,23 @@ impl Builder for NixBuilder {
         }
     }
 
+    fn requisites(
+        &self,
+        drv: &Derivation,
+    ) -> impl Future<Output = Result<Vec<String>, BuilderError>> + Send {
+        async move {
+            // Why: a `.drv` references its input derivations, so its closure
+            // holds every derivation below it (plus sources, dropped here).
+            let path = [drv.path()];
+            let mut closure = store_query("--requisites", &path).await?;
+            closure.retain(|path| {
+                Path::new(path).extension().is_some_and(|ext| ext == "drv")
+                    && path.as_str() != drv.path()
+            });
+            Ok(closure)
+        }
+    }
+
     fn build(
         &self,
         targets: &[&Derivation],

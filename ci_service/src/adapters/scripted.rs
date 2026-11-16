@@ -8,9 +8,10 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::application::ports::{
-    BuildEvent, Builder, BuilderError, ConfigSource, DeliveryError, Evaluated, Notifier,
-    RepoConfigError,
+    Access, AccessError, BuildEvent, Builder, BuilderError, ConfigSource, DeliveryError, Evaluated,
+    Notifier, RepoConfigError,
 };
+use crate::domain::access::{Credential, Principal};
 use crate::domain::check::{Derivation, Systems};
 use crate::domain::event::{EventPayload, Target};
 use crate::domain::repo_config::{CheckSelection, RepoSettings, RunSettings, Timeouts};
@@ -29,6 +30,8 @@ pub struct ScriptedBuilder {
     built: Mutex<Vec<String>>,
     asked: Mutex<Vec<(CheckSelection, Option<Timeouts>)>>,
     pushed: Mutex<Vec<(String, Vec<String>)>>,
+    /// `.drv` paths and the derivations they need.
+    requisites: Vec<(String, Vec<String>)>,
 }
 
 impl ScriptedBuilder {
@@ -61,6 +64,14 @@ impl ScriptedBuilder {
     #[must_use]
     pub fn passing_from(mut self, drv: &str, from: usize) -> Self {
         self.passing.push((String::from(drv), from));
+        self
+    }
+
+    /// `drv` needs `deps` built first.
+    #[must_use]
+    pub fn needing(mut self, drv: &str, deps: &[&str]) -> Self {
+        let deps = deps.iter().map(|&dep| String::from(dep)).collect();
+        self.requisites.push((String::from(drv), deps));
         self
     }
 
@@ -124,6 +135,19 @@ impl Builder for ScriptedBuilder {
             .take()
             .unwrap_or_else(|| Err(BuilderError::Unavailable(String::from("script over"))));
         std::future::ready(evaluation)
+    }
+
+    fn requisites(
+        &self,
+        drv: &Derivation,
+    ) -> impl Future<Output = Result<Vec<String>, BuilderError>> + Send {
+        let deps = self
+            .requisites
+            .iter()
+            .find(|(path, _)| path == drv.path())
+            .map(|(_, deps)| deps.clone())
+            .unwrap_or_default();
+        std::future::ready(Ok(deps))
     }
 
     fn build(
@@ -211,6 +235,56 @@ impl Notifier for RecordingNotifier {
     /// Two retries, a minute apart.
     fn retry_delay(&self, _target: &Target, attempts: u32) -> Option<Duration> {
         (attempts < 3).then_some(Duration::from_secs(60))
+    }
+}
+
+/// An [`Access`] where each token is one user, and each user reads only
+/// the repos listed for them. Anonymous callers read nothing.
+#[derive(Debug, Default)]
+pub struct TokenAccess {
+    users: Vec<(String, String, Vec<String>)>,
+}
+
+impl TokenAccess {
+    /// `token` is `user`, who may read `repos` (`owner/name`).
+    #[must_use]
+    pub fn with_user(mut self, token: &str, user: &str, repos: &[&str]) -> Self {
+        let repos = repos.iter().map(|&repo| String::from(repo)).collect();
+        self.users
+            .push((String::from(token), String::from(user), repos));
+        self
+    }
+}
+
+impl Access for TokenAccess {
+    fn authenticate(
+        &self,
+        credential: Credential<'_>,
+    ) -> impl Future<Output = Result<Principal, AccessError>> + Send {
+        let principal = match credential {
+            Credential::None => Ok(Principal::Anonymous),
+            Credential::Bearer(token) => self
+                .users
+                .iter()
+                .find(|(known, _, _)| known == token)
+                .map(|(_, user, _)| Principal::User(user.clone()))
+                .ok_or(AccessError::Unauthenticated),
+        };
+        std::future::ready(principal)
+    }
+
+    fn can_read(
+        &self,
+        principal: &Principal,
+        repo: &RepoName,
+    ) -> impl Future<Output = Result<bool, AccessError>> + Send {
+        let allowed = match principal {
+            Principal::Anonymous => false,
+            Principal::User(name) => self.users.iter().any(|(_, user, repos)| {
+                user == name && repos.iter().any(|allowed| allowed == repo.as_str())
+            }),
+        };
+        std::future::ready(Ok(allowed))
     }
 }
 

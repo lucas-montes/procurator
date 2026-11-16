@@ -9,18 +9,21 @@ use std::time::Duration;
 
 use super::Service;
 use crate::application::ServiceError;
-use crate::application::ports::{Builder, Clock, ConfigSource, NextAttempt, Notifier, RunStore};
+use crate::application::ports::{
+    Access, Builder, Clock, ConfigSource, NextAttempt, Notifier, RunStore,
+};
 
 /// Deliveries attempted per pass.
 const BATCH: u32 = 50;
 
-impl<S, C, B, R, N> Service<S, C, B, R, N>
+impl<S, C, B, R, N, A> Service<S, C, B, R, N, A>
 where
     S: RunStore,
     C: Clock,
     B: Builder,
     R: ConfigSource,
     N: Notifier,
+    A: Access,
 {
     /// Deliver due events forever, waiting `poll` when none is due. Drop the
     /// future to stop; pending deliveries stay queued.

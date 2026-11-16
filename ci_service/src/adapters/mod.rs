@@ -1,5 +1,6 @@
 //! Adapters: implementations of the ports, and the inbound HTTP interface.
 
+pub mod access;
 #[cfg(feature = "http")]
 pub mod http;
 pub mod memory;

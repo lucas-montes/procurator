@@ -310,11 +310,13 @@ currently is not):
 
 - `max_concurrent_runs`, `eval_workers`, `allowed_uris` (done in step 2)
 - limits: `max_reruns` (replaces `max_retries`), `max_check_timeout`,
-  `max_run_timeout` (done in step 3), `max_log_retention_days`
-- `default_log_retention_days`
+  `max_run_timeout` (done in step 3), `max_log_retention_days` (done in
+  step 6)
+- `default_log_retention_days` (done in step 6)
 - `cache_base_url`, `public_cache`, `private_cache_prefix`, `netrc_file`
-- `secrets_file`
-- `hook_token_hash`: the token the post-receive hook sends
+  (done in step 4)
+- `secrets_file` (done in step 5)
+- `hook_token_hash`: the token the post-receive hook sends (not done)
 - split deployment only: `access` adapter selection (`repohub-api` with a
   base URL, or `jwt` with a public key file or key-set URL). In the monolith
   the composition root wires access in code.
@@ -412,10 +414,41 @@ src/  (root `procurator` crate: the monolith's composition root)
    gives up. URLs come from `secrets_file` (TOML `name = "value"`, read at
    each delivery). HTTP client: `reqwest` with rustls (feature `webhook`).
    No events table beyond the outbox yet; repohub still reads the CI API.
-6. **Monolith, access and live logs.** Composition root in the root
-   `procurator` crate mounting ci_service, repohub and cache. `RepohubAccess`
-   in-process adapter, SSE endpoints, dependency logs attached to checks,
-   retention task.
+6. **Monolith, access and live logs.** ✅ Done 2026-11-16.
+   - **Access:** `Access` port (`authenticate` a `Credential` into a
+     `Principal`, `can_read` a repo). Every read use case (run, runs,
+     checks, logs, follows) takes the caller's credential and checks it in
+     the application layer; 401 for an invalid credential, 403 without
+     access. The HTTP adapter reads `Authorization: Bearer`. The only
+     adapter is `OpenAccess` (everyone reads everything), used by both
+     binaries: repohub has no credentials or permissions to wrap yet, so
+     `RepohubAccess` waits for them (open question 2). Enqueueing is not
+     checked yet (`hook_token_hash` still to do).
+   - **Live logs:** every line gets a sequence number from the store. The
+     application keeps one broadcast channel per followed run
+     (`service/live.rs`); a reader subscribes, then replays the store, and
+     skips what it already has, so nothing is lost or repeated; a reader
+     that falls behind reloads from the store. `?follow=true` on both log
+     endpoints streams SSE (`data` is `{"seq","origin","text"}`, `id` the
+     seq) and ends with an `end` event when the run ends (a check's stream
+     too, since a dependency can still join it). Following a check before
+     the run is evaluated is 404.
+   - **Dependency logs:** before building, the builder lists each check's
+     derivation closure (`nix-store --query --requisites`); when a
+     derivation in it starts building, it is linked to the check
+     (`check_derivations`), before its first line. A check's log is its
+     own lines, its derivation's and its linked dependencies', labelled
+     `name> `.
+   - **Retention:** a finished run's logs expire after `ci.logRetentionDays`
+     (default branch), else `default_log_retention_days` (30), capped by
+     `max_log_retention_days` (365). The expiry is written with the final
+     status; an hourly task deletes expired lines and links. Runs and
+     checks stay.
+   - **Monolith:** the root `procurator` crate runs `ci_service::runtime`
+     (the production wiring, shared with the standalone binary), repohub and
+     the cache in one process, each on the address of its own config
+     (`procurator --config` names the three files), with one shutdown.
+     Not yet: a NixOS module and a flake package for it.
 7. **Remote builders.** NixOS module options that fill `nix.buildMachines`
    (with `distributedBuilds` and `builders-use-substitutes`) for the CI host,
    plus a small builder-host module (SSH user, trusted key, cache as
@@ -470,12 +503,12 @@ security options are passed on every `nix-eval-jobs` call by the adapter.
 1. **`deploy.url` in the monolith.** The in-process deploy adapter doesn't
    need a URL. Should `procurator.nix` say `deploy.enable = true` instead, with
    the URL only in the service config for split deployments?
-2. **Repohub has no users or permissions yet.** `repohub::RepositoryService`
-   only creates and clones repos, parses flake metadata and resolves repo
-   paths. There is no user, membership, visibility or credential model.
-   Until repohub has one, `RepohubAccess` can only answer "everyone can read
-   everything" (fine for a single-user homelab). Real access control needs
-   those use cases added to repohub first.
+2. **Repohub has no credentials or permissions yet.** Its database has
+   users, projects and project members, but nothing authenticates a
+   request, and nothing says who may read a repo. Until it does, CI uses
+   `OpenAccess` ("everyone can read everything", fine for a single-user
+   homelab) and there is no `RepohubAccess` to write. Real access control
+   needs those use cases added to repohub first.
 
 ## Current state (2026-11-14)
 

@@ -520,6 +520,7 @@ name = "ci_service"
 version = "0.1.0"
 dependencies = [
  "axum 0.8.7",
+ "futures",
  "http-body-util",
  "reqwest",
  "serde",
@@ -2178,13 +2179,18 @@ dependencies = [
 name = "procurator"
 version = "0.1.0"
 dependencies = [
+ "axum 0.8.7",
+ "cache",
  "capnp",
  "capnp-rpc",
+ "ci_service",
  "control_plane",
+ "repohub",
  "serde",
  "serde_json",
  "tokio",
  "tokio-util",
+ "toml",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",

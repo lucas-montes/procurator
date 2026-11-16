@@ -84,15 +84,25 @@ impl<'a> NewLogLine<'a> {
 /// A stored line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogLine {
+    seq: i64,
     origin: String,
     text: String,
 }
 
 impl LogLine {
-    /// Reassemble a stored line from its origin key and text.
+    /// Reassemble a stored line from its sequence number, origin key and
+    /// text.
     #[must_use]
-    pub fn new(origin: String, text: String) -> Self {
-        Self { origin, text }
+    pub fn new(seq: i64, origin: String, text: String) -> Self {
+        Self { seq, origin, text }
+    }
+
+    /// Its place among every stored line: later lines have larger numbers.
+    /// Why: a live reader joins stored and streamed lines without gaps or
+    /// repeats.
+    #[must_use]
+    pub fn seq(&self) -> i64 {
+        self.seq
     }
 
     /// Where it came from.

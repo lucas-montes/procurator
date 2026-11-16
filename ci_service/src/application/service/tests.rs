@@ -3,15 +3,17 @@
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use super::Service;
+use crate::adapters::access::OpenAccess;
 use crate::adapters::memory::MemoryRunStore;
 use crate::adapters::scripted::{FixedConfig, RecordingNotifier, ScriptedBuilder, derivation};
 use crate::application::ServiceError;
 use crate::application::ports::{BuildEvent, BuilderError, Clock, Evaluated};
+use crate::domain::access::Credential;
 use crate::domain::check::{CheckStatus, LOCAL_MACHINE};
 use crate::domain::event::{EventKind, EventPayload, Target, Webhook};
 use crate::domain::log::LogOrigin;
 use crate::domain::repo_config::{
-    CachePolicy, CheckSelection, Limits, RepoSettings, RunSettings, Timeouts,
+    CachePolicy, CheckSelection, Limits, RepoSettings, Retention, RunSettings, Timeouts,
 };
 use crate::domain::run::{CommitHash, GitRef, NewRun, RepoName, RunId, RunStatus};
 
@@ -31,7 +33,14 @@ fn limits() -> Limits {
 
 /// A service whose builder evaluates to nothing.
 fn service() -> (
-    Service<MemoryRunStore, &'static TestClock, ScriptedBuilder, FixedConfig, RecordingNotifier>,
+    Service<
+        MemoryRunStore,
+        &'static TestClock,
+        ScriptedBuilder,
+        FixedConfig,
+        RecordingNotifier,
+        OpenAccess,
+    >,
     &'static TestClock,
 ) {
     with_builder(ScriptedBuilder::new(&["x86_64-linux"], Ok(Vec::new())))
@@ -40,7 +49,14 @@ fn service() -> (
 fn with_builder(
     builder: ScriptedBuilder,
 ) -> (
-    Service<MemoryRunStore, &'static TestClock, ScriptedBuilder, FixedConfig, RecordingNotifier>,
+    Service<
+        MemoryRunStore,
+        &'static TestClock,
+        ScriptedBuilder,
+        FixedConfig,
+        RecordingNotifier,
+        OpenAccess,
+    >,
     &'static TestClock,
 ) {
     with_config(builder, FixedConfig::default(), limits())
@@ -51,7 +67,14 @@ fn with_config(
     config: FixedConfig,
     limits: Limits,
 ) -> (
-    Service<MemoryRunStore, &'static TestClock, ScriptedBuilder, FixedConfig, RecordingNotifier>,
+    Service<
+        MemoryRunStore,
+        &'static TestClock,
+        ScriptedBuilder,
+        FixedConfig,
+        RecordingNotifier,
+        OpenAccess,
+    >,
     &'static TestClock,
 ) {
     with_cache(builder, config, limits, None)
@@ -63,7 +86,14 @@ fn with_cache(
     limits: Limits,
     cache: Option<CachePolicy>,
 ) -> (
-    Service<MemoryRunStore, &'static TestClock, ScriptedBuilder, FixedConfig, RecordingNotifier>,
+    Service<
+        MemoryRunStore,
+        &'static TestClock,
+        ScriptedBuilder,
+        FixedConfig,
+        RecordingNotifier,
+        OpenAccess,
+    >,
     &'static TestClock,
 ) {
     assemble(builder, config, RecordingNotifier::default(), limits, cache)
@@ -76,14 +106,28 @@ fn assemble(
     limits: Limits,
     cache: Option<CachePolicy>,
 ) -> (
-    Service<MemoryRunStore, &'static TestClock, ScriptedBuilder, FixedConfig, RecordingNotifier>,
+    Service<
+        MemoryRunStore,
+        &'static TestClock,
+        ScriptedBuilder,
+        FixedConfig,
+        RecordingNotifier,
+        OpenAccess,
+    >,
     &'static TestClock,
 ) {
     let clock: &'static TestClock = Box::leak(Box::new(TestClock(AtomicI64::new(100))));
     let store = MemoryRunStore::new();
-    let service = Service::new(store, clock, builder, config, notifier, limits, cache);
+    let mut service =
+        Service::new(store, clock, builder, config, notifier, OpenAccess).with_limits(limits);
+    if let Some(policy) = cache {
+        service = service.with_cache(policy);
+    }
     (service, clock)
 }
+
+/// No credential; [`OpenAccess`] lets it read everything.
+const ANYONE: Credential<'static> = Credential::None;
 
 /// Repo settings on `refs/heads/main` with one webhook per secret.
 fn hooks(hooks: &[(&str, &[EventKind])]) -> RepoSettings {
@@ -224,7 +268,7 @@ async fn what_a_run_built_is_pushed_to_the_owners_cache() {
         )],
         "every derivation that started, dependencies included, once each"
     );
-    let log = service.run_log(id).await.unwrap();
+    let log = service.run_log(ANYONE, id).await.unwrap();
     assert_eq!(
         lines(&log).last(),
         Some(&"pushed 3 paths to cache private-lucas")
@@ -250,7 +294,7 @@ async fn the_default_branch_picks_the_cache_but_not_someone_elses() {
             pushed,
             expected.into_iter().map(String::from).collect::<Vec<_>>()
         );
-        let log = service.run_log(id).await.unwrap();
+        let log = service.run_log(ANYONE, id).await.unwrap();
         let last = lines(&log).last().copied().unwrap_or_default();
         if expected.is_none() {
             assert!(last.starts_with("warning: not pushed to a cache"), "{last}");
@@ -280,13 +324,16 @@ async fn failed_checks_are_rerun_and_flaky_ones_show_their_tries() {
     let id = service.enqueue(request("lucas/dummy")).await.unwrap();
     assert!(service.work_next().await.unwrap());
 
-    assert_eq!(service.run(id).await.unwrap().status(), RunStatus::Failed);
+    assert_eq!(
+        service.run(ANYONE, id).await.unwrap().status(),
+        RunStatus::Failed
+    );
     assert_eq!(
         service.builder.built(),
         [PASS, FAIL, PASS, FAIL, FAIL],
         "reruns build only what failed"
     );
-    let checks = service.checks(id).await.unwrap();
+    let checks = service.checks(ANYONE, id).await.unwrap();
     let summary: Vec<(CheckStatus, u32)> = checks
         .iter()
         .map(|check| (check.status(), check.tries()))
@@ -295,7 +342,10 @@ async fn failed_checks_are_rerun_and_flaky_ones_show_their_tries() {
         summary,
         [(CheckStatus::Passed, 2), (CheckStatus::Failed, 3)]
     );
-    let broken = service.check_log(id, "checks.x.broken").await.unwrap();
+    let broken = service
+        .check_log(ANYONE, id, "checks.x.broken")
+        .await
+        .unwrap();
     assert_eq!(
         lines(&broken),
         [
@@ -352,11 +402,17 @@ async fn timed_out_builds_are_not_rerun() {
     let id = service.enqueue(request("lucas/dummy")).await.unwrap();
     assert!(service.work_next().await.unwrap());
 
-    assert_eq!(service.run(id).await.unwrap().status(), RunStatus::Failed);
+    assert_eq!(
+        service.run(ANYONE, id).await.unwrap().status(),
+        RunStatus::Failed
+    );
     assert_eq!(service.builder.built(), [FAIL]);
-    let checks = service.checks(id).await.unwrap();
+    let checks = service.checks(ANYONE, id).await.unwrap();
     assert_eq!(checks[0].status(), CheckStatus::TimedOut);
-    let log = service.check_log(id, "checks.x.slow").await.unwrap();
+    let log = service
+        .check_log(ANYONE, id, "checks.x.slow")
+        .await
+        .unwrap();
     assert_eq!(lines(&log), ["error: build timed out"]);
 }
 
@@ -372,16 +428,19 @@ async fn a_run_past_its_time_limit_times_out() {
     let id = service.enqueue(request("lucas/dummy")).await.unwrap();
     assert!(service.work_next().await.unwrap());
 
-    assert_eq!(service.run(id).await.unwrap().status(), RunStatus::TimedOut);
+    assert_eq!(
+        service.run(ANYONE, id).await.unwrap().status(),
+        RunStatus::TimedOut
+    );
     let statuses: Vec<CheckStatus> = service
-        .checks(id)
+        .checks(ANYONE, id)
         .await
         .unwrap()
         .iter()
         .map(crate::domain::check::Check::status)
         .collect();
     assert_eq!(statuses, [CheckStatus::TimedOut, CheckStatus::Cached]);
-    let log = service.run_log(id).await.unwrap();
+    let log = service.run_log(ANYONE, id).await.unwrap();
     assert_eq!(lines(&log), ["run timed out after 30 seconds"]);
 }
 
@@ -393,9 +452,12 @@ async fn an_invalid_repo_config_fails_the_run_without_evaluating() {
     let id = service.enqueue(request("lucas/dummy")).await.unwrap();
     assert!(service.work_next().await.unwrap());
 
-    assert_eq!(service.run(id).await.unwrap().status(), RunStatus::Failed);
+    assert_eq!(
+        service.run(ANYONE, id).await.unwrap().status(),
+        RunStatus::Failed
+    );
     assert!(service.builder.asked().is_empty(), "nothing evaluated");
-    let log = service.run_log(id).await.unwrap();
+    let log = service.run_log(ANYONE, id).await.unwrap();
     assert_eq!(lines(&log), ["procurator.nix: unknown field `rerun`"]);
 }
 
@@ -478,14 +540,17 @@ async fn pipeline_caches_skips_builds_and_logs_per_derivation() {
     let id = service.enqueue(request("lucas/dummy")).await.unwrap();
 
     assert!(service.work_next().await.unwrap());
-    assert_eq!(service.run(id).await.unwrap().status(), RunStatus::Failed);
+    assert_eq!(
+        service.run(ANYONE, id).await.unwrap().status(),
+        RunStatus::Failed
+    );
     assert_eq!(
         service.builder.built(),
         [PASS, FAIL],
         "only checks neither cached, skipped nor failed to evaluate are built"
     );
 
-    let checks = service.checks(id).await.unwrap();
+    let checks = service.checks(ANYONE, id).await.unwrap();
     let summary: Vec<(&str, CheckStatus, Option<&str>)> = checks
         .iter()
         .map(|check| (check.attr(), check.status(), check.machine()))
@@ -510,31 +575,31 @@ async fn pipeline_caches_skips_builds_and_logs_per_derivation() {
     );
 
     let pass = service
-        .check_log(id, "checks.x86_64-linux.pass")
+        .check_log(ANYONE, id, "checks.x86_64-linux.pass")
         .await
         .unwrap();
     assert_eq!(lines(&pass), ["pass line"]);
     let fail = service
-        .check_log(id, "checks.x86_64-linux.fail")
+        .check_log(ANYONE, id, "checks.x86_64-linux.fail")
         .await
         .unwrap();
     assert_eq!(lines(&fail), ["boom"]);
     let bad = service
-        .check_log(id, "checks.x86_64-linux.bad")
+        .check_log(ANYONE, id, "checks.x86_64-linux.bad")
         .await
         .unwrap();
     assert_eq!(lines(&bad), ["error:", "  bad check"]);
     let mac = service
-        .check_log(id, "checks.aarch64-darwin.mac")
+        .check_log(ANYONE, id, "checks.aarch64-darwin.mac")
         .await
         .unwrap();
     assert_eq!(lines(&mac), ["skipped: no builder for aarch64-darwin"]);
     assert!(matches!(
-        service.check_log(id, "checks.nope").await,
+        service.check_log(ANYONE, id, "checks.nope").await,
         Err(ServiceError::CheckNotFound)
     ));
 
-    let run_log = service.run_log(id).await.unwrap();
+    let run_log = service.run_log(ANYONE, id).await.unwrap();
     let dep = run_log
         .iter()
         .find(|line| line.text() == "dep line")
@@ -553,7 +618,10 @@ async fn all_cached_passes_without_building() {
     let (service, _) = with_builder(ScriptedBuilder::new(&[], Ok(evaluation)));
     let id = service.enqueue(request("lucas/dummy")).await.unwrap();
     assert!(service.work_next().await.unwrap());
-    assert_eq!(service.run(id).await.unwrap().status(), RunStatus::Passed);
+    assert_eq!(
+        service.run(ANYONE, id).await.unwrap().status(),
+        RunStatus::Passed
+    );
     assert!(service.builder.built().is_empty());
 }
 
@@ -572,9 +640,9 @@ async fn a_broken_flake_fails_and_a_broken_builder_errors() {
         let (service, _) = with_builder(ScriptedBuilder::new(&[], Err(error)));
         let id = service.enqueue(request("lucas/dummy")).await.unwrap();
         assert!(service.work_next().await.unwrap());
-        assert_eq!(service.run(id).await.unwrap().status(), status);
-        assert!(service.checks(id).await.unwrap().is_empty());
-        let log = service.run_log(id).await.unwrap();
+        assert_eq!(service.run(ANYONE, id).await.unwrap().status(), status);
+        assert!(service.checks(ANYONE, id).await.unwrap().is_empty());
+        let log = service.run_log(ANYONE, id).await.unwrap();
         assert_eq!(log.len(), 1, "the reason is logged");
     }
 }
@@ -593,7 +661,7 @@ async fn enqueued_run_is_claimed_then_finished() {
     let (service, clock) = service();
     let id = service.enqueue(request("lucas/dummy")).await.unwrap();
 
-    let queued = service.run(id).await.unwrap();
+    let queued = service.run(ANYONE, id).await.unwrap();
     assert_eq!(queued.status(), RunStatus::Queued);
     assert_eq!(queued.times().created_at(), 100);
 
@@ -609,7 +677,7 @@ async fn enqueued_run_is_claimed_then_finished() {
 
     clock.0.store(110, Ordering::Relaxed);
     service.finish(id, RunStatus::Passed).await.unwrap();
-    let done = service.run(id).await.unwrap();
+    let done = service.run(ANYONE, id).await.unwrap();
     assert_eq!(done.status(), RunStatus::Passed);
     assert_eq!(done.times().finished_at(), Some(110));
 }
@@ -649,7 +717,10 @@ async fn recover_requeues_interrupted_runs() {
     service.claim_next().await.unwrap().unwrap();
 
     assert_eq!(service.recover().await.unwrap(), 1);
-    assert_eq!(service.run(id).await.unwrap().status(), RunStatus::Queued);
+    assert_eq!(
+        service.run(ANYONE, id).await.unwrap().status(),
+        RunStatus::Queued
+    );
     assert_eq!(service.claim_next().await.unwrap().unwrap().id(), id);
 }
 
@@ -662,7 +733,7 @@ async fn runs_filters_by_repo_and_pages() {
 
     let repo = RepoName::parse(String::from("lucas/a")).unwrap();
     let ids: Vec<RunId> = service
-        .runs(Some(&repo), None, 10)
+        .runs(ANYONE, &repo, None, 10)
         .await
         .unwrap()
         .iter()
@@ -670,13 +741,95 @@ async fn runs_filters_by_repo_and_pages() {
         .collect();
     assert_eq!(ids, [a2, a1]);
 
-    let page = service.runs(Some(&repo), Some(a2), 10).await.unwrap();
+    let page = service.runs(ANYONE, &repo, Some(a2), 10).await.unwrap();
     assert_eq!(page.len(), 1);
     assert_eq!(page[0].id(), a1);
 
     assert_eq!(
-        service.runs(None, None, 0).await.unwrap().len(),
+        service.runs(ANYONE, &repo, None, 0).await.unwrap().len(),
         1,
         "limit clamps to 1"
     );
+}
+
+#[tokio::test]
+async fn a_dependency_built_in_the_run_shows_in_the_checks_that_need_it() {
+    let builder = mixed_builder().needing(PASS, &[DEP, "/nix/store/x-never-built.drv"]);
+    let (service, _) = with_builder(builder);
+    let id = service.enqueue(request("lucas/dummy")).await.unwrap();
+    assert!(service.work_next().await.unwrap());
+
+    let pass = service
+        .check_log(ANYONE, id, "checks.x86_64-linux.pass")
+        .await
+        .unwrap();
+    assert_eq!(lines(&pass), ["dep line", "pass line"]);
+    assert_eq!(pass[0].origin(), LogOrigin::Derivation(DEP));
+    let fail = service
+        .check_log(ANYONE, id, "checks.x86_64-linux.fail")
+        .await
+        .unwrap();
+    assert_eq!(lines(&fail), ["boom"], "it did not need the dependency");
+}
+
+#[tokio::test]
+async fn a_follower_gets_every_line_once_then_the_end() {
+    let builder = mixed_builder().needing(PASS, &[DEP]);
+    let (service, _) = with_builder(builder);
+    let id = service.enqueue(request("lucas/dummy")).await.unwrap();
+    // Why: following a queued run waits for it to be worked.
+    let mut whole = service.follow_run_log(ANYONE, id).await.unwrap();
+    let early = service
+        .follow_check_log(ANYONE, id, "checks.x86_64-linux.pass")
+        .await;
+    assert!(
+        matches!(early, Err(ServiceError::CheckNotFound)),
+        "no checks before evaluation"
+    );
+
+    let collect = async {
+        let mut seen = Vec::new();
+        while let Some(line) = service.follow_next(&mut whole).await.unwrap() {
+            seen.push(line);
+        }
+        seen
+    };
+    let (worked, seen) = tokio::join!(service.work_next(), collect);
+    assert!(worked.unwrap());
+    let stored = service.run_log(ANYONE, id).await.unwrap();
+    assert_eq!(seen, stored, "each stored line exactly once, in order");
+    assert!(!seen.is_empty());
+
+    // A run that is over replays its log and ends at once.
+    let mut after = service
+        .follow_check_log(ANYONE, id, "checks.x86_64-linux.pass")
+        .await
+        .unwrap();
+    let mut replay = Vec::new();
+    while let Some(line) = service.follow_next(&mut after).await.unwrap() {
+        replay.push(line);
+    }
+    assert_eq!(lines(&replay), ["dep line", "pass line"]);
+}
+
+#[tokio::test]
+async fn logs_are_deleted_after_the_repos_retention_but_runs_stay() {
+    let config = FixedConfig::default().with_repo(RepoSettings::default().keeping_logs(Some(2)));
+    let (service, clock) = with_config(mixed_builder(), config, limits());
+    let service = service.with_retention(Retention::new(30, 90));
+    let id = service.enqueue(request("lucas/dummy")).await.unwrap();
+    assert!(service.work_next().await.unwrap());
+    assert!(!service.run_log(ANYONE, id).await.unwrap().is_empty());
+
+    let day = 86_400;
+    clock.0.fetch_add(2 * day - 1, Ordering::Relaxed);
+    assert_eq!(service.delete_expired_logs().await.unwrap(), 0);
+    clock.0.fetch_add(1, Ordering::Relaxed);
+    assert!(service.delete_expired_logs().await.unwrap() > 0);
+    assert!(service.run_log(ANYONE, id).await.unwrap().is_empty());
+    assert_eq!(
+        service.run(ANYONE, id).await.unwrap().status(),
+        RunStatus::Failed
+    );
+    assert_eq!(service.checks(ANYONE, id).await.unwrap().len(), 5);
 }

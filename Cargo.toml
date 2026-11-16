@@ -31,20 +31,32 @@ repo_outils = { path = "repo_outils" }
 autonix = { path = "autonix" }
 control_plane = { path = "control_plane" }
 worker = { path = "worker" }
+ci_service = { path = "ci_service" }
+cache = { path = "cache" }
+repohub = { path = "repohub" }
 
 [dependencies]
+# The monolith: ci_service, repohub and cache in one process (src/main.rs).
+ci_service.workspace = true
+cache.workspace = true
+repohub.workspace = true
+axum.workspace = true
+toml = "0.8"
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 capnp.workspace = true
 capnp-rpc.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["signal"] }
 tokio-util.workspace = true
 uuid.workspace = true
 control_plane.workspace = true
 worker.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[lints]
+workspace = true
 
 [workspace]
 members = ["cli", "commands", "control_plane", "worker", "console", "ci_service", "cache", "repo_outils", "repohub", "autonix"]

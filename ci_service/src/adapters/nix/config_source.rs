@@ -157,7 +157,6 @@ struct CiDto {
     checks: Option<ChecksDto>,
     reruns: Option<u32>,
     timeouts: Option<TimeoutsDto>,
-    #[expect(dead_code, reason = "validated now, read by the retention task")]
     log_retention_days: Option<u32>,
     cache: Option<String>,
     #[serde(default)]
@@ -214,7 +213,7 @@ fn parse(json: &str) -> Result<RepoConfig, RepoConfigError> {
         .map(|hook| Webhook::new(hook.url_secret, hook.events))
         .collect::<Result<Vec<_>, _>>()
         .map_err(invalid)?;
-    let repo = RepoSettings::new(ci.cache.take(), webhooks);
+    let repo = RepoSettings::new(ci.cache.take(), webhooks).keeping_logs(ci.log_retention_days);
     let checks = match ci.checks {
         None => CheckSelection::All,
         Some(ChecksDto::Keyword(keyword)) if keyword == "all" => CheckSelection::All,
@@ -362,6 +361,10 @@ mod tests {
             },
             "deploy": {"url": null, "branch": "main"}
         }"#;
+        assert_eq!(
+            parse(json).unwrap().into_repo().log_retention_days(),
+            Some(30)
+        );
         let settings = parse(json).unwrap().into_run();
         assert_eq!(settings.reruns(), 2);
         assert_eq!(settings.timeouts(), Timeouts::new(600, 60, 7200).unwrap());

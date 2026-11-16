@@ -19,6 +19,8 @@ let
     max_concurrent_runs = cfg.maxConcurrentRuns;
     eval_workers = cfg.evalWorkers;
     allowed_uris = cfg.allowedUris;
+    default_log_retention_days = cfg.defaultLogRetentionDays;
+    max_log_retention_days = cfg.maxLogRetentionDays;
     public_cache = cfg.cache.publicCache;
     private_cache_prefix = cfg.cache.privateCachePrefix;
   } // optionalAttrs (cfg.cache.url != null) {
@@ -105,6 +107,18 @@ in {
       type = types.ints.positive;
       default = 1;
       description = "nix-eval-jobs worker processes per run (each may use up to 4 GiB).";
+    };
+
+    defaultLogRetentionDays = mkOption {
+      type = types.ints.positive;
+      default = 30;
+      description = "Days run logs are kept when a repo's procurator.nix does not set ci.logRetentionDays. Runs and checks are kept forever.";
+    };
+
+    maxLogRetentionDays = mkOption {
+      type = types.ints.positive;
+      default = 365;
+      description = "Most days a repo may keep run logs (ci.logRetentionDays is capped to this).";
     };
 
     secretsFile = mkOption {
@@ -230,6 +244,11 @@ in {
   };
 
   config = mkIf cfg.enable {
+    assertions = [{
+      assertion = cfg.defaultLogRetentionDays <= cfg.maxLogRetentionDays;
+      message = "services.procurator.ci.defaultLogRetentionDays must not exceed maxLogRetentionDays.";
+    }];
+
     # Why: a check users already pushed is then `cached` at evaluation and
     # never built here.
     nix.settings = mkIf (cfg.cache.url != null && cfg.cache.substitute) {

@@ -18,6 +18,12 @@ struct State {
     /// Why: checks of requeued runs are dropped, so ids are not positions.
     last_check: i64,
     log: Vec<(RunId, LogLine)>,
+    /// Why: lines of requeued or expired runs are dropped, so numbers are
+    /// not positions.
+    last_line: i64,
+    links: Vec<(CheckId, String)>,
+    /// When each finished run's logs expire.
+    expiries: Vec<(RunId, i64)>,
     outbox: Vec<Queued>,
 }
 
@@ -105,6 +111,13 @@ impl RunStore for MemoryRunStore {
             .iter_mut()
             .filter_map(|run| run.requeue().then_some(run.id()))
             .collect();
+        let dropped: Vec<CheckId> = state
+            .checks
+            .iter()
+            .filter(|check| requeued.contains(&check.run()))
+            .map(Check::id)
+            .collect();
+        state.links.retain(|(check, _)| !dropped.contains(check));
         state
             .checks
             .retain(|check| !requeued.contains(&check.run()));
@@ -118,6 +131,7 @@ impl RunStore for MemoryRunStore {
         status: RunStatus,
         now: i64,
         outbox: &[(Target, EventPayload)],
+        keep_logs_until: Option<i64>,
     ) -> impl Future<Output = Result<bool, StoreError>> + Send {
         let mut state = self.state();
         let finished = index(id.get())
@@ -125,8 +139,36 @@ impl RunStore for MemoryRunStore {
             .is_some_and(|run| run.finish(status, now));
         if finished {
             state.queue(outbox, now);
+            if let Some(until) = keep_logs_until {
+                state.expiries.push((id, until));
+            }
         }
         ready(Ok(finished))
+    }
+
+    fn delete_expired_logs(
+        &self,
+        now: i64,
+    ) -> impl Future<Output = Result<u64, StoreError>> + Send {
+        let mut state = self.state();
+        let expired: Vec<RunId> = state
+            .expiries
+            .iter()
+            .filter(|(_, until)| *until <= now)
+            .map(|(run, _)| *run)
+            .collect();
+        state.expiries.retain(|(run, _)| !expired.contains(run));
+        let checks: Vec<CheckId> = state
+            .checks
+            .iter()
+            .filter(|check| expired.contains(&check.run()))
+            .map(Check::id)
+            .collect();
+        state.links.retain(|(check, _)| !checks.contains(check));
+        let before = state.log.len();
+        state.log.retain(|(run, _)| !expired.contains(run));
+        let deleted = before - state.log.len();
+        ready(Ok(u64::try_from(deleted).unwrap_or(u64::MAX)))
     }
 
     fn queue_deliveries(
@@ -285,17 +327,54 @@ impl RunStore for MemoryRunStore {
         ready(Ok(checks))
     }
 
+    fn link_derivations(
+        &self,
+        links: &[(CheckId, &str)],
+    ) -> impl Future<Output = Result<(), StoreError>> + Send {
+        let mut state = self.state();
+        for &(check, drv) in links {
+            if !state
+                .links
+                .iter()
+                .any(|(linked, path)| *linked == check && path == drv)
+            {
+                state.links.push((check, String::from(drv)));
+            }
+        }
+        ready(Ok(()))
+    }
+
+    fn linked_derivations(
+        &self,
+        check: CheckId,
+    ) -> impl Future<Output = Result<Vec<String>, StoreError>> + Send {
+        let state = self.state();
+        let drvs = state
+            .links
+            .iter()
+            .filter(|(linked, _)| *linked == check)
+            .map(|(_, drv)| drv.clone())
+            .collect();
+        ready(Ok(drvs))
+    }
+
     fn append_log(
         &self,
         run: RunId,
         lines: &[NewLogLine<'_>],
-    ) -> impl Future<Output = Result<(), StoreError>> + Send {
+    ) -> impl Future<Output = Result<i64, StoreError>> + Send {
         let mut state = self.state();
-        state.log.extend(lines.iter().map(|line| {
-            let stored = LogLine::new(String::from(line.origin().key()), String::from(line.text()));
-            (run, stored)
-        }));
-        ready(Ok(()))
+        let first = state.last_line + 1;
+        for line in lines {
+            state.last_line += 1;
+            let stored = LogLine::new(
+                state.last_line,
+                String::from(line.origin().key()),
+                String::from(line.text()),
+            );
+            state.log.push((run, stored));
+        }
+        ready(Ok(first))
     }
 
     fn log(

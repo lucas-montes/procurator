@@ -46,9 +46,11 @@ Quick navigation for AI sessions working on Procurator.
 - `control_plane/` - Coordination service
 - `worker/` - Background job execution
 - `ci_service/` - CI service, hexagonal like `cache` (spec: `specs/ci-service.md`)
-  - `ci_service/src/domain/` - `run.rs` (run identity, lifecycle), `check.rs` (check statuses, cached/buildable/skipped rule, run outcome), `log.rs` (lines tagged by run/check/derivation), `repo_config.rs` (per-run settings, service caps), `event.rs` (events of a finished run, webhook fan-out)
-  - `ci_service/src/application/` - `Service` use cases, `service/pipeline.rs` (worker), `service/outbox.rs` (dispatcher), `ports.rs` (`RunStore`, `Builder`, `ConfigSource`, `Notifier`, `SecretStore`, `Clock`)
-  - `ci_service/src/adapters/` - `sqlite.rs`, `memory.rs` (held to `store_contract.rs`), `nix/` (`NixBuilder`: nix-eval-jobs, nix build, internal-json, systems; `GitConfigSource`: procurator.nix), `webhook.rs`, `secrets.rs`, `system.rs`, `http/`
+  - `ci_service/src/domain/` - `run.rs` (run identity, lifecycle), `check.rs` (check statuses, cached/buildable/skipped rule, run outcome), `log.rs` (numbered lines tagged by run/check/derivation), `repo_config.rs` (per-run settings, service caps, log retention), `event.rs` (events of a finished run, webhook fan-out), `access.rs` (credential, principal)
+  - `ci_service/src/application/` - `Service` use cases, `service/pipeline.rs` (worker), `service/logs.rs` (stored/followed logs, dependency logs per check), `service/live.rs` (per-run broadcast), `service/outbox.rs` (dispatcher), `service/retention.rs`, `ports.rs` (`RunStore`, `Builder`, `ConfigSource`, `Notifier`, `SecretStore`, `Access`, `Clock`)
+  - `ci_service/src/adapters/` - `sqlite.rs`, `memory.rs` (held to `store_contract.rs`), `nix/` (`NixBuilder`: nix-eval-jobs, nix build, internal-json, systems, requisites; `GitConfigSource`: procurator.nix), `webhook.rs`, `secrets.rs`, `access.rs` (`OpenAccess`), `system.rs`, `http/` (incl. SSE)
+  - `ci_service/src/runtime.rs` - production wiring shared by `src/main.rs` and the monolith
+- `src/` (root `procurator` crate) - the monolith: `main.rs` starts `ci_service::runtime`, repohub and the cache in one process; `config.rs` names their three config files
 
 ### Console (`console/`)
 Read-only web UI built only from the services' own JSON logs (no RPC, no pushed telemetry). See `console/README.md`.

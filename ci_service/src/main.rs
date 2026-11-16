@@ -1,31 +1,20 @@
 //! `ci_service` binary: the composition root for a standalone deployment.
-//! Why: all wiring lives here — config in, adapters chosen, HTTP served.
+//! Why: all wiring lives in [`Runtime`]; this picks the access adapter and
+//! serves HTTP.
 
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
 
-use ci_service::adapters::http::router;
-use ci_service::adapters::nix::{GitConfigSource, NixBuilder};
-use ci_service::adapters::secrets::FileSecretStore;
-use ci_service::adapters::sqlite::SqliteRunStore;
-use ci_service::adapters::system::SystemClock;
-use ci_service::adapters::webhook::WebhookNotifier;
-use ci_service::application::ports::{DeliveryError, StoreError};
-use ci_service::application::{Service, ServiceError};
+use ci_service::adapters::access::OpenAccess;
 use ci_service::config::{Config, ConfigError};
-use ci_service::domain::repo_config::{CachePolicy, Limits};
-use tokio::task::JoinSet;
+use ci_service::runtime::{Runtime, StartError};
 use tracing_subscriber::EnvFilter;
 
 /// Startup failures.
 #[derive(Debug)]
 enum MainError {
     Config(ConfigError),
-    Store(StoreError),
-    Recover(ServiceError),
-    Notifier(DeliveryError),
+    Start(StartError),
     Bind(std::io::Error),
     Serve(std::io::Error),
 }
@@ -34,9 +23,7 @@ impl fmt::Display for MainError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Config(e) => e.fmt(f),
-            Self::Store(e) => e.fmt(f),
-            Self::Notifier(e) => write!(f, "webhook client: {e}"),
-            Self::Recover(e) => write!(f, "recover interrupted runs: {e}"),
+            Self::Start(e) => e.fmt(f),
             Self::Bind(e) => write!(f, "bind: {e}"),
             Self::Serve(e) => write!(f, "serve: {e}"),
         }
@@ -72,66 +59,19 @@ async fn shutdown_signal() {
 }
 
 async fn run(config: Config) -> Result<(), MainError> {
-    let store = SqliteRunStore::open(&config.database_url)
+    // Why: repohub has no users or permissions yet, so a standalone CI
+    // cannot tell readers apart either.
+    let runtime = Runtime::start(config, OpenAccess)
         .await
-        .map_err(MainError::Store)?;
-    let repos = PathBuf::from(&config.repos_base_path);
-    let mut builder = NixBuilder::new(repos.clone(), config.eval_workers, &config.allowed_uris);
-    let mut cache = None;
-    if let Some(base) = &config.cache_base_url {
-        builder = builder.with_cache(base, config.netrc_file.as_ref().map(PathBuf::from));
-        cache = Some(CachePolicy::new(
-            config.public_cache.clone(),
-            config.private_cache_prefix.clone(),
-        ));
-    }
-    let limits = Limits::new(
-        config.max_reruns,
-        config.max_check_timeout,
-        config.max_run_timeout,
-    );
-    let secrets = FileSecretStore::new(config.secrets_file.as_ref().map(PathBuf::from));
-    let notifier = WebhookNotifier::new(secrets).map_err(MainError::Notifier)?;
-    let service = Arc::new(Service::new(
-        store,
-        SystemClock,
-        builder,
-        GitConfigSource::new(repos),
-        notifier,
-        limits,
-        cache,
-    ));
-
-    // Why: no worker is running yet, so every `running` row is a leftover.
-    let recovered = service.recover().await.map_err(MainError::Recover)?;
-    if recovered > 0 {
-        tracing::warn!(
-            recovered,
-            "requeued runs interrupted by the previous process"
-        );
-    }
-
-    let listener = tokio::net::TcpListener::bind(&config.bind_address)
+        .map_err(MainError::Start)?;
+    let listener = tokio::net::TcpListener::bind(runtime.bind_address())
         .await
         .map_err(MainError::Bind)?;
     tracing::info!(
-        bind_address = config.bind_address.as_str(),
-        workers = config.max_concurrent_runs,
-        "serving CI API"
+        bind_address = runtime.bind_address(),
+        "serving CI API (open access: every caller reads every repo)"
     );
-
-    // Why: dropping the set on return aborts the workers; a run cut off
-    // this way is requeued at the next start.
-    let mut workers = JoinSet::new();
-    let poll = Duration::from_millis(config.worker_poll_interval_ms);
-    for _ in 0..config.max_concurrent_runs {
-        let service = Arc::clone(&service);
-        workers.spawn(async move { service.work(poll).await });
-    }
-    // Why: one dispatcher; deliveries survive a restart in the outbox.
-    let dispatcher = Arc::clone(&service);
-    workers.spawn(async move { dispatcher.dispatch(poll).await });
-    axum::serve(listener, router(service))
+    axum::serve(listener, runtime.router())
         .with_graceful_shutdown(shutdown_signal())
         .await
         .map_err(MainError::Serve)

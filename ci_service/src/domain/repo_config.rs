@@ -15,6 +15,11 @@ const DEFAULT_SILENT_TIMEOUT: u64 = 600;
 const DEFAULT_RUN_TIMEOUT: u64 = 7200;
 /// Most attributes an explicit check list may name.
 const MAX_ATTRS: usize = 1000;
+/// Days run logs are kept when neither the repo nor the service says.
+const DEFAULT_RETENTION_DAYS: u32 = 30;
+/// Most days a repo may keep run logs when the service does not say.
+const MAX_RETENTION_DAYS: u32 = 365;
+const SECONDS_PER_DAY: i64 = 86_400;
 
 /// Why a repo config was rejected.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,6 +145,13 @@ pub struct Limits {
     run_timeout: u64,
 }
 
+/// Three reruns, four hours per check, six per run.
+impl Default for Limits {
+    fn default() -> Self {
+        Self::new(3, 4 * 3600, 6 * 3600)
+    }
+}
+
 impl Limits {
     /// Describe the ceilings.
     #[must_use]
@@ -213,6 +225,7 @@ impl RunSettings {
 pub struct RepoSettings {
     cache: Option<String>,
     webhooks: Vec<Webhook>,
+    log_retention_days: Option<u32>,
     default_ref: Option<String>,
 }
 
@@ -223,8 +236,23 @@ impl RepoSettings {
         Self {
             cache,
             webhooks,
+            log_retention_days: None,
             default_ref: None,
         }
+    }
+
+    /// The same settings, asking to keep run logs `days`
+    /// (`ci.logRetentionDays`).
+    #[must_use]
+    pub fn keeping_logs(mut self, days: Option<u32>) -> Self {
+        self.log_retention_days = days;
+        self
+    }
+
+    /// Days the repo asked to keep run logs, if it did.
+    #[must_use]
+    pub fn log_retention_days(&self) -> Option<u32> {
+        self.log_retention_days
     }
 
     /// The same settings, read from the head of `default_ref`
@@ -281,6 +309,46 @@ impl RepoConfig {
     }
 }
 
+/// How long run logs are kept, in days: the service's default and the most
+/// a repo may ask for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Retention {
+    default_days: u32,
+    max_days: u32,
+}
+
+impl Default for Retention {
+    fn default() -> Self {
+        Self {
+            default_days: DEFAULT_RETENTION_DAYS,
+            max_days: MAX_RETENTION_DAYS,
+        }
+    }
+}
+
+impl Retention {
+    /// Keep logs `default_days` unless a repo asks otherwise, never more
+    /// than `max_days`.
+    #[must_use]
+    pub fn new(default_days: u32, max_days: u32) -> Self {
+        Self {
+            default_days,
+            max_days,
+        }
+    }
+
+    /// Seconds a run's logs are kept when the repo asked for `requested`
+    /// days (`ci.logRetentionDays`). At least one day.
+    #[must_use]
+    pub fn seconds(self, requested: Option<u32>) -> i64 {
+        let days = requested
+            .unwrap_or(self.default_days)
+            .min(self.max_days)
+            .max(1);
+        i64::from(days) * SECONDS_PER_DAY
+    }
+}
+
 /// Which cache a repo's built outputs go to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CachePolicy {
@@ -321,7 +389,17 @@ impl CachePolicy {
 
 #[cfg(test)]
 mod tests {
-    use super::{CachePolicy, CheckSelection, Limits, RunSettings, Timeouts};
+    use super::{CachePolicy, CheckSelection, Limits, Retention, RunSettings, Timeouts};
+
+    #[test]
+    fn logs_are_kept_as_asked_within_the_ceiling() {
+        let day = 86_400;
+        let retention = Retention::new(30, 90);
+        assert_eq!(retention.seconds(None), 30 * day);
+        assert_eq!(retention.seconds(Some(7)), 7 * day);
+        assert_eq!(retention.seconds(Some(1000)), 90 * day);
+        assert_eq!(retention.seconds(Some(0)), day, "at least a day");
+    }
 
     #[test]
     fn outputs_go_to_the_owners_cache_unless_the_repo_opts_into_public() {

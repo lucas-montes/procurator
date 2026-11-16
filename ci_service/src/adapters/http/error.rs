@@ -1,6 +1,6 @@
 //! Mapping use-case failures to HTTP responses.
 
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
 use crate::application::ServiceError;
@@ -20,6 +20,12 @@ impl IntoResponse for HttpError {
             ServiceError::Invalid(_) | ServiceError::NotFinal(_) => StatusCode::BAD_REQUEST,
             ServiceError::NotFound | ServiceError::CheckNotFound => StatusCode::NOT_FOUND,
             ServiceError::Conflict(_) => StatusCode::CONFLICT,
+            ServiceError::Forbidden => StatusCode::FORBIDDEN,
+            ServiceError::Unauthenticated => {
+                let challenge = [(header::WWW_AUTHENTICATE, "Bearer")];
+                return (StatusCode::UNAUTHORIZED, challenge, "invalid credential\n")
+                    .into_response();
+            }
             ServiceError::Internal(detail) => {
                 // Why: internals go to the log, never to the client.
                 tracing::error!(%detail, "request failed");

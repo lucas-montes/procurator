@@ -5,3 +5,5 @@ domain = "localhost"
 repos_base_path = "/tmp/procurator-git"
 max_reruns = 3
 worker_poll_interval_ms = 1000
+default_log_retention_days = 30
+max_log_retention_days = 365

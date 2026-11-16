@@ -58,6 +58,8 @@ let  # ── 1. Defaults ──────────────────
       defaults.config.users.users."procurator-ci".extraGroups [ "git" ]
     && assert' "no cache by default" (!(defaultsJson ? cache_base_url) && !(defaultsJson ? netrc_file))
     && assert' "no secrets by default" (!(defaultsJson ? secrets_file))
+    && assertEq "default_log_retention_days" defaultsJson.default_log_retention_days 30
+    && assertEq "max_log_retention_days" defaultsJson.max_log_retention_days 365
     && assertEq "no substituters by default" defaults.config.nix.settings { };
 
   # ── 2. Explicit overrides ──────────────────────────────────────────
@@ -76,6 +78,8 @@ let  # ── 1. Defaults ──────────────────
     allowedUris = [ "git+ssh://git.lab/" ];
     reposGroup = null;
     secretsFile = "/run/secrets/ci-secrets.toml";
+    defaultLogRetentionDays = 14;
+    maxLogRetentionDays = 60;
     cache = {
       url = "http://cache.lab:8081";
       netrcFile = "/run/secrets/ci-netrc";
@@ -102,6 +106,8 @@ let  # ── 1. Defaults ──────────────────
     && assertEq "cache_base_url" explicitJson.cache_base_url "http://cache.lab:8081"
     && assertEq "netrc_file" explicitJson.netrc_file "/run/secrets/ci-netrc"
     && assertEq "secrets_file" explicitJson.secrets_file "/run/secrets/ci-secrets.toml"
+    && assertEq "default_log_retention_days" explicitJson.default_log_retention_days 14
+    && assertEq "max_log_retention_days" explicitJson.max_log_retention_days 60
     && assertEq "public_cache" explicitJson.public_cache "public"
     && assertEq "private_cache_prefix" explicitJson.private_cache_prefix "private-"
     && assertEq "substituters"

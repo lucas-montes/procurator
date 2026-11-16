@@ -24,7 +24,64 @@ pub async fn check<S: RunStore>(store: &S) {
     checks_and_logs(store).await;
     retries_and_closing(store).await;
     outbox(store).await;
+    retention(store).await;
     listing(store).await;
+}
+
+async fn retention<S: RunStore>(store: &S) {
+    let line = [NewLogLine::new(LogOrigin::Run, "kept a while")];
+    let mut runs = Vec::new();
+    for keep in [Some(200), Some(300), None] {
+        let id = store
+            .insert(request("lucas/retention", None), 100)
+            .await
+            .unwrap();
+        store.claim_next(101).await.unwrap().unwrap();
+        store.append_log(id, &line).await.unwrap();
+        let checks = store
+            .insert_checks(
+                id,
+                vec![NewCheck::eval_failed(
+                    String::from("checks.x.y"),
+                    String::from("x"),
+                )],
+            )
+            .await
+            .unwrap();
+        store
+            .link_derivations(&[(checks[0].id(), "/nix/store/e-dep.drv")])
+            .await
+            .unwrap();
+        assert!(
+            store
+                .finish_with_outbox(id, RunStatus::Passed, 102, &[], keep)
+                .await
+                .unwrap()
+        );
+        runs.push((id, checks[0].id()));
+    }
+    let lines = |run: RunId| async move { store.log(run, &[]).await.unwrap().len() };
+
+    assert_eq!(store.delete_expired_logs(199).await.unwrap(), 0);
+    assert_eq!(store.delete_expired_logs(250).await.unwrap(), 1);
+    let (expired, expired_check) = runs[0];
+    assert_eq!(lines(expired).await, 0);
+    assert!(
+        store
+            .linked_derivations(expired_check)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        store.checks(expired).await.unwrap().len(),
+        1,
+        "checks outlive their logs"
+    );
+    assert_eq!(lines(runs[1].0).await, 1);
+    assert_eq!(store.delete_expired_logs(250).await.unwrap(), 0, "once");
+    assert_eq!(store.delete_expired_logs(i64::MAX).await.unwrap(), 1);
+    assert_eq!(lines(runs[2].0).await, 1, "kept forever without an expiry");
 }
 
 async fn outbox<S: RunStore>(store: &S) {
@@ -46,13 +103,13 @@ async fn outbox<S: RunStore>(store: &S) {
     let outbox = [(hook.clone(), failed.clone())];
     assert!(
         store
-            .finish_with_outbox(first, RunStatus::Failed, 72, &outbox)
+            .finish_with_outbox(first, RunStatus::Failed, 72, &outbox, None)
             .await
             .unwrap()
     );
     assert!(
         !store
-            .finish_with_outbox(first, RunStatus::Passed, 73, &outbox)
+            .finish_with_outbox(first, RunStatus::Passed, 73, &outbox, None)
             .await
             .unwrap(),
         "a finished run queues nothing more"
@@ -286,14 +343,15 @@ async fn logs_and_requeue<S: RunStore>(
         NewLogLine::new(LogOrigin::Derivation(drv.path()), "unit 1"),
         NewLogLine::new(LogOrigin::Check("checks.x86_64-linux.bad"), "error: x"),
     ];
-    store.append_log(run, &lines).await.unwrap();
-    store
+    let first = store.append_log(run, &lines).await.unwrap();
+    let next = store
         .append_log(
             run,
             &[NewLogLine::new(LogOrigin::Derivation(drv.path()), "unit 2")],
         )
         .await
         .unwrap();
+    assert_eq!(next, first + 4, "a batch's lines are numbered one by one");
     store
         .append_log(other, &[NewLogLine::new(LogOrigin::Run, "elsewhere")])
         .await
@@ -302,9 +360,31 @@ async fn logs_and_requeue<S: RunStore>(
     let text = |lines: Vec<LogLine>| -> Vec<String> {
         lines.iter().map(|line| String::from(line.text())).collect()
     };
+    let all = store.log(run, &[]).await.unwrap();
+    let seqs: Vec<i64> = all.iter().map(LogLine::seq).collect();
+    assert_eq!(seqs, [first, first + 1, first + 2, first + 3, next]);
     assert_eq!(
-        text(store.log(run, &[]).await.unwrap()),
+        text(all),
         ["evaluating", "dep", "unit 1", "error: x", "unit 2"]
+    );
+
+    let unit = inserted[0].id();
+    let dep = "/nix/store/dddd-dep.drv";
+    store
+        .link_derivations(&[(unit, dep), (unit, dep)])
+        .await
+        .unwrap();
+    assert_eq!(
+        store.linked_derivations(unit).await.unwrap(),
+        [dep],
+        "linking twice is linking once"
+    );
+    assert!(
+        store
+            .linked_derivations(inserted[1].id())
+            .await
+            .unwrap()
+            .is_empty()
     );
     let unit_log = store
         .log(
@@ -323,6 +403,7 @@ async fn logs_and_requeue<S: RunStore>(
     assert_eq!(store.requeue_running().await.unwrap(), 1);
     assert!(store.checks(run).await.unwrap().is_empty());
     assert!(store.log(run, &[]).await.unwrap().is_empty());
+    assert!(store.linked_derivations(unit).await.unwrap().is_empty());
     assert_eq!(text(store.log(other, &[]).await.unwrap()), ["elsewhere"]);
     let again = store.claim_next(52).await.unwrap().unwrap();
     assert_eq!(again.id(), run);

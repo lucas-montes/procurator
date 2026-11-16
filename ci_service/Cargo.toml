@@ -6,7 +6,7 @@ edition = "2024"
 [features]
 default = ["http", "sqlite", "webhook"]
 # Inbound HTTP adapter (axum router). Off = embed the use cases only.
-http = ["dep:axum"]
+http = ["dep:axum", "dep:futures"]
 # SQLite run store adapter.
 sqlite = ["dep:sqlx"]
 # Outbound webhook notifier (HTTP/HTTPS client).
@@ -25,6 +25,7 @@ toml = "0.8"
 tracing.workspace = true
 tracing-subscriber.workspace = true
 axum = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
 

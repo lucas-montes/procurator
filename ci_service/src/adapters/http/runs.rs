@@ -2,14 +2,15 @@
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
+use super::credential::credential;
 use super::error::HttpError;
 use super::shared::Shared;
 use crate::application::ServiceError;
-use crate::application::ports::{Builder, Clock, ConfigSource, Notifier, RunStore};
+use crate::application::ports::{Access, Builder, Clock, ConfigSource, Notifier, RunStore};
 use crate::domain::run::{CommitHash, GitRef, NewRun, Pusher, RepoName, Run, RunId};
 
 /// Default page size for run listings.
@@ -94,8 +95,8 @@ pub struct ListParams {
 }
 
 /// `POST /api/runs`: queue a run. Answers 202 with the run id.
-pub async fn create<S, C, B, R, N>(
-    State(shared): State<Shared<S, C, B, R, N>>,
+pub async fn create<S, C, B, R, N, A>(
+    State(shared): State<Shared<S, C, B, R, N, A>>,
     Json(body): Json<CreateBody>,
 ) -> Result<Response, HttpError>
 where
@@ -104,6 +105,7 @@ where
     B: Builder,
     R: ConfigSource,
     N: Notifier,
+    A: Access,
 {
     let request = body.into_request()?;
     let id = shared.service().enqueue(request).await?;
@@ -116,8 +118,9 @@ where
 }
 
 /// `GET /api/runs/{id}`: one run.
-pub async fn show<S, C, B, R, N>(
-    State(shared): State<Shared<S, C, B, R, N>>,
+pub async fn show<S, C, B, R, N, A>(
+    State(shared): State<Shared<S, C, B, R, N, A>>,
+    headers: HeaderMap,
     Path(id): Path<i64>,
 ) -> Result<Response, HttpError>
 where
@@ -126,14 +129,17 @@ where
     B: Builder,
     R: ConfigSource,
     N: Notifier,
+    A: Access,
 {
-    let run = shared.service().run(RunId::new(id)).await?;
+    let credential = credential(&headers)?;
+    let run = shared.service().run(credential, RunId::new(id)).await?;
     Ok(Json(RunBody::from(&run)).into_response())
 }
 
 /// `GET /api/repos/{owner}/{name}/runs`: a repo's runs, newest first.
-pub async fn list<S, C, B, R, N>(
-    State(shared): State<Shared<S, C, B, R, N>>,
+pub async fn list<S, C, B, R, N, A>(
+    State(shared): State<Shared<S, C, B, R, N, A>>,
+    headers: HeaderMap,
     Path((owner, name)): Path<(String, String)>,
     Query(params): Query<ListParams>,
 ) -> Result<Response, HttpError>
@@ -143,11 +149,16 @@ where
     B: Builder,
     R: ConfigSource,
     N: Notifier,
+    A: Access,
 {
+    let credential = credential(&headers)?;
     let repo = RepoName::parse(format!("{owner}/{name}")).map_err(ServiceError::from)?;
     let before = params.before.map(RunId::new);
     let limit = params.limit.unwrap_or(DEFAULT_PAGE);
-    let runs = shared.service().runs(Some(&repo), before, limit).await?;
+    let runs = shared
+        .service()
+        .runs(credential, &repo, before, limit)
+        .await?;
     let body = RunsBody {
         runs: runs.iter().map(RunBody::from).collect(),
     };
@@ -164,18 +175,23 @@ mod tests {
     use serde_json::Value;
     use tower::ServiceExt as _;
 
+    use crate::adapters::access::OpenAccess;
     use crate::adapters::http::router;
     use crate::adapters::memory::MemoryRunStore;
-    use crate::adapters::scripted::{FixedConfig, RecordingNotifier, ScriptedBuilder, derivation};
+    use crate::adapters::scripted::{
+        FixedConfig, RecordingNotifier, ScriptedBuilder, TokenAccess, derivation,
+    };
     use crate::adapters::system::SystemClock;
     use crate::application::Service;
-    use crate::application::ports::BuildEvent;
+    use crate::application::ports::{Access, BuildEvent};
     use crate::domain::repo_config::Limits;
 
     const DRV: &str = "/nix/store/u-unit.drv";
 
-    fn service()
-    -> Arc<Service<MemoryRunStore, SystemClock, ScriptedBuilder, FixedConfig, RecordingNotifier>>
+    /// A service whose one check passes, with `access`.
+    fn guarded<A: Access>(
+        access: A,
+    ) -> Arc<Service<MemoryRunStore, SystemClock, ScriptedBuilder, FixedConfig, RecordingNotifier, A>>
     {
         let evaluation = vec![derivation(
             "checks.x86_64-linux.unit",
@@ -197,19 +213,19 @@ mod tests {
         let builder = ScriptedBuilder::new(&["x86_64-linux"], Ok(evaluation))
             .with_events(events)
             .passing(&[DRV]);
-        Arc::new(Service::new(
+        let service = Service::new(
             MemoryRunStore::new(),
             SystemClock,
             builder,
             FixedConfig::default(),
             RecordingNotifier::default(),
-            Limits::new(1, 60, 60),
-            None,
-        ))
+            access,
+        );
+        Arc::new(service.with_limits(Limits::new(1, 60, 60)))
     }
 
     fn app() -> axum::Router {
-        router(service())
+        router(guarded(OpenAccess))
     }
 
     async fn text(app: &axum::Router, uri: &str) -> (StatusCode, String) {
@@ -219,9 +235,83 @@ mod tests {
         (status, String::from_utf8(bytes.to_vec()).unwrap())
     }
 
+    fn with_token(uri: &str, token: &str) -> Request<Body> {
+        Request::get(uri)
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn only_users_with_access_read_a_repos_runs_and_logs() {
+        let access = TokenAccess::default()
+            .with_user("t-lucas", "lucas", &["lucas/dummy"])
+            .with_user("t-eve", "eve", &["eve/other"]);
+        let service = guarded(access);
+        let app = router(Arc::clone(&service));
+        let body =
+            format!(r#"{{"repo":"lucas/dummy","commit":"{COMMIT}","ref":"refs/heads/main"}}"#);
+        let (status, created) = send(&app, post(&body)).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let id = created["id"].as_i64().unwrap();
+        assert!(service.work_next().await.unwrap());
+
+        let unit = "checks.x86_64-linux.unit";
+        let reads = [
+            format!("/api/runs/{id}"),
+            format!("/api/runs/{id}/checks"),
+            format!("/api/runs/{id}/log"),
+            format!("/api/runs/{id}/log?follow=true"),
+            format!("/api/runs/{id}/checks/{unit}/log"),
+            String::from("/api/repos/lucas/dummy/runs"),
+        ];
+        for uri in &reads {
+            let anonymous = app.clone().oneshot(get(uri)).await.unwrap();
+            assert_eq!(anonymous.status(), StatusCode::FORBIDDEN, "{uri}");
+            let other = app.clone().oneshot(with_token(uri, "t-eve")).await.unwrap();
+            assert_eq!(other.status(), StatusCode::FORBIDDEN, "{uri}");
+            let bad = app.clone().oneshot(with_token(uri, "nope")).await.unwrap();
+            assert_eq!(bad.status(), StatusCode::UNAUTHORIZED, "{uri}");
+            assert_eq!(bad.headers()["www-authenticate"], "Bearer");
+            let owner = app
+                .clone()
+                .oneshot(with_token(uri, "t-lucas"))
+                .await
+                .unwrap();
+            assert_eq!(owner.status(), StatusCode::OK, "{uri}");
+        }
+    }
+
+    #[tokio::test]
+    async fn following_a_finished_run_replays_it_then_ends() {
+        let service = guarded(OpenAccess);
+        let app = router(Arc::clone(&service));
+        let body =
+            format!(r#"{{"repo":"lucas/dummy","commit":"{COMMIT}","ref":"refs/heads/main"}}"#);
+        let (_, created) = send(&app, post(&body)).await;
+        let id = created["id"].as_i64().unwrap();
+        assert!(service.work_next().await.unwrap());
+
+        let uri = format!("/api/runs/{id}/checks/checks.x86_64-linux.unit/log?follow=true");
+        let response = app.clone().oneshot(get(&uri)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["content-type"], "text/event-stream");
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let stream = String::from_utf8(bytes.to_vec()).unwrap();
+        let data: Vec<&str> = stream
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .collect();
+        assert_eq!(data.len(), 2, "{stream}");
+        let line: Value = serde_json::from_str(data[0]).unwrap();
+        assert_eq!(line["origin"], "unit");
+        assert_eq!(line["text"], "unit ok");
+        assert!(stream.contains("event: end"), "{stream}");
+    }
+
     #[tokio::test]
     async fn a_worked_run_shows_checks_and_logs() {
-        let service = service();
+        let service = guarded(OpenAccess);
         let app = router(Arc::clone(&service));
         let body =
             format!(r#"{{"repo":"lucas/dummy","commit":"{COMMIT}","ref":"refs/heads/main"}}"#);
@@ -245,7 +335,7 @@ mod tests {
         let uri = format!("/api/runs/{id}/checks/checks.x86_64-linux.unit/log");
         assert_eq!(
             text(&app, &uri).await,
-            (StatusCode::OK, String::from("unit ok\n"))
+            (StatusCode::OK, String::from("unit> unit ok\n"))
         );
         let run_log = text(&app, &format!("/api/runs/{id}/log")).await;
         assert_eq!(run_log, (StatusCode::OK, String::from("unit> unit ok\n")));
