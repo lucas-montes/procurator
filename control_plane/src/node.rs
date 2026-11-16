@@ -127,6 +127,36 @@ impl NodeState {
         Ok(generation)
     }
 
+    /// Publishes `entries` as the next generation, unless `intent_hash` is
+    /// already the active intent: then nothing changes and the active
+    /// generation is returned.
+    /// Why: a retried deploy, or a second run of the same commit, must not
+    /// churn the workers.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::publish`].
+    fn deploy(
+        &mut self,
+        commit: &str,
+        intent_hash: &str,
+        entries: Vec<DesiredEntry>,
+    ) -> Result<Generation, NodeError> {
+        let active = self.active.as_ref();
+        if let Some(active) = active
+            && active.intent_hash == intent_hash
+        {
+            return Ok(active.generation);
+        }
+        let next = active.map_or(0, |active| active.generation.value());
+        self.publish(
+            commit,
+            Generation::new(next.saturating_add(1)),
+            intent_hash,
+            entries,
+        )
+    }
+
     /// Returns the assignment slice for `worker` (empty, never an error,
     /// when unknown, unpublished, or up-to-date).
     #[must_use]
@@ -331,6 +361,14 @@ impl Node {
                 .state
                 .publish(commit, *generation, intent_hash, entries.clone())
                 .map(NodeReply::Published),
+            NodeEvent::Deploy {
+                commit,
+                intent_hash,
+                entries,
+            } => self
+                .state
+                .deploy(commit, intent_hash, entries.clone())
+                .map(NodeReply::Published),
             NodeEvent::GetAssignment {
                 worker_id,
                 last_seen_generation,
@@ -408,6 +446,30 @@ mod tests {
         let ghost = state.assignment(&worker_id("ghost"), 0);
         assert_eq!(ghost.generation(), Some(Generation::new(1)));
         assert!(ghost.is_empty());
+    }
+
+    #[test]
+    fn deploys_number_generations_and_skip_the_active_intent() {
+        let mut state = state();
+        let first = state.deploy("abc", "intent-1", vec![entry("vm-a", "w1")]);
+        assert_eq!(first, Ok(Generation::new(1)));
+        let again = state.deploy("abc", "intent-1", vec![entry("vm-b", "w1")]);
+        assert_eq!(again, Ok(Generation::new(1)), "same intent: unchanged");
+        assert_eq!(
+            state.assignment(&worker_id("w1"), 0).keys(),
+            vec![key("vm-a")]
+        );
+
+        let second = state.deploy("def", "intent-2", vec![entry("vm-b", "w2")]);
+        assert_eq!(second, Ok(Generation::new(2)));
+        assert!(state.assignment(&worker_id("w1"), 0).is_empty());
+        assert_eq!(
+            state.assignment(&worker_id("w2"), 0).keys(),
+            vec![key("vm-b")]
+        );
+
+        let ghost = state.deploy("ghi", "intent-3", vec![entry("vm-c", "ghost")]);
+        assert!(matches!(ghost, Err(NodeError::Schedule(_))));
     }
 
     #[test]

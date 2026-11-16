@@ -302,12 +302,25 @@ pub trait Builder: Send + Sync + 'static {
     /// The systems the CI host or one of its remote builders can build.
     fn systems(&self) -> impl Future<Output = Result<Systems, BuilderError>> + Send;
 
-    /// Evaluate the selected attributes of a run's commit.
+    /// Evaluate the selected attributes of a run's commit and, when
+    /// `deployment`, the flake's
+    /// [`DEPLOYMENT_ATTR`](crate::domain::deploy::DEPLOYMENT_ATTR) as one
+    /// more attribute of that name (an error entry when it is missing).
     fn evaluate(
         &self,
         run: &NewRun,
         selection: &CheckSelection,
+        deployment: bool,
     ) -> impl Future<Output = Result<Vec<Evaluated>, BuilderError>> + Send;
+
+    /// The contents of the file at store path `path`, fetched from a
+    /// substituter first if this host lacks it. At most `limit` bytes.
+    /// Why: a cached deployment was never built here.
+    fn read_output(
+        &self,
+        path: &str,
+        limit: u64,
+    ) -> impl Future<Output = Result<String, BuilderError>> + Send;
 
     /// The derivations `drv` needs built first, all the way down, without
     /// `drv` itself.

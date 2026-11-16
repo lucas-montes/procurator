@@ -23,6 +23,7 @@ use super::repos::bare_repo;
 use super::systems;
 use crate::application::ports::{BuildEvent, Builder, BuilderError, Evaluated};
 use crate::domain::check::{Derivation, Systems};
+use crate::domain::deploy::DEPLOYMENT_ATTR;
 use crate::domain::repo_config::{CheckSelection, Timeouts};
 use crate::domain::run::NewRun;
 
@@ -221,9 +222,19 @@ impl NixBuilder {
 /// Why: an explicit list becomes one attribute per entry, named by its
 /// index, so a missing attribute is an error on that entry alone. Entries
 /// are validated attribute paths, and each segment is quoted.
-fn select(selection: &CheckSelection) -> Cow<'static, str> {
+/// With `deployment`, the flake's deployment is one more attribute, named
+/// as it is in the flake.
+fn select(selection: &CheckSelection, deployment: bool) -> Cow<'static, str> {
+    let deploy = format!(
+        "{DEPLOYMENT_ATTR} = flake.outputs.{DEPLOYMENT_ATTR} or (throw \"attribute '{DEPLOYMENT_ATTR}' not found, and this branch deploys\");"
+    );
     let CheckSelection::Attrs(attrs) = selection else {
-        return Cow::Borrowed(SELECT_CHECKS);
+        if !deployment {
+            return Cow::Borrowed(SELECT_CHECKS);
+        }
+        return Cow::Owned(format!(
+            "flake: (flake.outputs.checks or {{ }}) // {{ {deploy} }}"
+        ));
     };
     let mut expr = String::from("flake: {");
     for (index, attr) in attrs.iter().enumerate() {
@@ -233,6 +244,10 @@ fn select(selection: &CheckSelection) -> Cow<'static, str> {
         }
         let _ = write!(expr, " or (throw \"attribute '{attr}' not found\");");
     }
+    if deployment {
+        expr.push(' ');
+        expr.push_str(&deploy);
+    }
     expr.push_str(" }");
     Cow::Owned(expr)
 }
@@ -240,6 +255,11 @@ fn select(selection: &CheckSelection) -> Cow<'static, str> {
 /// The flake attribute a `nix-eval-jobs` attribute path stands for, and the
 /// system its path names (for lines without a derivation).
 fn name(selection: &CheckSelection, attr_path: &[Cow<'_, str>]) -> (String, String) {
+    if let [only] = attr_path
+        && only == DEPLOYMENT_ATTR
+    {
+        return (String::from(DEPLOYMENT_ATTR), String::new());
+    }
     let mut segments = attr_path.iter().map(AsRef::as_ref);
     let first = segments.next().unwrap_or_default();
     let (mut attr, system) = match selection {
@@ -475,12 +495,13 @@ impl Builder for NixBuilder {
         &self,
         run: &NewRun,
         selection: &CheckSelection,
+        deployment: bool,
     ) -> impl Future<Output = Result<Vec<Evaluated>, BuilderError>> + Send {
         let flake = self.flake(run);
         async move {
             let flake = flake?;
             let workers = self.eval_workers.to_string();
-            let select = select(selection);
+            let select = select(selection, deployment);
             let mut child = spawn(
                 Command::new("nix-eval-jobs")
                     .args(["--flake", &flake, "--select", &select])
@@ -518,6 +539,32 @@ impl Builder for NixBuilder {
                 return Err(BuilderError::Flake(eval_failure(&stderr)));
             }
             Ok(evaluated)
+        }
+    }
+
+    fn read_output(
+        &self,
+        path: &str,
+        limit: u64,
+    ) -> impl Future<Output = Result<String, BuilderError>> + Send {
+        async move {
+            let mut realise = Command::new("nix-store");
+            realise.args(["--realise", path]);
+            run(&mut realise, String::new()).await?;
+            let file = tokio::fs::File::open(path)
+                .await
+                .map_err(|e| BuilderError::Unavailable(format!("{path}: {e}")))?;
+            let mut bytes = Vec::new();
+            file.take(limit.saturating_add(1))
+                .read_to_end(&mut bytes)
+                .await
+                .map_err(|e| BuilderError::Flake(format!("{path}: {e}")))?;
+            if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > limit {
+                return Err(BuilderError::Flake(format!(
+                    "{path}: larger than {limit} bytes"
+                )));
+            }
+            String::from_utf8(bytes).map_err(|_| BuilderError::Flake(format!("{path}: not UTF-8")))
         }
     }
 
@@ -669,14 +716,14 @@ mod tests {
     #[test]
     fn explicit_lists_become_indexed_attributes() {
         assert_eq!(
-            select(&listed()),
+            select(&listed(), false),
             "flake: { c0 = flake.outputs.\"packages\".\"x86_64-linux\".\"default\" \
              or (throw \"attribute 'packages.x86_64-linux.default' not found\"); \
              c1 = flake.outputs.\"checks\".\"aarch64-linux\".\"it's\" \
              or (throw \"attribute 'checks.aarch64-linux.it's' not found\"); }"
         );
         assert_eq!(
-            select(&CheckSelection::All),
+            select(&CheckSelection::All, false),
             "flake: flake.outputs.checks or { }"
         );
 
@@ -691,6 +738,27 @@ mod tests {
             Evaluated::Failed { attr, system, .. }
                 if attr == "checks.aarch64-linux.it's.sub" && system == "aarch64-linux"
         ));
+    }
+
+    #[test]
+    fn deploying_runs_also_evaluate_the_deployment() {
+        let all = select(&CheckSelection::All, true);
+        assert!(
+            all.starts_with("flake: (flake.outputs.checks or { }) // { procuratorDeployment = flake.outputs.procuratorDeployment or (throw"),
+            "{all}"
+        );
+        let explicit = select(&listed(), true);
+        assert!(
+            explicit.ends_with("this branch deploys\"); }"),
+            "{explicit}"
+        );
+        let line = r#"{"attr":"procuratorDeployment","attrPath":["procuratorDeployment"],"drvPath":"/nix/store/d.drv","outputs":{"out":"/nix/store/o"},"system":"x86_64-linux"}"#;
+        for selection in [CheckSelection::All, listed()] {
+            assert!(matches!(
+                evaluated_as(line, &selection),
+                Evaluated::Derivation { attr, .. } if attr == "procuratorDeployment"
+            ));
+        }
     }
 
     #[test]

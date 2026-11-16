@@ -77,6 +77,8 @@ const SCHEMA: [&str; 9] = [
 
 /// Stored kind of a webhook target.
 const WEBHOOK: &str = "webhook";
+/// Stored kind of a deploy target.
+const DEPLOY: &str = "deploy";
 
 /// Insert pending deliveries, due `now`, inside `tx`.
 async fn insert_deliveries(
@@ -87,6 +89,7 @@ async fn insert_deliveries(
     for (target, payload) in outbox {
         let (kind, name) = match target {
             Target::Webhook(secret) => (WEBHOOK, secret.as_str()),
+            Target::Deploy(url) => (DEPLOY, url.as_str()),
         };
         let json = serde_json::to_string(payload).map_err(StoreError::new)?;
         sqlx::query(
@@ -428,6 +431,7 @@ impl RunStore for SqliteRunStore {
                 .map(|(id, kind, target, payload, attempts)| {
                     let target = match kind.as_str() {
                         WEBHOOK => Target::Webhook(target),
+                        DEPLOY => Target::Deploy(target),
                         other => {
                             return Err(StoreError::new(format!("unknown target kind {other}")));
                         }

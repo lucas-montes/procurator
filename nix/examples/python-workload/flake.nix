@@ -160,6 +160,17 @@
       inherit runVm artifacts;
     };
 
+    # What the CI deploys after a passing run on `deploy.branch` (needs
+    # `deploy.url` set in this repo's procurator.nix).
+    procuratorDeployment = pLibs.deployment {
+      vms.python-workload = {
+        worker = "worker-1";
+        nixos = vmConfig;
+        cpus = 2;
+        memoryMiB = 1024;
+      };
+    };
+
     apps.${system} = {
       runVm = {
         type = "app";

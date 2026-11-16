@@ -10,6 +10,7 @@ use crate::application::ServiceError;
 use crate::application::ports::{BuildEvent, BuilderError, Clock, Evaluated};
 use crate::domain::access::Credential;
 use crate::domain::check::{CheckStatus, LOCAL_MACHINE};
+use crate::domain::deploy::{DEPLOYMENT_ATTR, DeploySettings};
 use crate::domain::event::{EventKind, EventPayload, Target, Webhook};
 use crate::domain::log::LogOrigin;
 use crate::domain::repo_config::{
@@ -141,7 +142,10 @@ fn hooks(hooks: &[(&str, &[EventKind])]) -> RepoSettings {
 fn kinds(delivered: &[(Target, EventPayload)]) -> Vec<(String, EventKind)> {
     delivered
         .iter()
-        .map(|(Target::Webhook(secret), event)| (secret.clone(), event.kind()))
+        .map(|(target, event)| {
+            let (Target::Webhook(name) | Target::Deploy(name)) = target;
+            (name.clone(), event.kind())
+        })
         .collect()
 }
 
@@ -832,4 +836,121 @@ async fn logs_are_deleted_after_the_repos_retention_but_runs_stay() {
         RunStatus::Failed
     );
     assert_eq!(service.checks(ANYONE, id).await.unwrap().len(), 5);
+}
+
+const DEPLOYMENT_DRV: &str = "/nix/store/dep-procurator-deployment.drv";
+const DEPLOYMENT_OUT: &str = "/nix/store/dep-procurator-deployment.drv-out";
+const DEPLOYMENT_FILE: &str = r#"{"version":1,"vms":[{"id":"web","worker":"worker-1","kernel":"/nix/store/k/bzImage","initramfs":"/nix/store/i/initrd","cmdline":"console=ttyS0","disk":"/nix/store/d/nixos.img","cpus":2,"memoryMiB":1024}]}"#;
+
+/// A builder whose run passes, deployment included, and holds `file`.
+fn deploying_builder(file: &str) -> ScriptedBuilder {
+    let evaluation = vec![
+        derivation("checks.x86_64-linux.pass", "x86_64-linux", PASS, false),
+        derivation(DEPLOYMENT_ATTR, "x86_64-linux", DEPLOYMENT_DRV, false),
+    ];
+    ScriptedBuilder::new(&["x86_64-linux"], Ok(evaluation))
+        .passing(&[PASS, DEPLOYMENT_DRV])
+        .with_file(DEPLOYMENT_OUT, file)
+}
+
+/// Repo settings deploying `branch` to `http://cp/deploy`, with a webhook.
+fn deploying(branch: &str) -> FixedConfig {
+    let deploy = DeploySettings::new(String::from("http://cp/deploy"), String::from(branch));
+    let repo = hooks(&[("slack", &[EventKind::RunSucceeded])]).deploying(Some(deploy.unwrap()));
+    FixedConfig::default().with_repo(repo)
+}
+
+#[tokio::test]
+async fn a_passed_run_on_the_deploy_branch_deploys_what_it_built() {
+    let (service, _) = with_config(
+        deploying_builder(DEPLOYMENT_FILE),
+        deploying("main"),
+        limits(),
+    );
+    let id = service.enqueue(request("lucas/dummy")).await.unwrap();
+    assert!(service.work_next().await.unwrap());
+    assert_eq!(
+        service.run(ANYONE, id).await.unwrap().status(),
+        RunStatus::Passed
+    );
+    assert_eq!(service.builder.deployments_asked(), [true]);
+
+    service.deliver_due().await.unwrap();
+    let delivered = service.notifier.delivered();
+    assert_eq!(
+        kinds(&delivered),
+        [
+            (String::from("slack"), EventKind::RunSucceeded),
+            (String::from("http://cp/deploy"), EventKind::RunSucceeded),
+        ]
+    );
+    assert!(delivered[0].1.deployment().is_none());
+    let deployment = delivered[1].1.deployment().unwrap();
+    assert_eq!(deployment.path(), DEPLOYMENT_OUT);
+    assert_eq!(deployment.vms()[0].id(), "web");
+    let log = service.run_log(ANYONE, id).await.unwrap();
+    assert!(
+        log.iter()
+            .any(|line| line.text().starts_with("deploying 1 vms from"))
+    );
+}
+
+#[tokio::test]
+async fn other_branches_do_not_deploy() {
+    let (service, _) = with_config(
+        deploying_builder(DEPLOYMENT_FILE),
+        deploying("release"),
+        limits(),
+    );
+    service.enqueue(request("lucas/dummy")).await.unwrap();
+    assert!(service.work_next().await.unwrap());
+    assert_eq!(service.builder.deployments_asked(), [false]);
+    service.deliver_due().await.unwrap();
+    let delivered = service.notifier.delivered();
+    assert!(
+        delivered
+            .iter()
+            .all(|(target, _)| matches!(target, Target::Webhook(_)))
+    );
+}
+
+#[tokio::test]
+async fn a_broken_deployment_fails_the_run_and_deploys_nothing() {
+    let bad = DEPLOYMENT_FILE.replace("\"cpus\":2", "\"cpus\":0");
+    let (service, _) = with_config(deploying_builder(&bad), deploying("main"), limits());
+    let id = service.enqueue(request("lucas/dummy")).await.unwrap();
+    assert!(service.work_next().await.unwrap());
+    assert_eq!(
+        service.run(ANYONE, id).await.unwrap().status(),
+        RunStatus::Failed
+    );
+    let log = service.run_log(ANYONE, id).await.unwrap();
+    assert!(
+        log.iter().any(|line| line
+            .text()
+            .starts_with("deploy: deployment file: vm web: cpus")),
+        "{log:?}"
+    );
+    service.deliver_due().await.unwrap();
+    assert!(service.notifier.delivered().is_empty());
+}
+
+#[tokio::test]
+async fn a_failed_run_deploys_nothing() {
+    let evaluation = vec![
+        derivation("checks.x86_64-linux.fail", "x86_64-linux", FAIL, false),
+        derivation(DEPLOYMENT_ATTR, "x86_64-linux", DEPLOYMENT_DRV, false),
+    ];
+    let builder = ScriptedBuilder::new(&["x86_64-linux"], Ok(evaluation))
+        .passing(&[DEPLOYMENT_DRV])
+        .with_file(DEPLOYMENT_OUT, DEPLOYMENT_FILE);
+    let (service, _) = with_config(builder, deploying("main"), limits());
+    let id = service.enqueue(request("lucas/dummy")).await.unwrap();
+    assert!(service.work_next().await.unwrap());
+    assert_eq!(
+        service.run(ANYONE, id).await.unwrap().status(),
+        RunStatus::Failed
+    );
+    service.deliver_due().await.unwrap();
+    assert!(service.notifier.delivered().is_empty());
 }

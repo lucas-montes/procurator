@@ -54,6 +54,7 @@ clients are thread-local like the `spawn_local` loop.
 | Event | Reply | Notes |
 |---|---|---|
 | `PublishState{commit, generation, intent_hash, entries}` | `Published(generation)` or `NodeError` | Full desired-state replace per generation; entries carry spec bytes |
+| `Deploy{commit, intent_hash, entries}` | `Published(generation)` or `NodeError` | In-process publisher (`control_plane::Publisher`, used by the CI in the monolith): the node picks active + 1; an intent equal to the active one returns the active generation unchanged |
 | `GetAssignment{worker_id, last_seen}` | `Assignment{generation, vms[key+spec]}` | Empty slice (never error) when unknown, unpublished, or up-to-date |
 | `PushData{report}` | `Observed` | Always succeeds; undeclared workers ignored |
 | `GetClusterStatus` | `Cluster(ClusterSnapshot)` | Read-only snapshot |
@@ -92,6 +93,16 @@ deterministic polls.
 via `control_plane::main` ← crate binary `main.rs`. Fail-fast: unreadable,
 unparsable, or duplicate/blank-id inventory exits the process. Peer
 discovery from the `role` envelope stays dormant (no HA).
+
+## Embedded (`embedded.rs`)
+
+`control_plane::start(&Config)` binds `addr`, then runs the node and the
+Cap'n Proto server on a `control-plane` thread (current-thread runtime +
+`LocalSet`, since capabilities are `!Send`) until the process exits, and
+returns a `Publisher`. `DesiredVm::new(id, worker, &VmImage)` encodes the
+same `VmSpec(ch.VmConfig)` bytes `publishState` stores (one raw disk,
+console and serial `Off`; the worker fills disk copy, serial, network).
+`Config::read` loads the JSON config without exiting the process.
 
 ## See also
 

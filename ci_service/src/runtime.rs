@@ -14,11 +14,12 @@ use tokio::task::JoinSet;
 
 use crate::adapters::http::router;
 use crate::adapters::nix::{GitConfigSource, NixBuilder};
+use crate::adapters::notify::Routed;
 use crate::adapters::secrets::FileSecretStore;
 use crate::adapters::sqlite::SqliteRunStore;
 use crate::adapters::system::SystemClock;
 use crate::adapters::webhook::WebhookNotifier;
-use crate::application::ports::{Access, DeliveryError, StoreError};
+use crate::application::ports::{Access, DeliveryError, Notifier, StoreError};
 use crate::application::{Service, ServiceError};
 use crate::config::Config;
 use crate::domain::repo_config::{CachePolicy, Limits, Retention};
@@ -67,15 +68,19 @@ pub struct Runtime {
 impl Runtime {
     /// Open the store, requeue interrupted runs and start
     /// `max_concurrent_runs` workers, the outbox dispatcher and log
-    /// retention. Reads of runs and logs are checked with `access`.
+    /// retention. Reads of runs and logs are checked with `access`, and
+    /// deploys are delivered by `deploys` (e.g. [`HttpDeploy`]).
+    ///
+    /// [`HttpDeploy`]: crate::adapters::webhook::HttpDeploy
     ///
     /// # Errors
     ///
     /// [`StartError`] when the store, the recovery or the webhook client
     /// fails.
-    pub fn start<A: Access>(
+    pub fn start<A: Access, D: Notifier>(
         config: Config,
         access: A,
+        deploys: D,
     ) -> impl Future<Output = Result<Self, StartError>> + Send {
         async move {
             let store = SqliteRunStore::open(&config.database_url)
@@ -85,7 +90,8 @@ impl Runtime {
             let mut builder =
                 NixBuilder::new(repos.clone(), config.eval_workers, &config.allowed_uris);
             let secrets = FileSecretStore::new(config.secrets_file.map(PathBuf::from));
-            let notifier = WebhookNotifier::new(secrets).map_err(StartError::Notifier)?;
+            let webhooks = WebhookNotifier::new(secrets).map_err(StartError::Notifier)?;
+            let notifier = Routed::new(webhooks, deploys);
             let limits = Limits::new(
                 config.max_reruns,
                 config.max_check_timeout,

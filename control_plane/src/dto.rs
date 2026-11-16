@@ -255,6 +255,16 @@ pub enum NodeEvent {
         /// Desired VMs pinned to explicit target workers.
         entries: Vec<DesiredEntry>,
     },
+    /// An in-process publisher (the CI's deploy) replaces the desired state;
+    /// the node numbers the generation itself.
+    Deploy {
+        /// Commit hash the intent was built from.
+        commit: String,
+        /// Identity of the intent; deploying the active one again is a no-op.
+        intent_hash: String,
+        /// Desired VMs pinned to explicit target workers.
+        entries: Vec<DesiredEntry>,
+    },
     /// A worker polls for its assignment slice.
     GetAssignment {
         /// Polling worker id.

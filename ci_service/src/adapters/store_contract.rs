@@ -3,9 +3,10 @@
 
 use crate::application::ports::{NextAttempt, RunQuery, RunStore};
 use crate::domain::check::{Check, CheckStatus, Derivation, NewCheck, Systems};
-use crate::domain::event::{EventKind, EventPayload, Target};
+use crate::domain::deploy::{DeploySettings, Deployment};
+use crate::domain::event::{EventKind, EventPayload, Target, deploy_delivery};
 use crate::domain::log::{LogLine, LogOrigin, NewLogLine};
-use crate::domain::run::{CommitHash, GitRef, NewRun, Pusher, RepoName, RunId, RunStatus};
+use crate::domain::run::{CommitHash, GitRef, NewRun, Pusher, RepoName, Run, RunId, RunStatus};
 
 fn request(repo: &str, pusher: Option<&str>) -> NewRun {
     NewRun::new(
@@ -151,6 +152,7 @@ async fn outbox<S: RunStore>(store: &S) {
         .await
         .unwrap();
     assert!(store.due_deliveries(i64::MAX, 10).await.unwrap().is_empty());
+    deploys(store, &run).await;
 
     // An errored run is no verdict: the failure before it still counts.
     let second = store
@@ -174,6 +176,29 @@ async fn outbox<S: RunStore>(store: &S) {
     );
     store.claim_next(94).await.unwrap().unwrap();
     assert!(store.finish(third, RunStatus::Passed, 95).await.unwrap());
+}
+
+/// A deploy keeps its target and its deployment.
+async fn deploys<S: RunStore>(store: &S, run: &Run) {
+    let succeeded = EventPayload::for_run(EventKind::RunSucceeded, run, RunStatus::Passed);
+    let settings =
+        DeploySettings::new(String::from("http://cp/deploy"), String::from("main")).unwrap();
+    let file = r#"{"version":1,"vms":[{"id":"web","worker":"w1","kernel":"/nix/store/k","initramfs":"/nix/store/i","cmdline":"x","disk":"/nix/store/d","cpus":1,"memoryMiB":512}]}"#;
+    let deployment = Deployment::parse(String::from("/nix/store/p"), file).unwrap();
+    let deploy = deploy_delivery(&[succeeded], &settings, deployment).unwrap();
+    store
+        .queue_deliveries(std::slice::from_ref(&deploy), 81)
+        .await
+        .unwrap();
+    let queued = store.due_deliveries(81, 10).await.unwrap();
+    assert_eq!(
+        (queued[0].target(), queued[0].payload()),
+        (&deploy.0, &deploy.1)
+    );
+    store
+        .record_attempt(queued[0].id(), NextAttempt::Delivered, None)
+        .await
+        .unwrap();
 }
 
 async fn retries_and_closing<S: RunStore>(store: &S) {

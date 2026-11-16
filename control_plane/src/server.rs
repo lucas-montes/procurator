@@ -79,7 +79,16 @@ impl<T: capnp::traits::Owned + 'static> Server<T> {
     pub async fn serve(self, addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         info!(addr = %addr, "Starting server");
         let listener = tokio::net::TcpListener::bind(&addr).await?;
+        self.serve_on(listener).await
+    }
 
+    /// Serves on a listener that is already bound.
+    /// Why: an embedding process binds first, so a taken port is a startup
+    /// error there instead of a log line on another thread.
+    pub async fn serve_on(
+        self,
+        listener: tokio::net::TcpListener,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         loop {
             let (stream, peer_addr) = listener.accept().await?;
             // One bootstrap capability per connection so handlers know

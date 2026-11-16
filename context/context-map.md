@@ -46,12 +46,14 @@ Quick navigation for AI sessions working on Procurator.
 - `control_plane/` - Coordination service
 - `worker/` - Background job execution
 - `ci_service/` - CI service, hexagonal like `cache` (spec: `specs/ci-service.md`)
-  - `ci_service/src/domain/` - `run.rs` (run identity, lifecycle), `check.rs` (check statuses, cached/buildable/skipped rule, run outcome), `log.rs` (numbered lines tagged by run/check/derivation), `repo_config.rs` (per-run settings, service caps, log retention), `event.rs` (events of a finished run, webhook fan-out), `access.rs` (credential, principal)
+  - `ci_service/src/domain/` - `run.rs` (run identity, lifecycle), `check.rs` (check statuses, cached/buildable/skipped rule, run outcome), `log.rs` (numbered lines tagged by run/check/derivation), `repo_config.rs` (per-run settings, service caps, log retention), `event.rs` (events of a finished run, webhook fan-out, deploy delivery), `deploy.rs` (deploy branch, `procuratorDeployment` file validation), `access.rs` (credential, principal)
   - `ci_service/src/application/` - `Service` use cases, `service/pipeline.rs` (worker), `service/logs.rs` (stored/followed logs, dependency logs per check), `service/live.rs` (per-run broadcast), `service/outbox.rs` (dispatcher), `service/retention.rs`, `ports.rs` (`RunStore`, `Builder`, `ConfigSource`, `Notifier`, `SecretStore`, `Access`, `Clock`)
-  - `ci_service/src/adapters/` - `sqlite.rs`, `memory.rs` (held to `store_contract.rs`), `nix/` (`NixBuilder`: nix-eval-jobs, nix build, internal-json, systems, requisites; `GitConfigSource`: procurator.nix), `webhook.rs`, `secrets.rs`, `access.rs` (`OpenAccess`), `system.rs`, `http/` (incl. SSE)
+  - `ci_service/src/adapters/` - `sqlite.rs`, `memory.rs` (held to `store_contract.rs`), `nix/` (`NixBuilder`: nix-eval-jobs, nix build, internal-json, systems, requisites; `GitConfigSource`: procurator.nix), `webhook.rs` (`WebhookNotifier`, `HttpDeploy`), `notify.rs` (`Routed`), `secrets.rs`, `access.rs` (`OpenAccess`), `system.rs`, `http/` (incl. SSE)
   - `ci_service/src/runtime.rs` - production wiring shared by `src/main.rs` and the monolith
   - NixOS: `nix/modules/ci-service.nix` (`remoteBuilders` → `nix.buildMachines`), `nix/modules/ci-builder.nix` (remote builder host)
-- `src/` (root `procurator` crate) - the monolith: `main.rs` starts `ci_service::runtime`, repohub and the cache in one process; `config.rs` names their three config files
+  - Deploy format: `nix/lib/deployment.nix` (`libs.<system>.deployment`, test `nix/tests/deployment-fast.nix`)
+- `src/` (root `procurator` crate) - the monolith: `main.rs` starts `ci_service::runtime`, repohub, the cache and optionally the control plane (`control_plane::start`) in one process; `config.rs` names their config files; `deploy.rs` (`ControlPlaneDeploy`: CI deploys published in process)
+- `control_plane/src/embedded.rs` - `start` (node + Cap'n Proto server on their own thread), `Publisher`, `DesiredVm`/`VmImage` (VM spec encoding)
 
 ### Console (`console/`)
 Read-only web UI built only from the services' own JSON logs (no RPC, no pushed telemetry). See `console/README.md`.

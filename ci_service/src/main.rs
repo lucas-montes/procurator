@@ -6,6 +6,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use ci_service::adapters::access::OpenAccess;
+use ci_service::adapters::webhook::HttpDeploy;
 use ci_service::config::{Config, ConfigError};
 use ci_service::runtime::{Runtime, StartError};
 use tracing_subscriber::EnvFilter;
@@ -61,7 +62,10 @@ async fn shutdown_signal() {
 async fn run(config: Config) -> Result<(), MainError> {
     // Why: repohub has no users or permissions yet, so a standalone CI
     // cannot tell readers apart either.
-    let runtime = Runtime::start(config, OpenAccess)
+    // Why: standalone, the control plane is another process, reached at the
+    // repo's `deploy.url`.
+    let deploys = HttpDeploy::new().map_err(|e| MainError::Start(StartError::Notifier(e)))?;
+    let runtime = Runtime::start(config, OpenAccess, deploys)
         .await
         .map_err(MainError::Start)?;
     let listener = tokio::net::TcpListener::bind(runtime.bind_address())

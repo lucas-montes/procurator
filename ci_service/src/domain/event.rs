@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::check::{Check, CheckStatus};
+use super::deploy::{DeploySettings, Deployment};
 use super::run::{Run, RunStatus};
 
 /// Longest accepted secret name.
@@ -92,6 +93,9 @@ impl Webhook {
 pub enum Target {
     /// A webhook, by the secret holding its URL.
     Webhook(String),
+    /// The cluster, by `deploy.url` (unused when the deploy adapter calls
+    /// the control plane in process).
+    Deploy(String),
 }
 
 /// One event as sent: self-contained JSON.
@@ -110,6 +114,9 @@ pub struct EventPayload {
     /// Output paths of every passed or cached check, for `run.succeeded`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     outputs: Vec<String>,
+    /// What to run, on the `run.succeeded` sent to the deploy target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    deployment: Option<Deployment>,
 }
 
 impl EventPayload {
@@ -117,6 +124,18 @@ impl EventPayload {
     #[must_use]
     pub fn kind(&self) -> EventKind {
         self.kind
+    }
+
+    /// The commit the run checked.
+    #[must_use]
+    pub fn commit(&self) -> &str {
+        &self.commit
+    }
+
+    /// What to deploy, on a deploy delivery.
+    #[must_use]
+    pub fn deployment(&self) -> Option<&Deployment> {
+        self.deployment.as_ref()
     }
 
     /// The run's id.
@@ -138,6 +157,7 @@ impl EventPayload {
             status: String::from(status.as_str()),
             check: None,
             outputs: Vec::new(),
+            deployment: None,
         }
     }
 
@@ -265,10 +285,27 @@ pub fn deliveries(events: &[EventPayload], webhooks: &[Webhook]) -> Vec<(Target,
     out
 }
 
+/// The delivery that deploys `deployment`: the run's `run.succeeded`,
+/// carrying it, to `deploy`'s target. `None` when the run did not succeed.
+#[must_use]
+pub fn deploy_delivery(
+    events: &[EventPayload],
+    deploy: &DeploySettings,
+    deployment: Deployment,
+) -> Option<(Target, EventPayload)> {
+    let succeeded = events
+        .iter()
+        .find(|event| event.kind == EventKind::RunSucceeded)?;
+    let mut payload = succeeded.clone();
+    payload.deployment = Some(deployment);
+    Some((Target::Deploy(String::from(deploy.url())), payload))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{EventKind, EventPayload, Target, Webhook, deliveries};
+    use super::{EventKind, EventPayload, Target, Webhook, deliveries, deploy_delivery};
     use crate::domain::check::{Check, CheckId, CheckStatus, Derivation, NewCheck};
+    use crate::domain::deploy::{DeploySettings, Deployment};
     use crate::domain::run::{CommitHash, GitRef, NewRun, RepoName, Run, RunId, RunStatus};
 
     fn run() -> Run {
@@ -379,6 +416,27 @@ mod tests {
                 (Target::Webhook(String::from("all")), EventKind::RunFailed),
             ]
         );
+    }
+
+    #[test]
+    fn only_a_succeeded_run_deploys() {
+        let deploy =
+            DeploySettings::new(String::from("http://cp/deploy"), String::from("main")).unwrap();
+        let file = r#"{"version":1,"vms":[{"id":"web","worker":"w1","kernel":"/nix/store/k","initramfs":"/nix/store/i","cmdline":"x","disk":"/nix/store/d","cpus":1,"memoryMiB":512}]}"#;
+        let deployment = || Deployment::parse(String::from("/nix/store/p"), file).unwrap();
+        let passed = EventPayload::for_finished(&run(), RunStatus::Passed, &[], None, true);
+        let (target, payload) = deploy_delivery(&passed, &deploy, deployment()).unwrap();
+        assert_eq!(target, Target::Deploy(String::from("http://cp/deploy")));
+        assert_eq!(payload.kind(), EventKind::RunSucceeded);
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(json["deployment"]["vms"][0]["id"], "web");
+        assert!(
+            passed[0].deployment().is_none(),
+            "webhooks get no deployment"
+        );
+
+        let failed = EventPayload::for_finished(&run(), RunStatus::Failed, &[], None, true);
+        assert!(deploy_delivery(&failed, &deploy, deployment()).is_none());
     }
 
     #[test]

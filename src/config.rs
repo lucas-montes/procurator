@@ -5,13 +5,17 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-/// Paths to the three services' TOML files.
+/// Paths to the three services' TOML files, and optionally the control
+/// plane's JSON one.
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     ci: PathBuf,
     repohub: PathBuf,
     cache: PathBuf,
+    /// Why: optional; without it, deploys are sent to `deploy.url`.
+    #[serde(default)]
+    control_plane: Option<PathBuf>,
 }
 
 /// Why the monolith's config could not be read.
@@ -51,5 +55,10 @@ impl Config {
     /// The cache's config file.
     pub fn cache(&self) -> &Path {
         &self.cache
+    }
+
+    /// The control plane's config file, when the monolith runs it.
+    pub fn control_plane(&self) -> Option<&Path> {
+        self.control_plane.as_deref()
     }
 }

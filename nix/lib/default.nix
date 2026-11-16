@@ -10,7 +10,10 @@ let
 
   # worker config builder — shared between apps.nix (dev) and service.nix (NixOS module)
   workerLib = import ./worker.nix { inherit pkgs; };
+
+  # a repo's `procuratorDeployment` output, read by the CI and deployed
+  deployment = import ./deployment.nix { inherit pkgs; };
 in
 {
-  inherit diskVm workerLib;
+  inherit diskVm workerLib deployment;
 }

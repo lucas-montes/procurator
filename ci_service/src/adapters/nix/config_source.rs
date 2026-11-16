@@ -18,12 +18,17 @@ use tokio::process::Command;
 use super::internal_json::strip_ansi;
 use super::repos::bare_repo;
 use crate::application::ports::{ConfigSource, RepoConfigError};
+use crate::domain::deploy::{DeploySettings, check_branch};
 use crate::domain::event::{EventKind, Webhook};
-use crate::domain::repo_config::{CheckSelection, RepoConfig, RepoSettings, RunSettings, Timeouts};
+use crate::domain::repo_config::{
+    CheckSelection, InvalidConfig, RepoConfig, RepoSettings, RunSettings, Timeouts,
+};
 use crate::domain::run::{NewRun, RepoName};
 
 /// Most webhooks a repo may list.
 const MAX_WEBHOOKS: usize = 10;
+/// `deploy.branch` when not given.
+const DEFAULT_DEPLOY_BRANCH: &str = "main";
 
 /// The file, at the repository root.
 const FILE: &str = "procurator.nix";
@@ -146,11 +151,10 @@ struct FileDto {
     #[serde(default)]
     ci: CiDto,
     #[serde(default)]
-    #[expect(dead_code, reason = "validated now, read by the deploy step")]
     deploy: Option<DeployDto>,
 }
 
-/// `ci`. Repo-level keys are checked now and used by later steps.
+/// `ci`.
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct CiDto {
@@ -186,12 +190,24 @@ struct WebhookDto {
     events: Vec<EventKind>,
 }
 
+/// `deploy`: `url = null` (the default) means no deploys.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-#[expect(dead_code, reason = "used by the deploy step")]
 struct DeployDto {
     url: Option<String>,
     branch: Option<String>,
+}
+
+impl DeployDto {
+    fn into_settings(self) -> Result<Option<DeploySettings>, InvalidConfig> {
+        let branch = self
+            .branch
+            .unwrap_or_else(|| String::from(DEFAULT_DEPLOY_BRANCH));
+        match self.url {
+            Some(url) => DeploySettings::new(url, branch).map(Some),
+            None => check_branch(&branch).map(|()| None),
+        }
+    }
 }
 
 /// Validate evaluated JSON into a repo config.
@@ -213,7 +229,15 @@ fn parse(json: &str) -> Result<RepoConfig, RepoConfigError> {
         .map(|hook| Webhook::new(hook.url_secret, hook.events))
         .collect::<Result<Vec<_>, _>>()
         .map_err(invalid)?;
-    let repo = RepoSettings::new(ci.cache.take(), webhooks).keeping_logs(ci.log_retention_days);
+    let deploy = match file.deploy {
+        None => None,
+        Some(deploy) => deploy
+            .into_settings()
+            .map_err(|e| RepoConfigError::Invalid(e.to_string()))?,
+    };
+    let repo = RepoSettings::new(ci.cache.take(), webhooks)
+        .keeping_logs(ci.log_retention_days)
+        .deploying(deploy);
     let checks = match ci.checks {
         None => CheckSelection::All,
         Some(ChecksDto::Keyword(keyword)) if keyword == "all" => CheckSelection::All,
@@ -385,6 +409,19 @@ mod tests {
     }
 
     #[test]
+    fn deploy_is_on_with_a_url() {
+        let on = parse(r#"{"deploy":{"url":"http://cp.lan:8090/deploy"}}"#).unwrap();
+        let repo = on.into_repo();
+        let deploy = repo.deploy().unwrap();
+        assert_eq!(deploy.url(), "http://cp.lan:8090/deploy");
+        let main = crate::domain::run::GitRef::parse(String::from("refs/heads/main")).unwrap();
+        assert!(deploy.applies_to(&main), "branch defaults to main");
+        let off = parse(r#"{"deploy":{"url":null,"branch":"release"}}"#).unwrap();
+        assert!(off.into_repo().deploy().is_none());
+        assert!(parse("{}").unwrap().into_repo().deploy().is_none());
+    }
+
+    #[test]
     fn mistakes_are_rejected_with_a_reason() {
         for (json, needle) in [
             (r#"{"ci":{"rerun":1}}"#, "unknown field `rerun`"),
@@ -398,6 +435,9 @@ mod tests {
                 "run.exploded",
             ),
             ("[]", "procurator.nix"),
+            (r#"{"deploy":{"url":"ftp://x"}}"#, "deploy.url"),
+            (r#"{"deploy":{"branch":"a b"}}"#, "deploy.branch"),
+            (r#"{"deploy":{"target":"x"}}"#, "unknown field `target`"),
         ] {
             match parse(json) {
                 Err(RepoConfigError::Invalid(reason)) => {

@@ -32,6 +32,10 @@ pub struct ScriptedBuilder {
     pushed: Mutex<Vec<(String, Vec<String>)>>,
     /// `.drv` paths and the derivations they need.
     requisites: Vec<(String, Vec<String>)>,
+    /// Store paths and their contents, for `read_output`.
+    files: Vec<(String, String)>,
+    /// Whether each evaluation asked for the deployment.
+    deployments: Mutex<Vec<bool>>,
 }
 
 impl ScriptedBuilder {
@@ -73,6 +77,19 @@ impl ScriptedBuilder {
         let deps = deps.iter().map(|&dep| String::from(dep)).collect();
         self.requisites.push((String::from(drv), deps));
         self
+    }
+
+    /// The store path `path` holds `contents`.
+    #[must_use]
+    pub fn with_file(mut self, path: &str, contents: &str) -> Self {
+        self.files
+            .push((String::from(path), String::from(contents)));
+        self
+    }
+
+    /// Per evaluation, whether it asked for the deployment.
+    pub fn deployments_asked(&self) -> Vec<bool> {
+        lock(&self.deployments).clone()
     }
 
     /// Builds never finish.
@@ -129,12 +146,34 @@ impl Builder for ScriptedBuilder {
         &self,
         _run: &NewRun,
         selection: &CheckSelection,
+        deployment: bool,
     ) -> impl Future<Output = Result<Vec<Evaluated>, BuilderError>> + Send {
         lock(&self.asked).push((selection.clone(), None));
+        lock(&self.deployments).push(deployment);
         let evaluation = lock(&self.evaluation)
             .take()
             .unwrap_or_else(|| Err(BuilderError::Unavailable(String::from("script over"))));
         std::future::ready(evaluation)
+    }
+
+    fn read_output(
+        &self,
+        path: &str,
+        limit: u64,
+    ) -> impl Future<Output = Result<String, BuilderError>> + Send {
+        let found = self
+            .files
+            .iter()
+            .find(|(known, _)| known == path)
+            .map(|(_, contents)| contents.clone());
+        let answer = match found {
+            None => Err(BuilderError::Unavailable(format!("{path}: no such path"))),
+            Some(contents) if u64::try_from(contents.len()).unwrap_or(u64::MAX) > limit => Err(
+                BuilderError::Flake(format!("{path}: larger than {limit} bytes")),
+            ),
+            Some(contents) => Ok(contents),
+        };
+        std::future::ready(answer)
     }
 
     fn requisites(

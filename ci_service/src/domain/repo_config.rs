@@ -5,6 +5,7 @@
 
 use std::fmt;
 
+use super::deploy::DeploySettings;
 use super::event::Webhook;
 
 /// Default seconds a derivation may build.
@@ -227,6 +228,7 @@ pub struct RepoSettings {
     webhooks: Vec<Webhook>,
     log_retention_days: Option<u32>,
     default_ref: Option<String>,
+    deploy: Option<DeploySettings>,
 }
 
 impl RepoSettings {
@@ -238,7 +240,22 @@ impl RepoSettings {
             webhooks,
             log_retention_days: None,
             default_ref: None,
+            deploy: None,
         }
+    }
+
+    /// The same settings, deploying as `deploy` says (`deploy`, when its
+    /// `url` is set).
+    #[must_use]
+    pub fn deploying(mut self, deploy: Option<DeploySettings>) -> Self {
+        self.deploy = deploy;
+        self
+    }
+
+    /// Where and for which branch runs deploy, if they do.
+    #[must_use]
+    pub fn deploy(&self) -> Option<&DeploySettings> {
+        self.deploy.as_ref()
     }
 
     /// The same settings, asking to keep run logs `days`

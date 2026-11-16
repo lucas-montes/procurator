@@ -78,22 +78,28 @@ impl Config {
     /// Loads, parses, and validates the JSON config file, exiting the
     /// process with a logged error on any failure (fail-fast startup).
     pub fn from_file(path: impl AsRef<Path> + std::fmt::Debug) -> Self {
-        let contents = std::fs::read(&path).unwrap_or_else(|e| {
-            tracing::error!(path = ?path, error = %e, "Could not read config");
-            std::process::exit(1);
-        });
-
-        let config: Self = serde_json::from_slice(&contents).unwrap_or_else(|e| {
-            tracing::error!(path = ?path, error = %e, "Failed to parse config");
-            std::process::exit(1);
-        });
-
-        config.validate().unwrap_or_else(|e| {
+        Self::read(&path).unwrap_or_else(|e| {
             tracing::error!(path = ?path, error = %e, "Invalid control plane config");
             std::process::exit(1);
-        });
+        })
+    }
 
+    /// Loads, parses, and validates the JSON config file.
+    /// Why: an embedding process (the monolith) reports the error itself
+    /// instead of being exited.
+    ///
+    /// # Errors
+    ///
+    /// When the file is unreadable, not the config's JSON, or invalid.
+    pub fn read(path: impl AsRef<Path>) -> Result<Self, String> {
+        let path = path.as_ref();
+        let contents = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let config: Self =
+            serde_json::from_slice(&contents).map_err(|e| format!("{}: {e}", path.display()))?;
         config
+            .validate()
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(config)
     }
 
     /// Converts the configured inventory into registry declarations.

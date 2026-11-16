@@ -7,6 +7,7 @@ use crate::{node::Node, registry::DeclaredWorker, server::Server};
 pub mod config;
 pub mod directory;
 mod dto;
+mod embedded;
 pub mod logging;
 mod msglog;
 mod node;
@@ -14,6 +15,8 @@ pub mod registry;
 mod scheduler;
 mod server;
 mod store;
+
+pub use embedded::{DesiredVm, PublishError, Publisher, VmImage, start};
 
 pub async fn main<T: capnp::traits::Owned + 'static>(
     _hostname: String,

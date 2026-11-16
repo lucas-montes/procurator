@@ -16,7 +16,8 @@ use crate::application::ports::{
     RepoConfigError, RunStore, StoreError,
 };
 use crate::domain::check::{Check, CheckId, CheckStatus, LOCAL_MACHINE, NewCheck};
-use crate::domain::event::{EventKind, EventPayload, deliveries};
+use crate::domain::deploy::{DEPLOYMENT_ATTR, Deployment, MAX_DEPLOYMENT_BYTES};
+use crate::domain::event::{EventKind, EventPayload, deliveries, deploy_delivery};
 use crate::domain::log::{LogOrigin, NewLogLine};
 use crate::domain::repo_config::{RepoSettings, RunSettings, Timeouts};
 use crate::domain::run::{Run, RunId, RunStatus};
@@ -50,6 +51,21 @@ impl From<BuilderError> for Fault {
 impl From<StoreError> for Fault {
     fn from(error: StoreError) -> Self {
         Self::Store(error)
+    }
+}
+
+/// How a run ended, and what it deploys.
+struct Verdict {
+    status: RunStatus,
+    deployment: Option<Deployment>,
+}
+
+impl Verdict {
+    fn without_deploy(status: RunStatus) -> Self {
+        Self {
+            status,
+            deployment: None,
+        }
     }
 }
 
@@ -131,8 +147,8 @@ where
         let repo = self.repo_settings(run).await?;
         self.announce(id, EventKind::RunStarted, RunStatus::Running, &repo)
             .await?;
-        let status = match self.execute(run, &repo).await {
-            Ok(status) => status,
+        let verdict = match self.execute(run, &repo).await {
+            Ok(verdict) => verdict,
             Err(fault) => {
                 let Some(status) = fault.outcome() else {
                     // Why: best effort, so the run does not look stuck.
@@ -145,10 +161,11 @@ where
                     .close_open_checks(id, CheckStatus::Failed)
                     .await?;
                 self.log_text(id, LogOrigin::Run, &fault.message()).await?;
-                status
+                Verdict::without_deploy(status)
             }
         };
-        self.conclude(run, status, &repo).await?;
+        let status = verdict.status;
+        self.conclude(run, verdict, &repo).await?;
         tracing::info!(run = %id, status = status.as_str(), "run finished");
         Ok(())
     }
@@ -167,16 +184,19 @@ where
     }
 
     /// Finish the run and queue its events for the webhooks that want
-    /// them, in one store transaction.
+    /// them, and its deployment for the deploy target, in one store
+    /// transaction.
     async fn conclude(
         &self,
         run: &Run,
-        status: RunStatus,
+        verdict: Verdict,
         repo: &RepoSettings,
     ) -> Result<(), ServiceError> {
         let id = run.id();
         let request = run.request();
-        let outbox = if repo.webhooks().is_empty() {
+        let status = verdict.status;
+        let deploy = repo.deploy().zip(verdict.deployment);
+        let outbox = if repo.webhooks().is_empty() && deploy.is_none() {
             Vec::new()
         } else {
             let checks = self.store.checks(id).await?;
@@ -186,7 +206,11 @@ where
                 .await?;
             let on_default = repo.default_ref() == Some(request.git_ref().as_str());
             let events = EventPayload::for_finished(run, status, &checks, previous, on_default);
-            deliveries(&events, repo.webhooks())
+            let mut outbox = deliveries(&events, repo.webhooks());
+            if let Some((settings, deployment)) = deploy {
+                outbox.extend(deploy_delivery(&events, settings, deployment));
+            }
+            outbox
         };
         let now = self.clock.now();
         let keep_until = now + self.retention.seconds(repo.log_retention_days());
@@ -202,7 +226,7 @@ where
     }
 
     /// Read the config, then check within the run's time limit.
-    async fn execute(&self, run: &Run, repo: &RepoSettings) -> Result<RunStatus, Fault> {
+    async fn execute(&self, run: &Run, repo: &RepoSettings) -> Result<Verdict, Fault> {
         let settings = self
             .config
             .run_settings(run.request())
@@ -219,21 +243,25 @@ where
             .await?;
         let message = format!("run timed out after {} seconds", settings.timeouts().run());
         self.log_text(id, LogOrigin::Run, &message).await?;
-        Ok(RunStatus::TimedOut)
+        Ok(Verdict::without_deploy(RunStatus::TimedOut))
     }
 
-    /// Evaluate, classify, build; the run's final status.
+    /// Evaluate, classify, build; the run's final status, and what it
+    /// deploys when it passed on the deploy branch.
     async fn check(
         &self,
         run: &Run,
         settings: &RunSettings,
         repo: &RepoSettings,
-    ) -> Result<RunStatus, Fault> {
+    ) -> Result<Verdict, Fault> {
         let id = run.id();
+        let deploys = repo
+            .deploy()
+            .is_some_and(|deploy| deploy.applies_to(run.request().git_ref()));
         let systems = self.builder.systems().await?;
         let evaluated = self
             .builder
-            .evaluate(run.request(), settings.checks())
+            .evaluate(run.request(), settings.checks(), deploys)
             .await?;
 
         let mut errors = Vec::with_capacity(evaluated.len());
@@ -286,7 +314,54 @@ where
         if !built.is_empty() {
             self.push(run, &built, repo).await?;
         }
-        Ok(CheckStatus::run_outcome(finals))
+        let status = CheckStatus::run_outcome(finals);
+        if !deploys || status != RunStatus::Passed {
+            return Ok(Verdict::without_deploy(status));
+        }
+        match self.deployment(id).await? {
+            Ok(deployment) => {
+                let message = format!(
+                    "deploying {} vms from {}",
+                    deployment.vms().len(),
+                    deployment.path()
+                );
+                self.log_text(id, LogOrigin::Run, &message).await?;
+                Ok(Verdict {
+                    status,
+                    deployment: Some(deployment),
+                })
+            }
+            Err(reason) => {
+                self.log_text(id, LogOrigin::Run, &reason).await?;
+                Ok(Verdict::without_deploy(RunStatus::Failed))
+            }
+        }
+    }
+
+    /// The deployment a passed run built, or why it is unusable (the
+    /// repo's fault: the run fails).
+    async fn deployment(&self, run: RunId) -> Result<Result<Deployment, String>, Fault> {
+        let checks = self.store.checks(run).await?;
+        let Some(check) = checks.iter().find(|check| check.attr() == DEPLOYMENT_ATTR) else {
+            return Ok(Err(format!("deploy: {DEPLOYMENT_ATTR} was not evaluated")));
+        };
+        let output = check.derivation().and_then(|drv| drv.outputs().first());
+        let path = match (check.status(), output) {
+            (CheckStatus::Passed | CheckStatus::Cached, Some(path)) => path,
+            (status, _) => {
+                return Ok(Err(format!(
+                    "deploy: {DEPLOYMENT_ATTR} is {}, so there is nothing to deploy",
+                    status.as_str()
+                )));
+            }
+        };
+        let json = match self.builder.read_output(path, MAX_DEPLOYMENT_BYTES).await {
+            Ok(json) => json,
+            Err(BuilderError::Flake(reason)) => return Ok(Err(format!("deploy: {reason}"))),
+            Err(error) => return Err(Fault::Builder(error)),
+        };
+        Ok(Deployment::parse(String::from(path.as_str()), &json)
+            .map_err(|reason| format!("deploy: {reason}")))
     }
 
     /// What each queued check needs built first. A failure only costs that

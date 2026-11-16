@@ -1,11 +1,15 @@
 //! `procurator`: the monolith's composition root. Runs the CI service,
-//! repohub and the cache in one process, each on the address its own config
-//! names.
+//! repohub, the cache and optionally the control plane in one process, each
+//! on the address its own config names.
 //! Why: one unit to deploy on a homelab. Crates call each other's
 //! application services directly here, never over HTTP; only external
-//! programs (the git hook, Nix) use the HTTP APIs.
+//! programs (the git hook, Nix, workers) use the network APIs.
+
+// Why: project rule — async functions return `impl Future + Send` explicitly.
+#![allow(clippy::manual_async_fn)]
 
 mod config;
+mod deploy;
 
 use std::fmt;
 use std::path::PathBuf;
@@ -17,12 +21,14 @@ use cache::adapters::fs::FsBlobStore;
 use cache::adapters::sqlite::SqliteIndex;
 use cache::adapters::system::SystemEnv;
 use ci_service::adapters::access::OpenAccess;
+use ci_service::adapters::webhook::HttpDeploy;
 use ci_service::runtime::{Runtime, StartError};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use self::config::{Config, ConfigError};
+use self::deploy::ControlPlaneDeploy;
 
 /// Startup and serving failures, by service.
 #[derive(Debug)]
@@ -30,6 +36,7 @@ enum MainError {
     Config(ConfigError),
     CiConfig(ci_service::config::ConfigError),
     CiStart(StartError),
+    ControlPlane(String),
     RepohubConfig(repohub::config::ConfigError),
     RepohubDatabase(repohub::adapters::shared::database::DatabaseError),
     CacheConfig(cache::config::ConfigError),
@@ -45,6 +52,7 @@ impl fmt::Display for MainError {
             Self::Config(e) => e.fmt(f),
             Self::CiConfig(e) => write!(f, "ci: {e}"),
             Self::CiStart(e) => write!(f, "ci: {e}"),
+            Self::ControlPlane(e) => write!(f, "control plane: {e}"),
             Self::RepohubConfig(e) => write!(f, "repohub: {e}"),
             Self::RepohubDatabase(e) => write!(f, "repohub: {e}"),
             Self::CacheConfig(e) => write!(f, "cache: {e}"),
@@ -169,6 +177,27 @@ async fn start_repohub(path: &std::path::Path) -> Result<Started, MainError> {
     })
 }
 
+/// Start the CI service. With a control plane config, the control plane
+/// runs in this process and deploys go to it directly; otherwise they are
+/// sent to each repo's `deploy.url` over HTTP.
+async fn start_ci(
+    config: ci_service::config::Config,
+    control_plane: Option<&std::path::Path>,
+) -> Result<Runtime, MainError> {
+    let Some(path) = control_plane else {
+        let deploys = HttpDeploy::new().map_err(|e| MainError::CiStart(StartError::Notifier(e)))?;
+        return Runtime::start(config, OpenAccess, deploys)
+            .await
+            .map_err(MainError::CiStart);
+    };
+    let plane = control_plane::config::Config::read(path).map_err(MainError::ControlPlane)?;
+    let publisher =
+        control_plane::start(&plane).map_err(|e| MainError::ControlPlane(e.to_string()))?;
+    Runtime::start(config, OpenAccess, ControlPlaneDeploy::new(publisher))
+        .await
+        .map_err(MainError::CiStart)
+}
+
 /// Serve one service until `stop` fires.
 async fn serve(started: Started, mut stop: watch::Receiver<bool>) -> Result<(), MainError> {
     let listener = tokio::net::TcpListener::bind(&started.address)
@@ -195,9 +224,7 @@ async fn run(config: Config) -> Result<(), MainError> {
     // cannot say who may read a repo; once it can, an adapter here wraps
     // its service and replaces this.
     // Why: held to the end; dropping it stops the CI workers.
-    let runtime = Runtime::start(ci_config, OpenAccess)
-        .await
-        .map_err(MainError::CiStart)?;
+    let runtime = start_ci(ci_config, config.control_plane()).await?;
     let repohub = start_repohub(config.repohub()).await?;
     let (cache, gc) = start_cache(config.cache()).await?;
     tracing::warn!("ci: open access: every caller reads every repo's runs and logs");

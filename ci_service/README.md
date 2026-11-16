@@ -34,6 +34,7 @@ Hexagonal, like `cache`:
   outcome; `log.rs` tags each line with its origin (run, check, derivation);
   `repo_config.rs` holds the per-run settings and the service's caps;
   `event.rs` decides which events a finished run sends, and to whom;
+  `deploy.rs` says which runs deploy and validates the deployment file;
   `access.rs` holds credentials and principals.
 - `src/application/`: `Service` with every use case, `service/pipeline.rs`
   (the worker: claim, read config, evaluate, build and rerun, record),
@@ -45,11 +46,12 @@ Hexagonal, like `cache`:
   `store_contract.rs`), `nix/` (`NixBuilder`: `nix-eval-jobs`, one
   `nix build --keep-going`, internal-json log parsing, buildable systems from
   `nix config show`; `GitConfigSource`: `procurator.nix` by blob id),
-  `webhook.rs` (`WebhookNotifier`), `secrets.rs` (`FileSecretStore`),
+  `webhook.rs` (`WebhookNotifier`, `HttpDeploy`), `notify.rs` (`Routed`:
+  webhooks and deploys to their own adapters), `secrets.rs` (`FileSecretStore`),
   `access.rs` (`OpenAccess`), `system.rs` (clock), `http/` (axum router).
 - `src/runtime.rs`: the production wiring (SQLite, Nix, git, webhooks,
-  workers, dispatcher, log retention) from a `Config` and an `Access`
-  adapter. `src/main.rs` (standalone) and the root `procurator` crate (the
+  workers, dispatcher, log retention) from a `Config`, an `Access` adapter
+  and a deploy adapter. `src/main.rs` (standalone) and the root `procurator` crate (the
   monolith: CI, repohub and cache in one process) both start it.
 
 ## HTTP API
@@ -131,8 +133,26 @@ unknown keys fail the run:
 The service caps these with `max_reruns`, `max_check_timeout` and
 `max_run_timeout`. A check's `tries` shows how many builds it took, so
 `passed` with `tries > 1` is a flaky check. The full schema (webhooks,
-retention, cache, deploy) is in the spec; `deploy` is validated now and
-used by a later step.
+retention, cache, deploy) is in the spec.
+
+## Deploy
+
+On the default branch:
+
+```nix
+{ deploy = { url = "http://cp.lan:8090/deploy"; branch = "main"; }; }
+```
+
+A run on `deploy.branch` then also builds the flake's
+`procuratorDeployment` (it shows as a check of that name): a derivation
+whose output is a JSON file listing every VM to run (id, worker, kernel,
+initrd, cmdline, disk, CPUs, memory). `procurator.libs.<system>.deployment`
+writes it from `diskVm` systems; see `nix/examples/python-workload`. When
+the run passes, the file is validated and the run's `run.succeeded`, with
+the deployment, is delivered until it arrives: the monolith with a
+`control_plane` config publishes it as the control plane's next generation
+(the same file again changes nothing); otherwise it is POSTed to
+`deploy.url`. A broken deployment fails the run and deploys nothing.
 
 ## Log retention
 
@@ -143,12 +163,13 @@ and checks stay, so history and flakiness survive.
 
 ## Status
 
-Build steps 1–7 of the spec are done: queued runs are worked by
+Build steps 1–8 of the spec are done: queued runs are worked by
 `max_concurrent_runs` workers, `procurator.nix` picks the checks, reruns
 and timeouts, every check is evaluated, cached or built, each check's log
 (with its dependencies) is stored and can be followed live, what was built
 is pushed to the cache, events reach the repo's webhooks, reads go through
 the `Access` port, old logs expire, and the root `procurator` binary runs
-CI, repohub and the cache in one process. Step 7 added the NixOS options
-for remote builders. Not yet: real access control (repohub has no
-credentials), the hook token, deploy (step 8).
+CI, repohub and the cache (and optionally the control plane) in one
+process. Step 7 added the NixOS options for remote builders, step 8 the
+deploy. Not yet: real access control (repohub has no credentials), the
+hook token.

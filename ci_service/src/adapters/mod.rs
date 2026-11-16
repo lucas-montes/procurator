@@ -5,6 +5,7 @@ pub mod access;
 pub mod http;
 pub mod memory;
 pub mod nix;
+pub mod notify;
 #[cfg(test)]
 pub mod scripted;
 pub mod secrets;

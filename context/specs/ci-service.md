@@ -1,6 +1,6 @@
 # CI Service — Spec
 
-Status: agreed on 2026-11-14. Build steps 1–5 are done (see "Build
+Status: agreed on 2026-11-14. Build steps 1–8 are done (see "Build
 order"); "Current state" at the end describes the scaffold they replaced.
 
 ## Purpose
@@ -12,7 +12,8 @@ to whoever cares through webhooks and a deploy URL. Any UI, repohub included,
 reads results from the CI API.
 
 Non-goals for now: editing the config from a UI (that means committing to the
-repo), and the `deploy` section's schema beyond one on/off knob.
+repo), and the `deploy` section's schema beyond `url` and `branch` (what is
+deployed comes from the flake, see "Deploy").
 
 ## Decisions
 
@@ -24,7 +25,7 @@ repo), and the `deploy` section's schema beyond one on/off knob.
 | Reuse | No "skip this commit" shortcut. Every run evaluates, and anything already in the cache counts as passed without building. Results users pushed from their machines are trusted. |
 | Reruns, timeouts | Set in the repo config, capped by service-side limits. |
 | Logs | Per check, streamed live and stored. Retention set per repo. Only users related to the repo can read them. |
-| Notifications | One `Notifier` port. Adapters: webhook (per repo, selectable events) and deploy (POSTs `run.succeeded` to the repo's `deploy.url`). Repohub is not notified; it calls the CI API. |
+| Notifications | One `Notifier` port. Adapters: webhook (per repo, selectable events) and deploy (`run.succeeded` with the run's deployment: in the monolith, published to the embedded control plane; otherwise POSTed to the repo's `deploy.url`). Repohub is not notified; it calls the CI API. |
 | Deployment | Built and shipped as a monolith first: the root `procurator` binary composes `ci_service`, `repohub` and `cache` in one process, and ports are satisfied by direct function calls. The same ports have HTTP adapters, so the crates can be split into separate services later without touching domain or application code. |
 | Auth | Lives entirely behind the `Access` port. In the monolith it calls repohub's application service directly. When split, it calls repohub's API or verifies a JWT. `ci_service` itself stores no users. |
 | Dependency logs | Shown live at run level while building, then attached to every check that depends on them. |
@@ -70,10 +71,37 @@ fails the run with a clear error and does not fall back to defaults.
 
   deploy = {
     url = null;                 # null = no deploy; otherwise run.succeeded is POSTed here
+                                # (the monolith with a control plane deploys in process
+                                # and only reads it as "on")
     branch = "main";            # only runs on this branch trigger a deploy
   };
 }
 ```
+
+### Deploy
+
+What a run deploys is a flake output, not config: with `deploy.url` set
+(default branch) and the run on `deploy.branch`, the run also evaluates and
+builds `procuratorDeployment`, shown as a check of that name. It must be a
+derivation whose output is a JSON file:
+
+```json
+{"version": 1, "vms": [{"id": "web", "worker": "worker-1",
+  "kernel": "/nix/store/…/bzImage", "initramfs": "/nix/store/…/initrd",
+  "cmdline": "console=ttyS0 … init=/nix/store/…/init",
+  "disk": "/nix/store/…/nixos.img", "cpus": 2, "memoryMiB": 1024}]}
+```
+
+`procurator.libs.<system>.deployment { vms.<id> = { worker; nixos; cpus;
+memoryMiB; }; }` writes it from `diskVm` systems. The file references the
+boot files, so building it builds them and the cache push carries them.
+Every VM is checked (version 1; 1–256 VMs; unique ids of `a-z 0-9 -`; boot
+files are store paths; 1–256 CPUs; 64 MiB–1 TiB): an invalid file, or a
+deployment that was skipped or did not build, fails the run and nothing is
+deployed. A missing `procuratorDeployment` fails its check. The deployment
+is the whole desired state: the control plane replaces its generation with
+it, and the file's store path is the intent, so deploying the same file
+again changes nothing.
 
 ### Which commit's config applies
 
@@ -246,12 +274,15 @@ reads undelivered events and calls each adapter interested in that event kind.
 Each adapter has its own retry policy:
 
 - **webhook**: a few tries with backoff, then marked given up.
-- **deploy**: POSTs the `run.succeeded` payload (repo, commit, branch, output
-  paths) to `deploy.url` when the run is on `deploy.branch`. Retries with
-  backoff until it gets a 2xx, because a lost deploy means the cluster never
-  converges.
+- **deploy**: the `run.succeeded` payload (repo, commit, ref, output paths)
+  plus `deployment` (the file's store path and VMs), when the run is on
+  `deploy.branch`. In the monolith with a control plane it is published in
+  process (`ControlPlaneDeploy` in the root crate); otherwise POSTed to
+  `deploy.url` (`HttpDeploy`). Retried with backoff (30 s, 2 min, 10 min,
+  then every 30 min) until it succeeds, because a lost deploy means the
+  cluster never converges.
 
-Both are plain HTTP POSTs with different filters and retry policies. Webhooks
+Webhooks and deploys have different filters and retry policies. Webhooks
 are filtered by the repo-level config's `events` list, and their URL is
 resolved through `SecretStore` at delivery time. Repohub gets no events: it
 reads status from the CI API.
@@ -459,9 +490,25 @@ src/  (root `procurator` crate: the monolith's composition root)
    substituters. The CI's system discovery is tested against the exact
    `/etc/nix/machines` line NixOS writes. Not tested: a real build over
    SSH (needs a two-machine VM test).
-8. **Deploy.** In-process control-plane adapter for `run.succeeded`.
-9. **Split deployment** (when needed). Repohub-API or JWT `Access` adapter,
-   HTTP deploy adapter.
+8. **Deploy.** ✅ Done 2026-11-16. `deploy.url` and `deploy.branch` are read
+   from the default branch. A run on the deploy branch also builds the
+   flake's `procuratorDeployment` (see "Deploy"); when it passes, the file
+   is read (fetched from a substituter if cached elsewhere), validated, and
+   queued with the run's result as a `Deploy` delivery. The control plane
+   crate gained `control_plane::start` (node plus Cap'n Proto server on
+   their own thread, port bound before it returns) and a `Publisher`; its
+   node numbers the generation and skips an intent that is already active.
+   The monolith runs it when its config names a `control_plane` file and
+   deploys through `ControlPlaneDeploy`; without one, and in the standalone
+   binary, `HttpDeploy` POSTs to `deploy.url`. `libs.<system>.deployment`
+   writes the file from `diskVm` systems. Tested end to end with the real
+   monolith (generation 1 published, the same commit again left it at 1,
+   a feature branch did not deploy). Not yet: a worker booting what was
+   deployed (the worker must have the store paths; it does not fetch them),
+   ordering between runs that finish out of order, and more than one repo
+   deploying to one control plane (each deploy replaces the whole state).
+9. **Split deployment** (when needed). Repohub-API or JWT `Access` adapter.
+   (The HTTP deploy adapter landed in step 8.)
 10. **Isolation.** VM `Builder` adapter.
 
 NixOS module, part of step 2 (done): `path = [ config.nix.package pkgs.git nix-eval-jobs ]`,
@@ -499,16 +546,18 @@ security options are passed on every `nix-eval-jobs` call by the adapter.
   access is checked through `RepohubAccess` with no HTTP in between.
 - AC13: `cargo test -p ci_service` passes without building `repohub`, `cache`
   or `control_plane`: `ci_service`'s `Cargo.toml` depends on none of them.
-- AC12: A run on `deploy.branch` with `deploy.url` set POSTs once to that URL.
-  If the URL is down, the POST is retried until it succeeds.
+- AC12: A run on `deploy.branch` with `deploy.url` set delivers its
+  deployment once: published to the embedded control plane in the monolith,
+  POSTed to that URL otherwise. If it fails, it is retried until it
+  succeeds.
 - AC10: Changing only `src/` (not `procurator.nix`) between two pushes
   evaluates the config once.
 
 ## Open questions
 
-1. **`deploy.url` in the monolith.** The in-process deploy adapter doesn't
-   need a URL. Should `procurator.nix` say `deploy.enable = true` instead, with
-   the URL only in the service config for split deployments?
+1. ~~**`deploy.url` in the monolith.**~~ Decided 2026-11-16: keep
+   `deploy.url`. In the monolith with a control plane it only means "on";
+   the URL is used when deploys go over HTTP.
 2. **Repohub has no credentials or permissions yet.** Its database has
    users, projects and project members, but nothing authenticates a
    request, and nothing says who may read a repo. Until it does, CI uses
@@ -518,8 +567,8 @@ security options are passed on every `nix-eval-jobs` call by the adapter.
 
 ## Current state (2026-11-14)
 
-The scaffold that steps 1–5 replaced. Item still open: the deploy call
-(step 8). The rest is fixed.
+The scaffold that steps 1–5 replaced; step 8 added the deploy call. All
+fixed.
 
 - `builds.rs::git_url` produces `/path/repo.git#<sha>`, which Nix reads as an
   output attribute. Every build fails with "could not find a flake.nix file".
