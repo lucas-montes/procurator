@@ -61,6 +61,13 @@ rec {
     # unset so modules fall back to pkgs.nix.
     options.nix.settings =
       lib.mkOption { type = lib.types.attrsOf lib.types.unspecified; default = {}; };
+    # Why: ci-service fills the remote builders; ci-builder runs sshd.
+    options.nix.buildMachines =
+      lib.mkOption { type = lib.types.listOf lib.types.unspecified; default = []; };
+    options.nix.distributedBuilds =
+      lib.mkOption { type = lib.types.bool; default = false; };
+    options.services.openssh =
+      lib.mkOption { type = lib.types.attrsOf lib.types.unspecified; default = {}; };
     options.assertions = lib.mkOption {
       type = lib.types.listOf (lib.types.submodule {
         options = {

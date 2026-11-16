@@ -47,7 +47,20 @@ let
           enable = true;
           caches.public = { visibility = "public"; signKeyFile = "/run/secrets/public.key"; };
         };
-        services.procurator.ci.enable = true;
+        services.procurator.ci = {
+          enable = true;
+          remoteBuilders = [{
+            hostName = "mac.lab";
+            systems = [ "aarch64-darwin" ];
+            sshKey = "/run/secrets/ci-builder-key";
+          }];
+        };
+        # Why: normally another host; here it proves the module composes
+        # with the real nix, users and openssh options.
+        services.procurator.ciBuilder = {
+          enable = true;
+          authorizedKeys = [ "ssh-ed25519 AAAAC3Nza root@ci" ];
+        };
         services.procurator.repohub.enable = true;
         services.procurator.gitServer.enable = true;
 
@@ -117,3 +130,11 @@ assertionsClear
 && assert' "worker gets CAP_NET_ADMIN for TAP devices"
   (lib.elem "CAP_NET_ADMIN" cfg.systemd.services."procurator-worker".serviceConfig.AmbientCapabilities)
 && assert' "journal gateway enabled for the console" cfg.services.journald.gateway.enable
+&& assert' "CI host lists its remote builder in /etc/nix/machines"
+  (lib.hasInfix "ssh-ng://nix-builder@mac.lab aarch64-darwin /run/secrets/ci-builder-key"
+    cfg.environment.etc."nix/machines".text)
+&& assert' "builders substitute" cfg.nix.settings.builders-use-substitutes
+&& assert' "builder user is trusted" (lib.elem "nix-builder" cfg.nix.settings.trusted-users)
+&& assert' "builder key only runs nix-daemon"
+  (lib.all (k: lib.hasPrefix "restrict,command=\"" k && lib.hasInfix "/bin/nix-daemon --stdio\" " k)
+    cfg.users.users.nix-builder.openssh.authorizedKeys.keys)

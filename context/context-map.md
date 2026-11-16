@@ -50,6 +50,7 @@ Quick navigation for AI sessions working on Procurator.
   - `ci_service/src/application/` - `Service` use cases, `service/pipeline.rs` (worker), `service/logs.rs` (stored/followed logs, dependency logs per check), `service/live.rs` (per-run broadcast), `service/outbox.rs` (dispatcher), `service/retention.rs`, `ports.rs` (`RunStore`, `Builder`, `ConfigSource`, `Notifier`, `SecretStore`, `Access`, `Clock`)
   - `ci_service/src/adapters/` - `sqlite.rs`, `memory.rs` (held to `store_contract.rs`), `nix/` (`NixBuilder`: nix-eval-jobs, nix build, internal-json, systems, requisites; `GitConfigSource`: procurator.nix), `webhook.rs`, `secrets.rs`, `access.rs` (`OpenAccess`), `system.rs`, `http/` (incl. SSE)
   - `ci_service/src/runtime.rs` - production wiring shared by `src/main.rs` and the monolith
+  - NixOS: `nix/modules/ci-service.nix` (`remoteBuilders` → `nix.buildMachines`), `nix/modules/ci-builder.nix` (remote builder host)
 - `src/` (root `procurator` crate) - the monolith: `main.rs` starts `ci_service::runtime`, repohub and the cache in one process; `config.rs` names their three config files
 
 ### Console (`console/`)

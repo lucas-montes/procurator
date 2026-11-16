@@ -123,6 +123,25 @@ mod tests {
     }
 
     #[test]
+    fn the_file_nixos_writes_for_remote_builders() {
+        // Why: verbatim what services.procurator.ci.remoteBuilders renders.
+        let read = |_: &str| {
+            Ok(String::from(
+                "ssh-ng://nix-builder@mac.lab aarch64-darwin,x86_64-darwin /run/secrets/k 4 1 big-parallel - -\n",
+            ))
+        };
+        assert_eq!(
+            parse(&config("@/etc/nix/machines", 8), read).unwrap(),
+            [
+                "x86_64-linux",
+                "i686-linux",
+                "aarch64-darwin",
+                "x86_64-darwin"
+            ]
+        );
+    }
+
+    #[test]
     fn unreadable_machines_file_is_an_error() {
         assert!(parse(&config("@/nope", 1), no_file).is_err());
     }

@@ -37,6 +37,7 @@ in {
     ./console.nix
     ./journal-gateway.nix
     ./ci-service.nix
+    ./ci-builder.nix
     ./cache.nix
     ./repohub
   ];

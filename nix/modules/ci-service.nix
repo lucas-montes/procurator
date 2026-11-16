@@ -31,6 +31,74 @@ let
     secrets_file = cfg.secretsFile;
   });
   cacheUrl = name: "${cfg.cache.url}/${name}";
+
+  # Why: the CI never talks to builders itself; the host's nix-daemon sends
+  # a build to the machine listed for its system, and the CI reads this
+  # list back (`nix config show`) to know which systems it can build.
+  toBuildMachine = builder: {
+    inherit (builder) hostName systems sshUser sshKey protocol maxJobs speedFactor
+      supportedFeatures mandatoryFeatures publicHostKey;
+  };
+
+  remoteBuilder = types.submodule {
+    options = {
+      hostName = mkOption {
+        type = types.str;
+        example = "mac-mini.lan";
+        description = "Builder host, reachable over SSH from the CI host.";
+      };
+      systems = mkOption {
+        type = types.nonEmptyListOf types.str;
+        example = [ "aarch64-darwin" "x86_64-darwin" ];
+        description = "Systems the builder builds. Checks for a system no machine builds are skipped.";
+      };
+      sshUser = mkOption {
+        type = types.str;
+        default = "nix-builder";
+        description = "User on the builder (services.procurator.ciBuilder.user there).";
+      };
+      sshKey = mkOption {
+        type = types.str;
+        example = "/run/secrets/ci-builder-key";
+        description = ''
+          Private SSH key the CI host's nix-daemon (root) logs in with. Keep it
+          out of the Nix store; its public half goes in the builder's
+          services.procurator.ciBuilder.authorizedKeys.
+        '';
+      };
+      publicHostKey = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "The builder's SSH host key, base64-encoded (`base64 -w0 /etc/ssh/ssh_host_ed25519_key.pub`). null: rely on root's known_hosts.";
+      };
+      protocol = mkOption {
+        type = types.enum [ "ssh-ng" "ssh" ];
+        default = "ssh-ng";
+        description = "Store protocol. ciBuilder only accepts ssh-ng (its key runs nix-daemon only).";
+      };
+      maxJobs = mkOption {
+        type = types.ints.positive;
+        default = 1;
+        description = "Builds sent to it at once.";
+      };
+      speedFactor = mkOption {
+        type = types.ints.positive;
+        default = 1;
+        description = "Preference among builders of the same system; higher is preferred.";
+      };
+      supportedFeatures = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        example = [ "big-parallel" "kvm" "nixos-test" ];
+        description = "System features it offers (derivations asking for others are not sent to it).";
+      };
+      mandatoryFeatures = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        description = "Features a derivation must ask for to be sent to it.";
+      };
+    };
+  };
 in {
   options.services.procurator.ci = {
     enable = mkEnableOption "Procurator CI/CD service";
@@ -198,6 +266,22 @@ in {
       };
     };
 
+    remoteBuilders = mkOption {
+      type = types.listOf remoteBuilder;
+      default = [ ];
+      example = literalExpression ''
+        [ { hostName = "mac-mini.lan"; systems = [ "aarch64-darwin" ]; sshKey = "/run/secrets/ci-builder-key"; } ]
+      '';
+      description = ''
+        Machines the host's nix-daemon sends builds to (nix.buildMachines,
+        with distributedBuilds and builders-use-substitutes on, so builders
+        fetch dependencies from the caches themselves). A check missing from
+        the cache is built on a builder of its system, or on this host when
+        it builds that system. Set the builders up with
+        services.procurator.ciBuilder.
+      '';
+    };
+
     allowedUris = mkOption {
       type = types.listOf types.str;
       default = [ "github:" "gitlab:" "https://github.com/" "https://gitlab.com/" ];
@@ -249,12 +333,23 @@ in {
       message = "services.procurator.ci.defaultLogRetentionDays must not exceed maxLogRetentionDays.";
     }];
 
-    # Why: a check users already pushed is then `cached` at evaluation and
-    # never built here.
-    nix.settings = mkIf (cfg.cache.url != null && cfg.cache.substitute) {
-      extra-substituters = map cacheUrl ([ cfg.cache.publicCache ] ++ cfg.cache.readCaches);
-      extra-trusted-public-keys = cfg.cache.trustedPublicKeys;
-    };
+    nix = mkMerge [
+      # Why: a check users already pushed is then `cached` at evaluation
+      # and never built here.
+      (mkIf (cfg.cache.url != null && cfg.cache.substitute) {
+        settings = {
+          extra-substituters = map cacheUrl ([ cfg.cache.publicCache ] ++ cfg.cache.readCaches);
+          extra-trusted-public-keys = cfg.cache.trustedPublicKeys;
+        };
+      })
+      (mkIf (cfg.remoteBuilders != [ ]) {
+        distributedBuilds = true;
+        buildMachines = map toBuildMachine cfg.remoteBuilders;
+        # Why: a builder downloads what it can instead of the CI host
+        # uploading every input over SSH.
+        settings.builders-use-substitutes = true;
+      })
+    ];
 
     users.users.${cfg.user} = {
       isSystemUser = true;

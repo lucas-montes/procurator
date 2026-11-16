@@ -449,10 +449,16 @@ src/  (root `procurator` crate: the monolith's composition root)
      the cache in one process, each on the address of its own config
      (`procurator --config` names the three files), with one shutdown.
      Not yet: a NixOS module and a flake package for it.
-7. **Remote builders.** NixOS module options that fill `nix.buildMachines`
-   (with `distributedBuilds` and `builders-use-substitutes`) for the CI host,
-   plus a small builder-host module (SSH user, trusted key, cache as
-   substituter). Discovery and skipping already land in step 2.
+7. **Remote builders.** ✅ Done 2026-11-16. `services.procurator.ci.remoteBuilders`
+   (host, systems, SSH user and key, host key, protocol, jobs, speed,
+   features) fills `nix.buildMachines` and turns on `distributedBuilds` and
+   `builders-use-substitutes`. `services.procurator.ciBuilder` sets up a
+   NixOS builder: a system user that is a Nix trusted user (needed to
+   receive the CI host's unsigned inputs), its authorized keys restricted
+   to `nix-daemon --stdio` (so ssh-ng only), sshd, and the caches as
+   substituters. The CI's system discovery is tested against the exact
+   `/etc/nix/machines` line NixOS writes. Not tested: a real build over
+   SSH (needs a two-machine VM test).
 8. **Deploy.** In-process control-plane adapter for `run.succeeded`.
 9. **Split deployment** (when needed). Repohub-API or JWT `Access` adapter,
    HTTP deploy adapter.

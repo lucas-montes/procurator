@@ -60,7 +60,9 @@ let  # ── 1. Defaults ──────────────────
     && assert' "no secrets by default" (!(defaultsJson ? secrets_file))
     && assertEq "default_log_retention_days" defaultsJson.default_log_retention_days 30
     && assertEq "max_log_retention_days" defaultsJson.max_log_retention_days 365
-    && assertEq "no substituters by default" defaults.config.nix.settings { };
+    && assertEq "no substituters by default" defaults.config.nix.settings { }
+    && assertEq "no remote builders by default" defaults.config.nix.buildMachines [ ]
+    && assert' "local builds only by default" (!defaults.config.nix.distributedBuilds);
 
   # ── 2. Explicit overrides ──────────────────────────────────────────
   explicit = evalCi {
@@ -80,6 +82,12 @@ let  # ── 1. Defaults ──────────────────
     secretsFile = "/run/secrets/ci-secrets.toml";
     defaultLogRetentionDays = 14;
     maxLogRetentionDays = 60;
+    remoteBuilders = [{
+      hostName = "mac.lab";
+      systems = [ "aarch64-darwin" ];
+      sshKey = "/run/secrets/ci-builder-key";
+      maxJobs = 4;
+    }];
     cache = {
       url = "http://cache.lab:8081";
       netrcFile = "/run/secrets/ci-netrc";
@@ -113,7 +121,21 @@ let  # ── 1. Defaults ──────────────────
     && assertEq "substituters"
       explicit.config.nix.settings.extra-substituters
       [ "http://cache.lab:8081/public" "http://cache.lab:8081/private-lucas" ]
-    && assertEq "trusted keys" explicit.config.nix.settings.extra-trusted-public-keys [ "cache.local:abc=" ];
+    && assertEq "trusted keys" explicit.config.nix.settings.extra-trusted-public-keys [ "cache.local:abc=" ]
+    && assert' "distributed builds on" explicit.config.nix.distributedBuilds
+    && assert' "builders substitute" explicit.config.nix.settings.builders-use-substitutes
+    && assertEq "build machine" explicit.config.nix.buildMachines [{
+      hostName = "mac.lab";
+      systems = [ "aarch64-darwin" ];
+      sshUser = "nix-builder";
+      sshKey = "/run/secrets/ci-builder-key";
+      protocol = "ssh-ng";
+      maxJobs = 4;
+      speedFactor = 1;
+      supportedFeatures = [ ];
+      mandatoryFeatures = [ ];
+      publicHostKey = null;
+    }];
 
   # ── 3. User/group/workspace wiring ─────────────────────────────────
   wiring = defaults;

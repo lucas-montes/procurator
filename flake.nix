@@ -189,6 +189,7 @@
             nixos-worker-fast = fastTest "nixos-worker-fast" ./nix/tests/worker-service-fast.nix;
             nixos-cache-fast = fastTest "nixos-cache-fast" ./nix/tests/cache-fast.nix;
             nixos-ci-service-fast = fastTest "nixos-ci-service-fast" ./nix/tests/ci-service-fast.nix;
+            nixos-ci-builder-fast = fastTest "nixos-ci-builder-fast" ./nix/tests/ci-builder-fast.nix;
             nixos-repohub-fast = fastTest "nixos-repohub-fast" ./nix/tests/repohub-fast.nix;
             nixos-control-plane-fast = fastTest "nixos-control-plane-fast" ./nix/tests/control-plane-fast.nix;
             nixos-console-fast = fastTest "nixos-console-fast" ./nix/tests/console-fast.nix;

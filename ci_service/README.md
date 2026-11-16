@@ -18,8 +18,10 @@ The CI host is not a build farm:
 2. CI evaluates every check. One whose outputs are already in the cache (or
    on the host) is `cached` and nothing is built or downloaded.
 3. A check missing from the cache goes to a remote builder for its system
-   when the host's Nix config lists one (`nix.buildMachines`), and is built
-   on the CI host otherwise.
+   when the host's Nix config lists one (`nix.buildMachines`, filled by
+   `services.procurator.ci.remoteBuilders`; builders are set up with
+   `services.procurator.ciBuilder`, see `nix/modules/SERVICE_MODULES.md`),
+   and is built on the CI host otherwise.
 4. A check whose system nobody can build is `skipped`.
 
 ## Layout
@@ -141,12 +143,12 @@ and checks stay, so history and flakiness survive.
 
 ## Status
 
-Build steps 1–6 of the spec are done: queued runs are worked by
+Build steps 1–7 of the spec are done: queued runs are worked by
 `max_concurrent_runs` workers, `procurator.nix` picks the checks, reruns
 and timeouts, every check is evaluated, cached or built, each check's log
 (with its dependencies) is stored and can be followed live, what was built
 is pushed to the cache, events reach the repo's webhooks, reads go through
 the `Access` port, old logs expire, and the root `procurator` binary runs
-CI, repohub and the cache in one process. Not yet: real access control
-(repohub has no credentials), the hook token, remote builder options
-(step 7), deploy (step 8).
+CI, repohub and the cache in one process. Step 7 added the NixOS options
+for remote builders. Not yet: real access control (repohub has no
+credentials), the hook token, deploy (step 8).
