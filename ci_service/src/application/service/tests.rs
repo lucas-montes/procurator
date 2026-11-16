@@ -4,10 +4,11 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use super::Service;
 use crate::adapters::memory::MemoryRunStore;
-use crate::adapters::scripted::{FixedConfig, ScriptedBuilder, derivation};
+use crate::adapters::scripted::{FixedConfig, RecordingNotifier, ScriptedBuilder, derivation};
 use crate::application::ServiceError;
 use crate::application::ports::{BuildEvent, BuilderError, Clock, Evaluated};
 use crate::domain::check::{CheckStatus, LOCAL_MACHINE};
+use crate::domain::event::{EventKind, EventPayload, Target, Webhook};
 use crate::domain::log::LogOrigin;
 use crate::domain::repo_config::{
     CachePolicy, CheckSelection, Limits, RepoSettings, RunSettings, Timeouts,
@@ -30,7 +31,7 @@ fn limits() -> Limits {
 
 /// A service whose builder evaluates to nothing.
 fn service() -> (
-    Service<MemoryRunStore, &'static TestClock, ScriptedBuilder, FixedConfig>,
+    Service<MemoryRunStore, &'static TestClock, ScriptedBuilder, FixedConfig, RecordingNotifier>,
     &'static TestClock,
 ) {
     with_builder(ScriptedBuilder::new(&["x86_64-linux"], Ok(Vec::new())))
@@ -39,7 +40,7 @@ fn service() -> (
 fn with_builder(
     builder: ScriptedBuilder,
 ) -> (
-    Service<MemoryRunStore, &'static TestClock, ScriptedBuilder, FixedConfig>,
+    Service<MemoryRunStore, &'static TestClock, ScriptedBuilder, FixedConfig, RecordingNotifier>,
     &'static TestClock,
 ) {
     with_config(builder, FixedConfig::default(), limits())
@@ -50,7 +51,7 @@ fn with_config(
     config: FixedConfig,
     limits: Limits,
 ) -> (
-    Service<MemoryRunStore, &'static TestClock, ScriptedBuilder, FixedConfig>,
+    Service<MemoryRunStore, &'static TestClock, ScriptedBuilder, FixedConfig, RecordingNotifier>,
     &'static TestClock,
 ) {
     with_cache(builder, config, limits, None)
@@ -62,13 +63,142 @@ fn with_cache(
     limits: Limits,
     cache: Option<CachePolicy>,
 ) -> (
-    Service<MemoryRunStore, &'static TestClock, ScriptedBuilder, FixedConfig>,
+    Service<MemoryRunStore, &'static TestClock, ScriptedBuilder, FixedConfig, RecordingNotifier>,
+    &'static TestClock,
+) {
+    assemble(builder, config, RecordingNotifier::default(), limits, cache)
+}
+
+fn assemble(
+    builder: ScriptedBuilder,
+    config: FixedConfig,
+    notifier: RecordingNotifier,
+    limits: Limits,
+    cache: Option<CachePolicy>,
+) -> (
+    Service<MemoryRunStore, &'static TestClock, ScriptedBuilder, FixedConfig, RecordingNotifier>,
     &'static TestClock,
 ) {
     let clock: &'static TestClock = Box::leak(Box::new(TestClock(AtomicI64::new(100))));
     let store = MemoryRunStore::new();
-    let service = Service::new(store, clock, builder, config, limits, cache);
+    let service = Service::new(store, clock, builder, config, notifier, limits, cache);
     (service, clock)
+}
+
+/// Repo settings on `refs/heads/main` with one webhook per secret.
+fn hooks(hooks: &[(&str, &[EventKind])]) -> RepoSettings {
+    let webhooks = hooks
+        .iter()
+        .map(|(secret, events)| Webhook::new(String::from(*secret), events.to_vec()).unwrap())
+        .collect();
+    RepoSettings::new(None, webhooks).on_branch(String::from("refs/heads/main"))
+}
+
+fn kinds(delivered: &[(Target, EventPayload)]) -> Vec<(String, EventKind)> {
+    delivered
+        .iter()
+        .map(|(Target::Webhook(secret), event)| (secret.clone(), event.kind()))
+        .collect()
+}
+
+#[tokio::test]
+async fn webhooks_get_exactly_the_events_they_want() {
+    let repo = hooks(&[
+        ("slack", &[EventKind::RunFailed]),
+        (
+            "all",
+            &[
+                EventKind::RunQueued,
+                EventKind::RunStarted,
+                EventKind::CheckFailed,
+            ],
+        ),
+    ]);
+    let config = FixedConfig::default().with_repo(repo);
+    let (service, _) = assemble(
+        mixed_builder(),
+        config,
+        RecordingNotifier::default(),
+        limits(),
+        None,
+    );
+    service.enqueue(request("lucas/dummy")).await.unwrap();
+    assert!(service.work_next().await.unwrap());
+    assert_eq!(service.deliver_due().await.unwrap(), 5);
+    assert_eq!(service.deliver_due().await.unwrap(), 0, "each is sent once");
+
+    let all = |kind| (String::from("all"), kind);
+    assert_eq!(
+        kinds(&service.notifier.delivered()),
+        [
+            all(EventKind::RunQueued),
+            all(EventKind::RunStarted),
+            (String::from("slack"), EventKind::RunFailed),
+            all(EventKind::CheckFailed),
+            all(EventKind::CheckFailed),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_down_webhook_is_retried_then_given_up_without_blocking_others() {
+    let repo = hooks(&[
+        ("down", &[EventKind::RunFailed]),
+        ("up", &[EventKind::RunFailed]),
+    ]);
+    let config = FixedConfig::default().with_repo(repo);
+    let notifier = RecordingNotifier::failing_for(vec![Target::Webhook(String::from("down"))]);
+    let (service, clock) = assemble(mixed_builder(), config, notifier, limits(), None);
+    service.enqueue(request("lucas/dummy")).await.unwrap();
+    assert!(service.work_next().await.unwrap());
+
+    assert_eq!(service.deliver_due().await.unwrap(), 2);
+    assert_eq!(
+        kinds(&service.notifier.delivered()),
+        [(String::from("up"), EventKind::RunFailed)]
+    );
+    assert_eq!(service.deliver_due().await.unwrap(), 0, "the retry waits");
+    for _ in 0..2 {
+        clock.0.fetch_add(60, Ordering::Relaxed);
+        assert_eq!(service.deliver_due().await.unwrap(), 1, "retried");
+    }
+    clock.0.fetch_add(3600, Ordering::Relaxed);
+    assert_eq!(
+        service.deliver_due().await.unwrap(),
+        0,
+        "given up after 3 tries"
+    );
+}
+
+#[tokio::test]
+async fn a_fixed_default_branch_announces_its_recovery() {
+    let repo = hooks(&[("slack", &[EventKind::RunRecovered])]);
+    let evaluation = |cached| Ok(vec![derivation("checks.x.a", "x86_64-linux", PASS, cached)]);
+    let failing = ScriptedBuilder::new(&["x86_64-linux"], evaluation(false));
+    let (service, _) = assemble(
+        failing,
+        FixedConfig::default().with_repo(repo),
+        RecordingNotifier::default(),
+        limits(),
+        None,
+    );
+    service.enqueue(request("lucas/dummy")).await.unwrap();
+    assert!(service.work_next().await.unwrap());
+    service.deliver_due().await.unwrap();
+    assert!(
+        service.notifier.delivered().is_empty(),
+        "nothing recovered yet"
+    );
+
+    // The next run of the same branch finds the check cached and passes.
+    *service.builder.evaluation_slot() = Some(evaluation(true));
+    service.enqueue(request("lucas/dummy")).await.unwrap();
+    assert!(service.work_next().await.unwrap());
+    service.deliver_due().await.unwrap();
+    assert_eq!(
+        kinds(&service.notifier.delivered()),
+        [(String::from("slack"), EventKind::RunRecovered)]
+    );
 }
 
 fn policy() -> CachePolicy {
@@ -104,7 +234,7 @@ async fn what_a_run_built_is_pushed_to_the_owners_cache() {
 #[tokio::test]
 async fn the_default_branch_picks_the_cache_but_not_someone_elses() {
     for (requested, expected) in [("public", Some("public")), ("private-alice", None)] {
-        let repo = RepoSettings::new(Some(String::from(requested)));
+        let repo = RepoSettings::new(Some(String::from(requested)), Vec::new());
         let config = FixedConfig::default().with_repo(repo);
         let (service, _) = with_cache(mixed_builder(), config, limits(), Some(policy()));
         let id = service.enqueue(request("lucas/dummy")).await.unwrap();

@@ -4,13 +4,15 @@
 
 use std::fmt;
 use std::future::Future;
+use std::time::Duration;
 
 use tokio::sync::mpsc;
 
 use crate::domain::check::{Check, CheckId, CheckStatus, Derivation, NewCheck, Systems};
+use crate::domain::event::{Delivery, EventPayload, Target};
 use crate::domain::log::{LogLine, LogOrigin, NewLogLine};
 use crate::domain::repo_config::{CheckSelection, RepoSettings, RunSettings, Timeouts};
-use crate::domain::run::{NewRun, RepoName, Run, RunId, RunStatus};
+use crate::domain::run::{GitRef, NewRun, RepoName, Run, RunId, RunStatus};
 
 /// Run store failure (the backend's message).
 #[derive(Debug)]
@@ -93,7 +95,53 @@ pub trait RunStore: Send + Sync + 'static {
         id: RunId,
         status: RunStatus,
         now: i64,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send {
+        self.finish_with_outbox(id, status, now, &[])
+    }
+
+    /// End a running run and queue `outbox` deliveries, atomically: either
+    /// both happen or neither. `false` (and nothing queued) when the run is
+    /// missing or not running.
+    fn finish_with_outbox(
+        &self,
+        id: RunId,
+        status: RunStatus,
+        now: i64,
+        outbox: &[(Target, EventPayload)],
     ) -> impl Future<Output = Result<bool, StoreError>> + Send;
+
+    /// Queue deliveries due now.
+    fn queue_deliveries(
+        &self,
+        outbox: &[(Target, EventPayload)],
+        now: i64,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// Up to `limit` pending deliveries due at `now`, oldest first.
+    fn due_deliveries(
+        &self,
+        now: i64,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<Delivery>, StoreError>> + Send;
+
+    /// Record one delivery attempt and what follows from it.
+    fn record_attempt(
+        &self,
+        id: i64,
+        next: NextAttempt,
+        error: Option<&str>,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// The status of the newest finished, non-errored run of `repo` on
+    /// `git_ref` older than `before`.
+    /// Why: "recovered" compares against the repo's last verdict, not an
+    /// infrastructure fault.
+    fn previous_status<'a>(
+        &'a self,
+        repo: &'a RepoName,
+        git_ref: &'a GitRef,
+        before: RunId,
+    ) -> impl Future<Output = Result<Option<RunStatus>, StoreError>> + Send + 'a;
 
     /// One run.
     fn run(&self, id: RunId) -> impl Future<Output = Result<Option<Run>, StoreError>> + Send;
@@ -293,6 +341,59 @@ pub trait ConfigSource: Send + Sync + 'static {
         &self,
         repo: &RepoName,
     ) -> impl Future<Output = Result<RepoSettings, RepoConfigError>> + Send;
+}
+
+/// What happens to a delivery after an attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NextAttempt {
+    /// It arrived.
+    Delivered,
+    /// Try again at this time (unix seconds).
+    RetryAt(i64),
+    /// Stop trying.
+    GiveUp,
+}
+
+/// Why a delivery failed.
+#[derive(Debug)]
+pub struct DeliveryError(String);
+
+impl DeliveryError {
+    /// Wrap a cause.
+    pub fn new(cause: impl fmt::Display) -> Self {
+        Self(cause.to_string())
+    }
+}
+
+impl fmt::Display for DeliveryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::error::Error for DeliveryError {}
+
+/// Delivers events to their targets. Each adapter has its own retries.
+pub trait Notifier: Send + Sync + 'static {
+    /// Send one event to one target.
+    fn deliver(
+        &self,
+        target: &Target,
+        payload: &EventPayload,
+    ) -> impl Future<Output = Result<(), DeliveryError>> + Send;
+
+    /// How long to wait before attempt `attempts + 1`, after `attempts`
+    /// failed ones; `None` to give up.
+    fn retry_delay(&self, target: &Target, attempts: u32) -> Option<Duration>;
+}
+
+/// Resolves secret names (e.g. webhook URLs) to their values.
+pub trait SecretStore: Send + Sync + 'static {
+    /// The secret's value, `None` when there is no such secret.
+    fn secret(
+        &self,
+        name: &str,
+    ) -> impl Future<Output = Result<Option<String>, DeliveryError>> + Send;
 }
 
 /// Wall clock.

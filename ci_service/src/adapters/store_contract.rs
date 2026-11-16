@@ -1,8 +1,9 @@
 //! One behavioral contract every `RunStore` adapter must satisfy.
 //! Why: the memory and `SQLite` stores must be interchangeable.
 
-use crate::application::ports::{RunQuery, RunStore};
+use crate::application::ports::{NextAttempt, RunQuery, RunStore};
 use crate::domain::check::{Check, CheckStatus, Derivation, NewCheck, Systems};
+use crate::domain::event::{EventKind, EventPayload, Target};
 use crate::domain::log::{LogLine, LogOrigin, NewLogLine};
 use crate::domain::run::{CommitHash, GitRef, NewRun, Pusher, RepoName, RunId, RunStatus};
 
@@ -22,7 +23,100 @@ pub async fn check<S: RunStore>(store: &S) {
     // Why: expects nothing queued before it; listing leaves runs queued.
     checks_and_logs(store).await;
     retries_and_closing(store).await;
+    outbox(store).await;
     listing(store).await;
+}
+
+async fn outbox<S: RunStore>(store: &S) {
+    let main = GitRef::parse(String::from("refs/heads/main")).unwrap();
+    let repo = RepoName::parse(String::from("lucas/outbox")).unwrap();
+    let first = store
+        .insert(request("lucas/outbox", None), 70)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.previous_status(&repo, &main, first).await.unwrap(),
+        None
+    );
+    store.claim_next(71).await.unwrap().unwrap();
+    let run = store.run(first).await.unwrap().unwrap();
+
+    let failed = EventPayload::for_run(EventKind::RunFailed, &run, RunStatus::Failed);
+    let hook = Target::Webhook(String::from("slack"));
+    let outbox = [(hook.clone(), failed.clone())];
+    assert!(
+        store
+            .finish_with_outbox(first, RunStatus::Failed, 72, &outbox)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .finish_with_outbox(first, RunStatus::Passed, 73, &outbox)
+            .await
+            .unwrap(),
+        "a finished run queues nothing more"
+    );
+
+    let due = store.due_deliveries(72, 10).await.unwrap();
+    assert_eq!(due.len(), 1, "exactly one delivery");
+    assert_eq!(
+        (due[0].target(), due[0].payload(), due[0].attempts()),
+        (&hook, &failed, 0)
+    );
+    assert!(
+        store.due_deliveries(71, 10).await.unwrap().is_empty(),
+        "not due yet"
+    );
+
+    let id = due[0].id();
+    store
+        .record_attempt(id, NextAttempt::RetryAt(100), Some("connection refused"))
+        .await
+        .unwrap();
+    assert!(store.due_deliveries(99, 10).await.unwrap().is_empty());
+    let retried = store.due_deliveries(100, 10).await.unwrap();
+    assert_eq!(retried[0].attempts(), 1);
+    store
+        .record_attempt(id, NextAttempt::Delivered, None)
+        .await
+        .unwrap();
+    assert!(store.due_deliveries(i64::MAX, 10).await.unwrap().is_empty());
+
+    store
+        .queue_deliveries(&[(hook.clone(), failed.clone())], 80)
+        .await
+        .unwrap();
+    let queued = store.due_deliveries(80, 10).await.unwrap();
+    assert_eq!(queued.len(), 1);
+    store
+        .record_attempt(queued[0].id(), NextAttempt::GiveUp, Some("404"))
+        .await
+        .unwrap();
+    assert!(store.due_deliveries(i64::MAX, 10).await.unwrap().is_empty());
+
+    // An errored run is no verdict: the failure before it still counts.
+    let second = store
+        .insert(request("lucas/outbox", None), 90)
+        .await
+        .unwrap();
+    store.claim_next(91).await.unwrap().unwrap();
+    assert!(store.finish(second, RunStatus::Errored, 92).await.unwrap());
+    let third = store
+        .insert(request("lucas/outbox", None), 93)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.previous_status(&repo, &main, third).await.unwrap(),
+        Some(RunStatus::Failed)
+    );
+    let other = GitRef::parse(String::from("refs/heads/dev")).unwrap();
+    assert_eq!(
+        store.previous_status(&repo, &other, third).await.unwrap(),
+        None
+    );
+    store.claim_next(94).await.unwrap().unwrap();
+    assert!(store.finish(third, RunStatus::Passed, 95).await.unwrap());
 }
 
 async fn retries_and_closing<S: RunStore>(store: &S) {

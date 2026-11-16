@@ -12,10 +12,11 @@ use tokio::sync::mpsc;
 use super::Service;
 use crate::application::ServiceError;
 use crate::application::ports::{
-    BuildEvent, Builder, BuilderError, Clock, ConfigSource, Evaluated, RepoConfigError, RunStore,
-    StoreError,
+    BuildEvent, Builder, BuilderError, Clock, ConfigSource, Evaluated, Notifier, RepoConfigError,
+    RunStore, StoreError,
 };
 use crate::domain::check::{Check, CheckId, CheckStatus, LOCAL_MACHINE, NewCheck};
+use crate::domain::event::{EventKind, EventPayload, deliveries};
 use crate::domain::log::{LogOrigin, NewLogLine};
 use crate::domain::repo_config::{RepoSettings, RunSettings, Timeouts};
 use crate::domain::run::{Run, RunId, RunStatus};
@@ -76,12 +77,13 @@ impl Fault {
     }
 }
 
-impl<S, C, B, R> Service<S, C, B, R>
+impl<S, C, B, R, N> Service<S, C, B, R, N>
 where
     S: RunStore,
     C: Clock,
     B: Builder,
     R: ConfigSource,
+    N: Notifier,
 {
     /// Work runs off the queue forever, waiting `poll` whenever it is empty
     /// or the store fails. Drop the future to stop; a run cut off this way
@@ -116,7 +118,10 @@ where
             };
             let id = run.id();
             tracing::info!(run = %id, repo = run.request().repo().as_str(), "run started");
-            let result = self.execute(&run).await;
+            let repo = self.repo_settings(&run).await?;
+            self.announce(id, EventKind::RunStarted, RunStatus::Running, &repo)
+                .await?;
+            let result = self.execute(&run, &repo).await;
             let status = match result {
                 Ok(status) => status,
                 Err(fault) => {
@@ -134,14 +139,60 @@ where
                     status
                 }
             };
-            self.finish(id, status).await?;
+            self.conclude(&run, status, &repo).await?;
             tracing::info!(run = %id, status = status.as_str(), "run finished");
             Ok(true)
         }
     }
 
+    /// The repo-level settings from the default branch. A broken config
+    /// there is a warning in this run's log, and the defaults apply.
+    async fn repo_settings(&self, run: &Run) -> Result<RepoSettings, StoreError> {
+        match self.config.repo_settings(run.request().repo()).await {
+            Ok(settings) => Ok(settings),
+            Err(error) => {
+                let message = format!("warning: default branch config ignored: {error}");
+                self.log_text(run.id(), LogOrigin::Run, &message).await?;
+                Ok(RepoSettings::default())
+            }
+        }
+    }
+
+    /// Finish the run and queue its events for the webhooks that want
+    /// them, in one store transaction.
+    async fn conclude(
+        &self,
+        run: &Run,
+        status: RunStatus,
+        repo: &RepoSettings,
+    ) -> Result<(), ServiceError> {
+        let id = run.id();
+        let request = run.request();
+        let outbox = if repo.webhooks().is_empty() {
+            Vec::new()
+        } else {
+            let checks = self.store.checks(id).await?;
+            let previous = self
+                .store
+                .previous_status(request.repo(), request.git_ref(), id)
+                .await?;
+            let on_default = repo.default_ref() == Some(request.git_ref().as_str());
+            let events = EventPayload::for_finished(run, status, &checks, previous, on_default);
+            deliveries(&events, repo.webhooks())
+        };
+        let finished = self
+            .store
+            .finish_with_outbox(id, status, self.clock.now(), &outbox)
+            .await?;
+        if finished {
+            Ok(())
+        } else {
+            Err(ServiceError::Conflict(RunStatus::Running))
+        }
+    }
+
     /// Read the config, then check within the run's time limit.
-    async fn execute(&self, run: &Run) -> Result<RunStatus, Fault> {
+    async fn execute(&self, run: &Run, repo: &RepoSettings) -> Result<RunStatus, Fault> {
         let settings = self
             .config
             .run_settings(run.request())
@@ -149,7 +200,7 @@ where
             .capped(self.limits);
         let limit = Duration::from_secs(settings.timeouts().run());
         // Why: dropping the check future on timeout kills its Nix processes.
-        if let Ok(result) = tokio::time::timeout(limit, self.check(run, &settings)).await {
+        if let Ok(result) = tokio::time::timeout(limit, self.check(run, &settings, repo)).await {
             return result;
         }
         let id = run.id();
@@ -162,7 +213,12 @@ where
     }
 
     /// Evaluate, classify, build; the run's final status.
-    async fn check(&self, run: &Run, settings: &RunSettings) -> Result<RunStatus, Fault> {
+    async fn check(
+        &self,
+        run: &Run,
+        settings: &RunSettings,
+        repo: &RepoSettings,
+    ) -> Result<RunStatus, Fault> {
         let id = run.id();
         let systems = self.builder.systems().await?;
         let evaluated = self
@@ -211,7 +267,7 @@ where
                 .await?,
         );
         if !built.is_empty() {
-            self.push(run, &built).await?;
+            self.push(run, &built, repo).await?;
         }
         Ok(CheckStatus::run_outcome(finals))
     }
@@ -220,21 +276,18 @@ where
     /// and never fail the run.
     /// Why: the outputs are already checked; the cache only makes the next
     /// run and deploys faster.
-    async fn push(&self, run: &Run, built: &[String]) -> Result<(), StoreError> {
+    async fn push(
+        &self,
+        run: &Run,
+        built: &[String],
+        settings: &RepoSettings,
+    ) -> Result<(), StoreError> {
         let Some(policy) = &self.cache else {
             return Ok(());
         };
         let id = run.id();
         let repo = run.request().repo();
-        let requested = match self.config.repo_settings(repo).await {
-            Ok(settings) => settings,
-            Err(error) => {
-                let message = format!("warning: default branch config ignored: {error}");
-                self.log_text(id, LogOrigin::Run, &message).await?;
-                RepoSettings::default()
-            }
-        };
-        let message = match policy.choose(repo.owner(), requested.cache()) {
+        let message = match policy.choose(repo.owner(), settings.cache()) {
             Err(error) => format!("warning: not pushed to a cache: {error}"),
             Ok(cache) => {
                 let drvs: Vec<&str> = built.iter().map(String::as_str).collect();

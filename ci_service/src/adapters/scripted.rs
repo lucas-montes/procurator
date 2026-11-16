@@ -3,13 +3,16 @@
 
 use std::future::Future;
 use std::sync::{Mutex, PoisonError};
+use std::time::Duration;
 
 use tokio::sync::mpsc;
 
 use crate::application::ports::{
-    BuildEvent, Builder, BuilderError, ConfigSource, Evaluated, RepoConfigError,
+    BuildEvent, Builder, BuilderError, ConfigSource, DeliveryError, Evaluated, Notifier,
+    RepoConfigError,
 };
 use crate::domain::check::{Derivation, Systems};
+use crate::domain::event::{EventPayload, Target};
 use crate::domain::repo_config::{CheckSelection, RepoSettings, RunSettings, Timeouts};
 use crate::domain::run::{NewRun, RepoName};
 
@@ -66,6 +69,13 @@ impl ScriptedBuilder {
     pub fn hanging(mut self) -> Self {
         self.hang = true;
         self
+    }
+
+    /// What the next evaluation answers. Why: tests of a second run.
+    pub fn evaluation_slot(
+        &self,
+    ) -> std::sync::MutexGuard<'_, Option<Result<Vec<Evaluated>, BuilderError>>> {
+        lock(&self.evaluation)
     }
 
     /// The `.drv` paths asked to be built, in order, one per try.
@@ -157,6 +167,50 @@ impl Builder for ScriptedBuilder {
         let count = drvs.len();
         lock(&self.pushed).push((String::from(cache), drvs));
         std::future::ready(Ok(count))
+    }
+}
+
+/// A [`Notifier`] that records deliveries and fails for chosen targets.
+#[derive(Debug, Default)]
+pub struct RecordingNotifier {
+    down: Vec<Target>,
+    delivered: Mutex<Vec<(Target, EventPayload)>>,
+}
+
+impl RecordingNotifier {
+    /// Deliveries to `down` always fail.
+    #[must_use]
+    pub fn failing_for(down: Vec<Target>) -> Self {
+        Self {
+            down,
+            ..Self::default()
+        }
+    }
+
+    /// What arrived, in order.
+    pub fn delivered(&self) -> Vec<(Target, EventPayload)> {
+        lock(&self.delivered).clone()
+    }
+}
+
+impl Notifier for RecordingNotifier {
+    fn deliver(
+        &self,
+        target: &Target,
+        payload: &EventPayload,
+    ) -> impl Future<Output = Result<(), DeliveryError>> + Send {
+        let result = if self.down.contains(target) {
+            Err(DeliveryError::new("connection refused"))
+        } else {
+            lock(&self.delivered).push((target.clone(), payload.clone()));
+            Ok(())
+        };
+        std::future::ready(result)
+    }
+
+    /// Two retries, a minute apart.
+    fn retry_delay(&self, _target: &Target, attempts: u32) -> Option<Duration> {
+        (attempts < 3).then_some(Duration::from_secs(60))
     }
 }
 

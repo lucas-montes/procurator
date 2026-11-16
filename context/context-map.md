@@ -46,9 +46,9 @@ Quick navigation for AI sessions working on Procurator.
 - `control_plane/` - Coordination service
 - `worker/` - Background job execution
 - `ci_service/` - CI service, hexagonal like `cache` (spec: `specs/ci-service.md`)
-  - `ci_service/src/domain/` - `run.rs` (run identity, lifecycle), `check.rs` (check statuses, cached/buildable/skipped rule, run outcome), `log.rs` (lines tagged by run/check/derivation), `repo_config.rs` (per-run settings, service caps)
-  - `ci_service/src/application/` - `Service` use cases, `service/pipeline.rs` (worker), `ports.rs` (`RunStore`, `Builder`, `ConfigSource`, `Clock`)
-  - `ci_service/src/adapters/` - `sqlite.rs`, `memory.rs` (held to `store_contract.rs`), `nix/` (`NixBuilder`: nix-eval-jobs, nix build, internal-json, systems; `GitConfigSource`: procurator.nix), `system.rs`, `http/`
+  - `ci_service/src/domain/` - `run.rs` (run identity, lifecycle), `check.rs` (check statuses, cached/buildable/skipped rule, run outcome), `log.rs` (lines tagged by run/check/derivation), `repo_config.rs` (per-run settings, service caps), `event.rs` (events of a finished run, webhook fan-out)
+  - `ci_service/src/application/` - `Service` use cases, `service/pipeline.rs` (worker), `service/outbox.rs` (dispatcher), `ports.rs` (`RunStore`, `Builder`, `ConfigSource`, `Notifier`, `SecretStore`, `Clock`)
+  - `ci_service/src/adapters/` - `sqlite.rs`, `memory.rs` (held to `store_contract.rs`), `nix/` (`NixBuilder`: nix-eval-jobs, nix build, internal-json, systems; `GitConfigSource`: procurator.nix), `webhook.rs`, `secrets.rs`, `system.rs`, `http/`
 
 ### Console (`console/`)
 Read-only web UI built only from the services' own JSON logs (no RPC, no pushed telemetry). See `console/README.md`.

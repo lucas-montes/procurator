@@ -3,6 +3,7 @@
 //! monolith repohub or the CLI calling these methods directly — so rules are
 //! enforced in one place.
 
+mod outbox;
 mod pipeline;
 #[cfg(test)]
 mod tests;
@@ -10,40 +11,45 @@ mod tests;
 use std::future::Future;
 
 use super::ServiceError;
-use super::ports::{Builder, Clock, ConfigSource, RunQuery, RunStore};
+use super::ports::{Builder, Clock, ConfigSource, Notifier, RunQuery, RunStore};
 use crate::domain::check::Check;
+use crate::domain::event::{EventKind, EventPayload, deliveries};
 use crate::domain::log::{LogLine, LogOrigin};
-use crate::domain::repo_config::{CachePolicy, Limits};
+use crate::domain::repo_config::{CachePolicy, Limits, RepoSettings};
 use crate::domain::run::{NewRun, RepoName, Run, RunId, RunStatus};
 
 /// Largest page of runs a caller can ask for.
 const MAX_PAGE: u32 = 100;
 
 /// The CI application: every use case, over swappable ports.
-pub struct Service<S, C, B, R> {
+pub struct Service<S, C, B, R, N> {
     store: S,
     clock: C,
     builder: B,
     config: R,
+    notifier: N,
     limits: Limits,
     cache: Option<CachePolicy>,
 }
 
-impl<S, C, B, R> Service<S, C, B, R>
+impl<S, C, B, R, N> Service<S, C, B, R, N>
 where
     S: RunStore,
     C: Clock,
     B: Builder,
     R: ConfigSource,
+    N: Notifier,
 {
     /// Assemble the service. `limits` caps what any repo config asks for;
-    /// with a `cache` policy, what a run builds is pushed to a cache.
+    /// with a `cache` policy, what a run builds is pushed to a cache;
+    /// `notifier` delivers events to the repos' webhooks.
     #[must_use]
     pub fn new(
         store: S,
         clock: C,
         builder: B,
         config: R,
+        notifier: N,
         limits: Limits,
         cache: Option<CachePolicy>,
     ) -> Self {
@@ -52,6 +58,7 @@ where
             clock,
             builder,
             config,
+            notifier,
             limits,
             cache,
         }
@@ -66,7 +73,40 @@ where
         &self,
         run: NewRun,
     ) -> impl Future<Output = Result<RunId, ServiceError>> + Send + '_ {
-        async move { Ok(self.store.insert(run, self.clock.now()).await?) }
+        async move {
+            // Why: read before the request moves into the store.
+            let settings = self.config.repo_settings(run.repo()).await;
+            let id = self.store.insert(run, self.clock.now()).await?;
+            if let Ok(settings) = settings {
+                self.announce(id, EventKind::RunQueued, RunStatus::Queued, &settings)
+                    .await?;
+            }
+            Ok(id)
+        }
+    }
+
+    /// Queue a lifecycle event for the webhooks that want it.
+    async fn announce(
+        &self,
+        id: RunId,
+        kind: EventKind,
+        status: RunStatus,
+        settings: &RepoSettings,
+    ) -> Result<(), ServiceError> {
+        let wanted = settings.webhooks().iter().any(|hook| hook.wants(kind));
+        let Some(run) = (if wanted {
+            self.store.run(id).await?
+        } else {
+            None
+        }) else {
+            return Ok(());
+        };
+        let event = [EventPayload::for_run(kind, &run, status)];
+        let outbox = deliveries(&event, settings.webhooks());
+        Ok(self
+            .store
+            .queue_deliveries(&outbox, self.clock.now())
+            .await?)
     }
 
     /// Put runs left `running` by a previous process back in the queue.

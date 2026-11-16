@@ -8,9 +8,11 @@ use std::time::Duration;
 
 use ci_service::adapters::http::router;
 use ci_service::adapters::nix::{GitConfigSource, NixBuilder};
+use ci_service::adapters::secrets::FileSecretStore;
 use ci_service::adapters::sqlite::SqliteRunStore;
 use ci_service::adapters::system::SystemClock;
-use ci_service::application::ports::StoreError;
+use ci_service::adapters::webhook::WebhookNotifier;
+use ci_service::application::ports::{DeliveryError, StoreError};
 use ci_service::application::{Service, ServiceError};
 use ci_service::config::{Config, ConfigError};
 use ci_service::domain::repo_config::{CachePolicy, Limits};
@@ -23,6 +25,7 @@ enum MainError {
     Config(ConfigError),
     Store(StoreError),
     Recover(ServiceError),
+    Notifier(DeliveryError),
     Bind(std::io::Error),
     Serve(std::io::Error),
 }
@@ -32,6 +35,7 @@ impl fmt::Display for MainError {
         match self {
             Self::Config(e) => e.fmt(f),
             Self::Store(e) => e.fmt(f),
+            Self::Notifier(e) => write!(f, "webhook client: {e}"),
             Self::Recover(e) => write!(f, "recover interrupted runs: {e}"),
             Self::Bind(e) => write!(f, "bind: {e}"),
             Self::Serve(e) => write!(f, "serve: {e}"),
@@ -86,11 +90,14 @@ async fn run(config: Config) -> Result<(), MainError> {
         config.max_check_timeout,
         config.max_run_timeout,
     );
+    let secrets = FileSecretStore::new(config.secrets_file.as_ref().map(PathBuf::from));
+    let notifier = WebhookNotifier::new(secrets).map_err(MainError::Notifier)?;
     let service = Arc::new(Service::new(
         store,
         SystemClock,
         builder,
         GitConfigSource::new(repos),
+        notifier,
         limits,
         cache,
     ));
@@ -121,6 +128,9 @@ async fn run(config: Config) -> Result<(), MainError> {
         let service = Arc::clone(&service);
         workers.spawn(async move { service.work(poll).await });
     }
+    // Why: one dispatcher; deliveries survive a restart in the outbox.
+    let dispatcher = Arc::clone(&service);
+    workers.spawn(async move { dispatcher.dispatch(poll).await });
     axum::serve(listener, router(service))
         .with_graceful_shutdown(shutdown_signal())
         .await

@@ -1,6 +1,6 @@
 # CI Service — Spec
 
-Status: agreed on 2026-11-14. Build steps 1–4 are done (see "Build
+Status: agreed on 2026-11-14. Build steps 1–5 are done (see "Build
 order"); "Current state" at the end describes the scaffold they replaced.
 
 ## Purpose
@@ -400,7 +400,18 @@ src/  (root `procurator` crate: the monolith's composition root)
    `cache.substitute`, adds the public cache plus `cache.readCaches` to the
    host's substituters with `cache.trustedPublicKeys`. Visibility-based
    choice waits for the `Access` port (step 6).
-5. **Events.** Outbox, dispatcher, webhook adapter, `SecretStore`.
+5. **Events.** ✅ Done 2026-11-16. Outbox table `deliveries` (one row per
+   webhook × wanted event, payload as JSON), written with the run's final
+   status in one transaction (`finish_with_outbox`); `run.queued` and
+   `run.started` are queued when they happen. Subscriptions come from
+   `ci.webhooks` on the default branch head, whose ref (`HEAD` of the bare
+   repo) also decides `run.recovered` (success after a failed or timed-out
+   run on that branch; errored runs are skipped). One dispatcher task
+   attempts due deliveries; the webhook adapter POSTs the JSON (10 s
+   timeout, 2xx = delivered) and backs off 30 s, 2 min, 10 min, 30 min, then
+   gives up. URLs come from `secrets_file` (TOML `name = "value"`, read at
+   each delivery). HTTP client: `reqwest` with rustls (feature `webhook`).
+   No events table beyond the outbox yet; repohub still reads the CI API.
 6. **Monolith, access and live logs.** Composition root in the root
    `procurator` crate mounting ci_service, repohub and cache. `RepohubAccess`
    in-process adapter, SSE endpoints, dependency logs attached to checks,
@@ -468,8 +479,8 @@ security options are passed on every `nix-eval-jobs` call by the adapter.
 
 ## Current state (2026-11-14)
 
-The scaffold that steps 1–4 replaced. Items still open: notifications
-(step 5) and the deploy call (step 8). The rest is fixed.
+The scaffold that steps 1–5 replaced. Item still open: the deploy call
+(step 8). The rest is fixed.
 
 - `builds.rs::git_url` produces `/path/repo.git#<sha>`, which Nix reads as an
   output attribute. Every build fails with "could not find a flake.nix file".

@@ -5,6 +5,8 @@
 
 use std::fmt;
 
+use super::event::Webhook;
+
 /// Default seconds a derivation may build.
 const DEFAULT_CHECK_TIMEOUT: u64 = 3600;
 /// Default seconds a derivation may go without output.
@@ -210,19 +212,45 @@ impl RunSettings {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RepoSettings {
     cache: Option<String>,
+    webhooks: Vec<Webhook>,
+    default_ref: Option<String>,
 }
 
 impl RepoSettings {
     /// Describe the repo-level settings. `cache` is `ci.cache`.
     #[must_use]
-    pub fn new(cache: Option<String>) -> Self {
-        Self { cache }
+    pub fn new(cache: Option<String>, webhooks: Vec<Webhook>) -> Self {
+        Self {
+            cache,
+            webhooks,
+            default_ref: None,
+        }
+    }
+
+    /// The same settings, read from the head of `default_ref`
+    /// (e.g. `refs/heads/main`).
+    #[must_use]
+    pub fn on_branch(mut self, default_ref: String) -> Self {
+        self.default_ref = Some(default_ref);
+        self
     }
 
     /// The cache the repo asked for, if any.
     #[must_use]
     pub fn cache(&self) -> Option<&str> {
         self.cache.as_deref()
+    }
+
+    /// Where events go.
+    #[must_use]
+    pub fn webhooks(&self) -> &[Webhook] {
+        &self.webhooks
+    }
+
+    /// The default branch's ref, when the repo has one.
+    #[must_use]
+    pub fn default_ref(&self) -> Option<&str> {
+        self.default_ref.as_deref()
     }
 }
 

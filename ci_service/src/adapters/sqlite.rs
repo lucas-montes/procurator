@@ -6,8 +6,9 @@ use std::str::FromStr as _;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow};
 use sqlx::{Row as _, SqlitePool};
 
-use crate::application::ports::{RunQuery, RunStore, StoreError};
+use crate::application::ports::{NextAttempt, RunQuery, RunStore, StoreError};
 use crate::domain::check::{Check, CheckId, CheckStatus, Derivation, NewCheck};
+use crate::domain::event::{Delivery, EventPayload, Target};
 use crate::domain::log::{LogLine, LogOrigin, NewLogLine};
 use crate::domain::run::{
     CommitHash, GitRef, NewRun, Pusher, RepoName, Run, RunId, RunStatus, RunTimes,
@@ -16,7 +17,7 @@ use crate::domain::run::{
 /// Tables and indexes, created on open.
 /// Why: the table is `runs`, not the scaffold's `builds`, so an old database
 /// opens cleanly; the old tables are simply ignored.
-const SCHEMA: [&str; 6] = [
+const SCHEMA: [&str; 8] = [
     "CREATE TABLE IF NOT EXISTS runs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         repo TEXT NOT NULL,
@@ -50,7 +51,52 @@ const SCHEMA: [&str; 6] = [
         text TEXT NOT NULL
     )",
     "CREATE INDEX IF NOT EXISTS log_lines_run ON log_lines (run_id, origin, id)",
+    // Why: the outbox. `state` is pending, delivered or given_up.
+    "CREATE TABLE IF NOT EXISTS deliveries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id INTEGER NOT NULL REFERENCES runs (id),
+        target_kind TEXT NOT NULL,
+        target TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_at INTEGER NOT NULL,
+        state TEXT NOT NULL,
+        last_error TEXT,
+        created_at INTEGER NOT NULL
+    )",
+    "CREATE INDEX IF NOT EXISTS deliveries_due ON deliveries (state, next_at, id)",
 ];
+
+/// Stored kind of a webhook target.
+const WEBHOOK: &str = "webhook";
+
+/// Insert pending deliveries, due `now`, inside `tx`.
+async fn insert_deliveries(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    outbox: &[(Target, EventPayload)],
+    now: i64,
+) -> Result<(), StoreError> {
+    for (target, payload) in outbox {
+        let (kind, name) = match target {
+            Target::Webhook(secret) => (WEBHOOK, secret.as_str()),
+        };
+        let json = serde_json::to_string(payload).map_err(StoreError::new)?;
+        sqlx::query(
+            "INSERT INTO deliveries (run_id, target_kind, target, payload, next_at, state, created_at)
+             VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+        )
+        .bind(payload.run())
+        .bind(kind)
+        .bind(name)
+        .bind(json)
+        .bind(now)
+        .bind(now)
+        .execute(&mut **tx)
+        .await
+        .map_err(StoreError::new)?;
+    }
+    Ok(())
+}
 
 /// Columns every query reads back, in [`run_from_row`]'s order.
 const COLUMNS: &str =
@@ -263,26 +309,130 @@ impl RunStore for SqliteRunStore {
         }
     }
 
-    fn finish(
+    fn finish_with_outbox(
         &self,
         id: RunId,
         status: RunStatus,
         now: i64,
+        outbox: &[(Target, EventPayload)],
     ) -> impl Future<Output = Result<bool, StoreError>> + Send {
         async move {
             if !status.is_final() {
                 return Ok(false);
             }
+            // Why: one transaction, so a crash never leaves a finished run
+            // without its notifications, or notifications for a live run.
+            let mut tx = self.pool.begin().await.map_err(StoreError::new)?;
             let result = sqlx::query(
                 "UPDATE runs SET status = ?, finished_at = ? WHERE id = ? AND status = 'running'",
             )
             .bind(status.as_str())
             .bind(now)
             .bind(id.get())
+            .execute(&mut *tx)
+            .await
+            .map_err(StoreError::new)?;
+            if result.rows_affected() != 1 {
+                return Ok(false);
+            }
+            insert_deliveries(&mut tx, outbox, now).await?;
+            tx.commit().await.map_err(StoreError::new)?;
+            Ok(true)
+        }
+    }
+
+    fn queue_deliveries(
+        &self,
+        outbox: &[(Target, EventPayload)],
+        now: i64,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send {
+        async move {
+            let mut tx = self.pool.begin().await.map_err(StoreError::new)?;
+            insert_deliveries(&mut tx, outbox, now).await?;
+            tx.commit().await.map_err(StoreError::new)
+        }
+    }
+
+    fn due_deliveries(
+        &self,
+        now: i64,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<Delivery>, StoreError>> + Send {
+        async move {
+            let rows = sqlx::query_as::<_, (i64, String, String, String, i64)>(
+                "SELECT id, target_kind, target, payload, attempts FROM deliveries
+                 WHERE state = 'pending' AND next_at <= ? ORDER BY id LIMIT ?",
+            )
+            .bind(now)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(StoreError::new)?;
+            rows.into_iter()
+                .map(|(id, kind, target, payload, attempts)| {
+                    let target = match kind.as_str() {
+                        WEBHOOK => Target::Webhook(target),
+                        other => {
+                            return Err(StoreError::new(format!("unknown target kind {other}")));
+                        }
+                    };
+                    let payload = serde_json::from_str(&payload).map_err(StoreError::new)?;
+                    let attempts = u32::try_from(attempts).map_err(StoreError::new)?;
+                    Ok(Delivery::new(id, target, payload, attempts))
+                })
+                .collect()
+        }
+    }
+
+    fn record_attempt(
+        &self,
+        id: i64,
+        next: NextAttempt,
+        error: Option<&str>,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send {
+        async move {
+            let (state, next_at) = match next {
+                NextAttempt::Delivered => ("delivered", None),
+                NextAttempt::RetryAt(at) => ("pending", Some(at)),
+                NextAttempt::GiveUp => ("given_up", None),
+            };
+            sqlx::query(
+                "UPDATE deliveries SET attempts = attempts + 1, state = ?,
+                 next_at = COALESCE(?, next_at), last_error = ? WHERE id = ?",
+            )
+            .bind(state)
+            .bind(next_at)
+            .bind(error)
+            .bind(id)
             .execute(&self.pool)
             .await
             .map_err(StoreError::new)?;
-            Ok(result.rows_affected() == 1)
+            Ok(())
+        }
+    }
+
+    fn previous_status<'a>(
+        &'a self,
+        repo: &'a RepoName,
+        git_ref: &'a GitRef,
+        before: RunId,
+    ) -> impl Future<Output = Result<Option<RunStatus>, StoreError>> + Send + 'a {
+        async move {
+            let status: Option<String> = sqlx::query_scalar(
+                "SELECT status FROM runs
+                 WHERE repo = ? AND git_ref = ? AND id < ?
+                   AND status IN ('passed', 'failed', 'timed_out')
+                 ORDER BY id DESC LIMIT 1",
+            )
+            .bind(repo.as_str())
+            .bind(git_ref.as_str())
+            .bind(before.get())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(StoreError::new)?;
+            status
+                .map(|status| RunStatus::parse(&status).map_err(StoreError::new))
+                .transpose()
         }
     }
 

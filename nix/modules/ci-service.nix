@@ -25,6 +25,8 @@ let
     cache_base_url = cfg.cache.url;
   } // optionalAttrs (cfg.cache.netrcFile != null) {
     netrc_file = cfg.cache.netrcFile;
+  } // optionalAttrs (cfg.secretsFile != null) {
+    secrets_file = cfg.secretsFile;
   });
   cacheUrl = name: "${cfg.cache.url}/${name}";
 in {
@@ -103,6 +105,18 @@ in {
       type = types.ints.positive;
       default = 1;
       description = "nix-eval-jobs worker processes per run (each may use up to 4 GiB).";
+    };
+
+    secretsFile = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "/run/secrets/procurator-ci-secrets.toml";
+      description = ''
+        TOML file of `name = "value"` secrets, readable by the service user
+        only and kept out of the Nix store. A repo's procurator.nix names a
+        webhook by secret (ci.webhooks.*.urlSecret), never by URL. Read at
+        each delivery, so edits apply without a restart.
+      '';
     };
 
     cache = {

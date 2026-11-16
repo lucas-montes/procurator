@@ -4,10 +4,11 @@
 use std::future::{Future, ready};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use crate::application::ports::{RunQuery, RunStore, StoreError};
+use crate::application::ports::{NextAttempt, RunQuery, RunStore, StoreError};
 use crate::domain::check::{Check, CheckId, CheckStatus, NewCheck};
+use crate::domain::event::{Delivery, EventPayload, Target};
 use crate::domain::log::{LogLine, LogOrigin, NewLogLine};
-use crate::domain::run::{NewRun, Run, RunId, RunStatus};
+use crate::domain::run::{GitRef, NewRun, RepoName, Run, RunId, RunStatus};
 
 /// Everything stored, in id order.
 #[derive(Debug, Default)]
@@ -17,6 +18,28 @@ struct State {
     /// Why: checks of requeued runs are dropped, so ids are not positions.
     last_check: i64,
     log: Vec<(RunId, LogLine)>,
+    outbox: Vec<Queued>,
+}
+
+/// A delivery and when it is next due.
+#[derive(Debug)]
+struct Queued {
+    delivery: Delivery,
+    next_at: i64,
+    pending: bool,
+}
+
+impl State {
+    fn queue(&mut self, outbox: &[(Target, EventPayload)], now: i64) {
+        for (target, payload) in outbox {
+            let id = i64::try_from(self.outbox.len() + 1).unwrap_or(i64::MAX);
+            self.outbox.push(Queued {
+                delivery: Delivery::new(id, target.clone(), payload.clone(), 0),
+                next_at: now,
+                pending: true,
+            });
+        }
+    }
 }
 
 /// Runs, checks and log lines held in vectors.
@@ -89,17 +112,86 @@ impl RunStore for MemoryRunStore {
         ready(Ok(u64::try_from(requeued.len()).unwrap_or(u64::MAX)))
     }
 
-    fn finish(
+    fn finish_with_outbox(
         &self,
         id: RunId,
         status: RunStatus,
         now: i64,
+        outbox: &[(Target, EventPayload)],
     ) -> impl Future<Output = Result<bool, StoreError>> + Send {
         let mut state = self.state();
         let finished = index(id.get())
             .and_then(|i| state.runs.get_mut(i))
             .is_some_and(|run| run.finish(status, now));
+        if finished {
+            state.queue(outbox, now);
+        }
         ready(Ok(finished))
+    }
+
+    fn queue_deliveries(
+        &self,
+        outbox: &[(Target, EventPayload)],
+        now: i64,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send {
+        self.state().queue(outbox, now);
+        ready(Ok(()))
+    }
+
+    fn due_deliveries(
+        &self,
+        now: i64,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<Delivery>, StoreError>> + Send {
+        let state = self.state();
+        let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+        let due = state
+            .outbox
+            .iter()
+            .filter(|queued| queued.pending && queued.next_at <= now)
+            .take(limit)
+            .map(|queued| queued.delivery.clone())
+            .collect();
+        ready(Ok(due))
+    }
+
+    fn record_attempt(
+        &self,
+        id: i64,
+        next: NextAttempt,
+        _error: Option<&str>,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send {
+        let mut state = self.state();
+        if let Some(queued) = state
+            .outbox
+            .iter_mut()
+            .find(|queued| queued.delivery.id() == id)
+        {
+            queued.delivery.attempted();
+            match next {
+                NextAttempt::Delivered | NextAttempt::GiveUp => queued.pending = false,
+                NextAttempt::RetryAt(at) => queued.next_at = at,
+            }
+        }
+        ready(Ok(()))
+    }
+
+    fn previous_status<'a>(
+        &'a self,
+        repo: &'a RepoName,
+        git_ref: &'a GitRef,
+        before: RunId,
+    ) -> impl Future<Output = Result<Option<RunStatus>, StoreError>> + Send + 'a {
+        let state = self.state();
+        let previous = state
+            .runs
+            .iter()
+            .rev()
+            .filter(|run| run.id() < before)
+            .filter(|run| run.request().repo() == repo && run.request().git_ref() == git_ref)
+            .map(Run::status)
+            .find(|status| status.is_final() && *status != RunStatus::Errored);
+        ready(Ok(previous))
     }
 
     fn run(&self, id: RunId) -> impl Future<Output = Result<Option<Run>, StoreError>> + Send {

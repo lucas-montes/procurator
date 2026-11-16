@@ -1,7 +1,6 @@
 //! Check and log endpoints.
 
 use std::fmt::Write as _;
-use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Path, State};
@@ -10,8 +9,8 @@ use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
 use super::error::HttpError;
-use crate::application::Service;
-use crate::application::ports::{Builder, Clock, ConfigSource, RunStore};
+use super::shared::Shared;
+use crate::application::ports::{Builder, Clock, ConfigSource, Notifier, RunStore};
 use crate::domain::check::{Check, Derivation};
 use crate::domain::log::{LogLine, LogOrigin};
 use crate::domain::run::RunId;
@@ -61,8 +60,8 @@ fn text(lines: &[LogLine], labels: bool) -> Response {
 }
 
 /// `GET /api/runs/{id}/checks`: a run's checks, in evaluation order.
-pub async fn list<S, C, B, R>(
-    State(service): State<Arc<Service<S, C, B, R>>>,
+pub async fn list<S, C, B, R, N>(
+    State(shared): State<Shared<S, C, B, R, N>>,
     Path(id): Path<i64>,
 ) -> Result<Response, HttpError>
 where
@@ -70,8 +69,9 @@ where
     C: Clock,
     B: Builder,
     R: ConfigSource,
+    N: Notifier,
 {
-    let checks = service.checks(RunId::new(id)).await?;
+    let checks = shared.service().checks(RunId::new(id)).await?;
     let body = ChecksBody {
         checks: checks.iter().map(CheckBody::from).collect(),
     };
@@ -79,8 +79,8 @@ where
 }
 
 /// `GET /api/runs/{id}/log`: everything the run logged, labelled.
-pub async fn run_log<S, C, B, R>(
-    State(service): State<Arc<Service<S, C, B, R>>>,
+pub async fn run_log<S, C, B, R, N>(
+    State(shared): State<Shared<S, C, B, R, N>>,
     Path(id): Path<i64>,
 ) -> Result<Response, HttpError>
 where
@@ -88,14 +88,15 @@ where
     C: Clock,
     B: Builder,
     R: ConfigSource,
+    N: Notifier,
 {
-    let lines = service.run_log(RunId::new(id)).await?;
+    let lines = shared.service().run_log(RunId::new(id)).await?;
     Ok(text(&lines, true))
 }
 
 /// `GET /api/runs/{id}/checks/{attr}/log`: one check's own log.
-pub async fn log<S, C, B, R>(
-    State(service): State<Arc<Service<S, C, B, R>>>,
+pub async fn log<S, C, B, R, N>(
+    State(shared): State<Shared<S, C, B, R, N>>,
     Path((id, attr)): Path<(i64, String)>,
 ) -> Result<Response, HttpError>
 where
@@ -103,7 +104,8 @@ where
     C: Clock,
     B: Builder,
     R: ConfigSource,
+    N: Notifier,
 {
-    let lines = service.check_log(RunId::new(id), &attr).await?;
+    let lines = shared.service().check_log(RunId::new(id), &attr).await?;
     Ok(text(&lines, false))
 }

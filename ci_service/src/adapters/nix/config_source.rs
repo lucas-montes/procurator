@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::mem;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Mutex, PoisonError};
@@ -17,8 +18,12 @@ use tokio::process::Command;
 use super::internal_json::strip_ansi;
 use super::repos::bare_repo;
 use crate::application::ports::{ConfigSource, RepoConfigError};
+use crate::domain::event::{EventKind, Webhook};
 use crate::domain::repo_config::{CheckSelection, RepoConfig, RepoSettings, RunSettings, Timeouts};
 use crate::domain::run::{NewRun, RepoName};
+
+/// Most webhooks a repo may list.
+const MAX_WEBHOOKS: usize = 10;
 
 /// The file, at the repository root.
 const FILE: &str = "procurator.nix";
@@ -148,14 +153,11 @@ struct FileDto {
 /// `ci`. Repo-level keys are checked now and used by later steps.
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-#[expect(
-    dead_code,
-    reason = "repo-level keys are validated now, read once notifications, retention and cache selection land"
-)]
 struct CiDto {
     checks: Option<ChecksDto>,
     reruns: Option<u32>,
     timeouts: Option<TimeoutsDto>,
+    #[expect(dead_code, reason = "validated now, read by the retention task")]
     log_retention_days: Option<u32>,
     cache: Option<String>,
     #[serde(default)]
@@ -180,33 +182,9 @@ struct TimeoutsDto {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-#[expect(dead_code, reason = "delivered from the events step on")]
 struct WebhookDto {
     url_secret: String,
     events: Vec<EventKind>,
-}
-
-/// Events a webhook may subscribe to.
-#[derive(Deserialize)]
-enum EventKind {
-    #[serde(rename = "run.queued")]
-    RunQueued,
-    #[serde(rename = "run.started")]
-    RunStarted,
-    #[serde(rename = "check.failed")]
-    CheckFailed,
-    #[serde(rename = "check.passed")]
-    CheckPassed,
-    #[serde(rename = "check.skipped")]
-    CheckSkipped,
-    #[serde(rename = "run.succeeded")]
-    RunSucceeded,
-    #[serde(rename = "run.failed")]
-    RunFailed,
-    #[serde(rename = "run.recovered")]
-    RunRecovered,
-    #[serde(rename = "run.errored")]
-    RunErrored,
 }
 
 #[derive(Deserialize)]
@@ -226,7 +204,17 @@ fn parse(json: &str) -> Result<RepoConfig, RepoConfigError> {
     }
     let file: FileDto = serde_json::from_str(json).map_err(|e| invalid(e.to_string()))?;
     let mut ci = file.ci;
-    let repo = RepoSettings::new(ci.cache.take());
+    if ci.webhooks.len() > MAX_WEBHOOKS {
+        return Err(invalid(format!(
+            "ci.webhooks lists more than {MAX_WEBHOOKS}"
+        )));
+    }
+    let webhooks = mem::take(&mut ci.webhooks)
+        .into_iter()
+        .map(|hook| Webhook::new(hook.url_secret, hook.events))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(invalid)?;
+    let repo = RepoSettings::new(ci.cache.take(), webhooks);
     let checks = match ci.checks {
         None => CheckSelection::All,
         Some(ChecksDto::Keyword(keyword)) if keyword == "all" => CheckSelection::All,
@@ -311,7 +299,14 @@ impl ConfigSource for GitConfigSource {
             // Why: HEAD of a bare repo names the default branch; the hook
             // points it at the first branch pushed.
             let config = self.config_at(&path, "HEAD").await?;
-            Ok(config.into_repo())
+            let head = git(&path, &["symbolic-ref", "--quiet", "HEAD"]).await?;
+            let settings = config.into_repo();
+            Ok(match head {
+                Some(name) => {
+                    settings.on_branch(String::from(String::from_utf8_lossy(&name).trim()))
+                }
+                None => settings,
+            })
         }
     }
 }
@@ -320,6 +315,7 @@ impl ConfigSource for GitConfigSource {
 mod tests {
     use super::parse;
     use crate::application::ports::RepoConfigError;
+    use crate::domain::event::EventKind;
     use crate::domain::repo_config::{CheckSelection, RepoConfig, Timeouts};
 
     #[test]
@@ -333,6 +329,24 @@ mod tests {
         let config = parse(r#"{"ci":{"cache":"public","reruns":1}}"#).unwrap();
         assert_eq!(config.clone().into_repo().cache(), Some("public"));
         assert_eq!(config.into_run().reruns(), 1);
+    }
+
+    #[test]
+    fn webhooks_are_parsed_and_checked() {
+        let config = parse(
+            r#"{"ci":{"webhooks":[{"urlSecret":"slack","events":["run.failed","check.failed"]}]}}"#,
+        )
+        .unwrap();
+        let repo = config.into_repo();
+        assert_eq!(repo.webhooks().len(), 1);
+        assert_eq!(repo.webhooks()[0].url_secret(), "slack");
+        assert!(repo.webhooks()[0].wants(EventKind::CheckFailed));
+        assert!(!repo.webhooks()[0].wants(EventKind::RunSucceeded));
+
+        let bad_name = r#"{"ci":{"webhooks":[{"urlSecret":"https://x","events":["run.failed"]}]}}"#;
+        assert!(matches!(parse(bad_name), Err(RepoConfigError::Invalid(_))));
+        let no_events = r#"{"ci":{"webhooks":[{"urlSecret":"x","events":[]}]}}"#;
+        assert!(matches!(parse(no_events), Err(RepoConfigError::Invalid(_))));
     }
 
     #[test]

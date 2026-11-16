@@ -4,5 +4,6 @@ mod checks;
 mod error;
 mod router;
 mod runs;
+mod shared;
 
 pub use router::router;

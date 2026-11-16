@@ -6,8 +6,11 @@ pub mod memory;
 pub mod nix;
 #[cfg(test)]
 pub mod scripted;
+pub mod secrets;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 #[cfg(test)]
 mod store_contract;
 pub mod system;
+#[cfg(feature = "webhook")]
+pub mod webhook;

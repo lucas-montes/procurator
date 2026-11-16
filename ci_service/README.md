@@ -30,14 +30,17 @@ Hexagonal, like `cache`:
   `CommitHash`, `GitRef`, `Pusher`), statuses and lifecycle; `check.rs`
   covers check statuses, "cached, else buildable, else skipped", and a run's
   outcome; `log.rs` tags each line with its origin (run, check, derivation);
-  `repo_config.rs` holds the per-run settings and the service's caps.
+  `repo_config.rs` holds the per-run settings and the service's caps;
+  `event.rs` decides which events a finished run sends, and to whom.
 - `src/application/`: `Service` with every use case, `service/pipeline.rs`
-  (the worker: claim, read config, evaluate, build and rerun, record), and
-  `ports.rs` (`RunStore`, `Builder`, `ConfigSource`, `Clock`).
+  (the worker: claim, read config, evaluate, build and rerun, record),
+  `service/outbox.rs` (the dispatcher), and `ports.rs` (`RunStore`,
+  `Builder`, `ConfigSource`, `Notifier`, `SecretStore`, `Clock`).
 - `src/adapters/`: `sqlite.rs` and `memory.rs` (run stores, both held to
   `store_contract.rs`), `nix/` (`NixBuilder`: `nix-eval-jobs`, one
   `nix build --keep-going`, internal-json log parsing, buildable systems from
   `nix config show`; `GitConfigSource`: `procurator.nix` by blob id),
+  `webhook.rs` (`WebhookNotifier`), `secrets.rs` (`FileSecretStore`),
   `system.rs` (clock), `http/` (axum router).
 - `src/main.rs`: composition root for a standalone deployment. In the
   monolith, other crates hold `ci_service::application::Service` and call it
@@ -76,6 +79,22 @@ token in `netrc_file`. It goes to the owner's private cache
 failed run. The token needs `write` on the public cache and on each owner's
 private cache, and each private cache must exist on the cache service.
 
+## Webhooks
+
+The default branch's `procurator.nix` lists webhooks by secret name:
+
+```nix
+{ ci.webhooks = [ { urlSecret = "slack"; events = [ "run.failed" "run.recovered" ]; } ]; }
+```
+
+`secrets_file` maps names to URLs (`slack = "https://hooks…"`), so no URL
+is ever committed. Events: `run.queued`, `run.started`, `check.passed`,
+`check.failed`, `check.skipped`, `run.succeeded` (with output paths),
+`run.failed`, `run.recovered`, `run.errored`. Each is a JSON POST
+(`{"kind","run","repo","commit","ref","status","check"?,"outputs"?}`),
+queued in the database with the run's result and retried with backoff
+(30 s, 2 min, 10 min, 30 min) before giving up.
+
 ## Repo config: `procurator.nix`
 
 Optional, at the repo root, read from the commit being checked. It is a
@@ -100,8 +119,9 @@ used by later steps.
 
 ## Status
 
-Build steps 1–4 of the spec are done: queued runs are worked by
+Build steps 1–5 of the spec are done: queued runs are worked by
 `max_concurrent_runs` workers, `procurator.nix` picks the checks, reruns
 and timeouts, every check is evaluated, cached or built, each check's log
-is stored, and what was built is pushed to the cache. Not yet:
-notifications (step 5), live log streaming and access control (step 6).
+is stored, what was built is pushed to the cache, and events reach the
+repo's webhooks. Not yet: live log streaming, access control and the
+monolith (step 6), deploy (step 8).

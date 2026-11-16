@@ -57,6 +57,7 @@ let  # ── 1. Defaults ──────────────────
     && assertEq "joins the git group"
       defaults.config.users.users."procurator-ci".extraGroups [ "git" ]
     && assert' "no cache by default" (!(defaultsJson ? cache_base_url) && !(defaultsJson ? netrc_file))
+    && assert' "no secrets by default" (!(defaultsJson ? secrets_file))
     && assertEq "no substituters by default" defaults.config.nix.settings { };
 
   # ── 2. Explicit overrides ──────────────────────────────────────────
@@ -74,6 +75,7 @@ let  # ── 1. Defaults ──────────────────
     evalWorkers = 4;
     allowedUris = [ "git+ssh://git.lab/" ];
     reposGroup = null;
+    secretsFile = "/run/secrets/ci-secrets.toml";
     cache = {
       url = "http://cache.lab:8081";
       netrcFile = "/run/secrets/ci-netrc";
@@ -99,6 +101,7 @@ let  # ── 1. Defaults ──────────────────
     && assertEq "no extra group" explicit.config.users.users."procurator-ci".extraGroups [ ]
     && assertEq "cache_base_url" explicitJson.cache_base_url "http://cache.lab:8081"
     && assertEq "netrc_file" explicitJson.netrc_file "/run/secrets/ci-netrc"
+    && assertEq "secrets_file" explicitJson.secrets_file "/run/secrets/ci-secrets.toml"
     && assertEq "public_cache" explicitJson.public_cache "public"
     && assertEq "private_cache_prefix" explicitJson.private_cache_prefix "private-"
     && assertEq "substituters"

@@ -38,6 +38,8 @@ pub struct Config {
     pub private_cache_prefix: String,
     /// Nix netrc file holding the CI's cache token.
     pub netrc_file: Option<String>,
+    /// TOML file of `name = "value"` secrets (webhook URLs).
+    pub secrets_file: Option<String>,
 }
 
 /// Concrete config errors. Why: no `anyhow`, callers match on variants.
@@ -97,6 +99,8 @@ struct FileConfig {
     private_cache_prefix: String,
     #[serde(default)]
     netrc_file: Option<String>,
+    #[serde(default)]
+    secrets_file: Option<String>,
 }
 
 impl Default for FileConfig {
@@ -117,6 +121,7 @@ impl Default for FileConfig {
             public_cache: default_public_cache(),
             private_cache_prefix: default_private_cache_prefix(),
             netrc_file: None,
+            secrets_file: None,
         }
     }
 }
@@ -139,6 +144,7 @@ impl From<FileConfig> for Config {
             public_cache: fc.public_cache,
             private_cache_prefix: fc.private_cache_prefix,
             netrc_file: fc.netrc_file,
+            secrets_file: fc.secrets_file,
         }
     }
 }
@@ -345,6 +351,7 @@ cache_base_url = "http://cache.lab:8081"
 public_cache = "shared"
 private_cache_prefix = "p-"
 netrc_file = "/run/secrets/ci-netrc"
+secrets_file = "/run/secrets/ci-secrets.toml"
 "#,
         );
         let cfg = Config::from_file(&path).expect("full config must parse");
@@ -363,6 +370,10 @@ netrc_file = "/run/secrets/ci-netrc"
         assert_eq!(cfg.public_cache, "shared");
         assert_eq!(cfg.private_cache_prefix, "p-");
         assert_eq!(cfg.netrc_file.as_deref(), Some("/run/secrets/ci-netrc"));
+        assert_eq!(
+            cfg.secrets_file.as_deref(),
+            Some("/run/secrets/ci-secrets.toml")
+        );
         let _ = std::fs::remove_file(path);
     }
 

@@ -1,7 +1,5 @@
 //! Run endpoints: the hook enqueues, UIs read.
 
-use std::sync::Arc;
-
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -9,8 +7,9 @@ use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
 use super::error::HttpError;
-use crate::application::ports::{Builder, Clock, ConfigSource, RunStore};
-use crate::application::{Service, ServiceError};
+use super::shared::Shared;
+use crate::application::ServiceError;
+use crate::application::ports::{Builder, Clock, ConfigSource, Notifier, RunStore};
 use crate::domain::run::{CommitHash, GitRef, NewRun, Pusher, RepoName, Run, RunId};
 
 /// Default page size for run listings.
@@ -95,8 +94,8 @@ pub struct ListParams {
 }
 
 /// `POST /api/runs`: queue a run. Answers 202 with the run id.
-pub async fn create<S, C, B, R>(
-    State(service): State<Arc<Service<S, C, B, R>>>,
+pub async fn create<S, C, B, R, N>(
+    State(shared): State<Shared<S, C, B, R, N>>,
     Json(body): Json<CreateBody>,
 ) -> Result<Response, HttpError>
 where
@@ -104,9 +103,10 @@ where
     C: Clock,
     B: Builder,
     R: ConfigSource,
+    N: Notifier,
 {
     let request = body.into_request()?;
-    let id = service.enqueue(request).await?;
+    let id = shared.service().enqueue(request).await?;
     tracing::info!(run = %id, "run queued");
     let created = CreatedBody {
         id: id.get(),
@@ -116,8 +116,8 @@ where
 }
 
 /// `GET /api/runs/{id}`: one run.
-pub async fn show<S, C, B, R>(
-    State(service): State<Arc<Service<S, C, B, R>>>,
+pub async fn show<S, C, B, R, N>(
+    State(shared): State<Shared<S, C, B, R, N>>,
     Path(id): Path<i64>,
 ) -> Result<Response, HttpError>
 where
@@ -125,14 +125,15 @@ where
     C: Clock,
     B: Builder,
     R: ConfigSource,
+    N: Notifier,
 {
-    let run = service.run(RunId::new(id)).await?;
+    let run = shared.service().run(RunId::new(id)).await?;
     Ok(Json(RunBody::from(&run)).into_response())
 }
 
 /// `GET /api/repos/{owner}/{name}/runs`: a repo's runs, newest first.
-pub async fn list<S, C, B, R>(
-    State(service): State<Arc<Service<S, C, B, R>>>,
+pub async fn list<S, C, B, R, N>(
+    State(shared): State<Shared<S, C, B, R, N>>,
     Path((owner, name)): Path<(String, String)>,
     Query(params): Query<ListParams>,
 ) -> Result<Response, HttpError>
@@ -141,11 +142,12 @@ where
     C: Clock,
     B: Builder,
     R: ConfigSource,
+    N: Notifier,
 {
     let repo = RepoName::parse(format!("{owner}/{name}")).map_err(ServiceError::from)?;
     let before = params.before.map(RunId::new);
     let limit = params.limit.unwrap_or(DEFAULT_PAGE);
-    let runs = service.runs(Some(&repo), before, limit).await?;
+    let runs = shared.service().runs(Some(&repo), before, limit).await?;
     let body = RunsBody {
         runs: runs.iter().map(RunBody::from).collect(),
     };
@@ -164,7 +166,7 @@ mod tests {
 
     use crate::adapters::http::router;
     use crate::adapters::memory::MemoryRunStore;
-    use crate::adapters::scripted::{FixedConfig, ScriptedBuilder, derivation};
+    use crate::adapters::scripted::{FixedConfig, RecordingNotifier, ScriptedBuilder, derivation};
     use crate::adapters::system::SystemClock;
     use crate::application::Service;
     use crate::application::ports::BuildEvent;
@@ -172,7 +174,9 @@ mod tests {
 
     const DRV: &str = "/nix/store/u-unit.drv";
 
-    fn service() -> Arc<Service<MemoryRunStore, SystemClock, ScriptedBuilder, FixedConfig>> {
+    fn service()
+    -> Arc<Service<MemoryRunStore, SystemClock, ScriptedBuilder, FixedConfig, RecordingNotifier>>
+    {
         let evaluation = vec![derivation(
             "checks.x86_64-linux.unit",
             "x86_64-linux",
@@ -198,6 +202,7 @@ mod tests {
             SystemClock,
             builder,
             FixedConfig::default(),
+            RecordingNotifier::default(),
             Limits::new(1, 60, 60),
             None,
         ))
