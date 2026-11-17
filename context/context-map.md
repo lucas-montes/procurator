@@ -11,6 +11,7 @@ Quick navigation for AI sessions working on Procurator.
 ## Domain-Specific Context
 - [control-plane/](control-plane/) - Control plane pull-assignment node state
 - [worker/](worker/) - Worker pull reconciliation + public proxy
+- [console/console.md](console/console.md) - Read-only console as built: decisions, service-side logging, crate layout, Nix, verification, known gaps
 - [vcs/](vcs/) - VCS/version control system (git porcelain)
 - [stack/](stack/) - Stack CLI module layout and behavior
   - [stack/lifecycle.md](stack/lifecycle.md) — Service lifecycle monitoring and restart
@@ -73,7 +74,7 @@ Embeddable artifact cache in a hexagonal layout: named public/private caches, to
 - `cache/tests/` - `http.rs` (in-process router tests), `nix_e2e.rs` (real `nix copy`, `--ignored`)
 
 ## Current Work
-- **Plan:** `plans/control-plane-web-console.md` (T01–T14, T16 done; T15 inside-VM data deferred pending discussion): read-only `console` service, live map/machine/unit/VM/sources pages from JSON `tracing` logs (file / journal-gatewayd / journalctl); convention in `specs/log-events.md`
+- **Plan:** `plans/control-plane-web-console.md` (T01–T14, T16 done, committed as 6817a90; T15 inside-VM data deferred pending discussion; summary in `console/console.md`): read-only `console` service, live map/machine/unit/VM/sources pages from JSON `tracing` logs (file / journal-gatewayd / journalctl); convention in `specs/log-events.md`
 - **Completed plan:** `plans/cache-hexagonal-rewrite.md` (T01–T14 done; cache rewritten as a hexagonal library with named public/private caches and token auth)
 - **Pending plan:** `plans/rust-log-env-var.md` (T01 done, T02 pending)
 - **Completed plan:** `plans/control-plane-pull-assignments.md` (T01–T09 done; control-plane pull loop, worker poll/reconcile/heartbeat, Nix inventory, cross-crate e2e)

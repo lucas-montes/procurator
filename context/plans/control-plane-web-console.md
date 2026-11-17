@@ -1,7 +1,7 @@
 # Plan: control-plane-web-console
 
 ## Status (2026-11-15)
-- **Done:** T01–T14 and T16. Evidence:
+- **Done:** T01–T14 and T16, committed on `master` as `6817a90` (not pushed). As-built summary: `context/console/console.md`. Evidence:
   - `cargo test` passes: `control_plane` 29, `worker` 60, `console` 12.
   - `cargo clippy -D warnings` is clean for all three crates.
   - Pure-eval checks pass: `console-fast`, `control-plane-fast`, `worker-service-fast`, and the full `services-system-eval` (which also needed a cache declared; it was already broken by the cache rewrite).

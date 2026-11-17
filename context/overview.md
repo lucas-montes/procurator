@@ -17,6 +17,14 @@
 - Worker runtime now supervises five concurrent tasks: RPC server, TLS proxy,
   VM supervisor, assignment poll loop, and heartbeat reporter.
 - `worker` keeps its **TLS-terminated subdomain-based reverse proxy** for VM routes (unchanged behavior, see below).
+- **Read-only `console`** (commit `6817a90`): live map, machine, unit, VM and
+  sources pages built only from the services' JSON `tracing` logs (file,
+  journal-gatewayd or journalctl). Control plane and worker now write
+  message/state/change lines per `specs/log-events.md`. Inside-VM data is
+  deferred. Details and gaps: `console/console.md`.
+- **Known bug (unfixed):** after a control-plane restart a worker can delete
+  all its VMs (empty assignment for `last_seen >= active` + reconcile on any
+  generation change). See `console/console.md`.
 
 ## Pull assignment status
 - Explicit placement only: every desired VM pins `id` + `targetWorker`;
