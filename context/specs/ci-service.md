@@ -2,6 +2,8 @@
 
 Status: agreed on 2026-11-14. Build steps 1–8 are done (see "Build
 order"); "Current state" at the end describes the scaffold they replaced.
+Progress, acceptance-criteria status and the remaining work are tracked in
+[`../plans/ci-service.md`](../plans/ci-service.md).
 
 ## Purpose
 
@@ -510,6 +512,11 @@ src/  (root `procurator` crate: the monolith's composition root)
 9. **Split deployment** (when needed). Repohub-API or JWT `Access` adapter.
    (The HTTP deploy adapter landed in step 8.)
 10. **Isolation.** VM `Builder` adapter.
+
+Gaps left by steps 1–8 (plan tasks T11–T14): no NixOS VM test for AC1/AC8,
+the post-receive hook posts to port 3000 (CI listens on 8082) without a
+token, no flake package or NixOS module for the monolith, and the deploy
+follow-ups listed under step 8.
 
 NixOS module, part of step 2 (done): `path = [ config.nix.package pkgs.git nix-eval-jobs ]`,
 read access to the git-server repos for the CI user (`reposGroup`, default

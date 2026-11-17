@@ -1,6 +1,20 @@
 # Overview
 
 ## Current focus
+- **CI service** (`ci_service/`, spec `specs/ci-service.md`, plan
+  `plans/ci-service.md`): spec build steps 1–8 done (2026-11-15 → 11-16).
+  Hexagonal service that evaluates every flake check with `nix-eval-jobs`,
+  builds misses in one `nix build --keep-going` (remote builders per system,
+  else the host, else `skipped`), reads `procurator.nix` (checks, reruns,
+  timeouts, webhooks, cache, retention, deploy), stores and streams
+  per-check logs with their dependencies, pushes what it built to the
+  cache, delivers webhook events through an outbox, and deploys passing
+  runs on the deploy branch (`procuratorDeployment` flake output → embedded
+  control plane in the monolith, or POST to `deploy.url`). The root
+  `procurator` binary runs CI, repohub, cache and optionally the control
+  plane in one process. Open: real access control (blocked on repohub
+  credentials), VM isolation, NixOS e2e test, hook port/token, monolith
+  packaging, deploy ordering and store-path fetching on workers.
 - Control plane ↔ worker **pull-based assignment** over the Cap'n Proto
   `Master` RPC surface is implemented end to end. The cross-crate e2e test
   that once proved this (`worker/src/e2e.rs`) was deleted in commit

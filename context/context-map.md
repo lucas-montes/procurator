@@ -18,7 +18,7 @@ Quick navigation for AI sessions working on Procurator.
   - [stack/healthcheck.md](stack/healthcheck.md) — Healthcheck system (schema + runner)
 - [plans/](plans/) - Implementation plans and task tracking
 - [specs/](specs/) - Technical specifications (e.g. Nix schema)
-  - [specs/ci-service.md](specs/ci-service.md) — CI service target design: flake checks, per-check logs, cache reuse, `procurator.nix` config, ports, security
+  - [specs/ci-service.md](specs/ci-service.md) — CI service target design: flake checks, per-check logs, cache reuse, `procurator.nix` config, ports, security (progress: [plans/ci-service.md](plans/ci-service.md))
   - [specs/log-events.md](specs/log-events.md) — Log convention (`log.schema = 1`): message, state and change lines the console parses
 - [tmp/](tmp/) - Session scratch space
 
@@ -74,6 +74,7 @@ Embeddable artifact cache in a hexagonal layout: named public/private caches, to
 - `cache/tests/` - `http.rs` (in-process router tests), `nix_e2e.rs` (real `nix copy`, `--ignored`)
 
 ## Current Work
+- **Plan:** `plans/ci-service.md` (T01–T08 = spec build steps 1–8 done, committed through b83d0eb; T09 blocked on repohub credentials; T10–T14 pending: VM isolation, NixOS e2e test, hook port/token, monolith packaging, deploy follow-ups)
 - **Plan:** `plans/control-plane-web-console.md` (T01–T14, T16 done, committed as 6817a90; T15 inside-VM data deferred pending discussion; summary in `console/console.md`): read-only `console` service, live map/machine/unit/VM/sources pages from JSON `tracing` logs (file / journal-gatewayd / journalctl); convention in `specs/log-events.md`
 - **Completed plan:** `plans/cache-hexagonal-rewrite.md` (T01–T14 done; cache rewritten as a hexagonal library with named public/private caches and token auth)
 - **Pending plan:** `plans/rust-log-env-var.md` (T01 done, T02 pending)
